@@ -13,10 +13,13 @@ pub fn main() !void {
     // 1. Detailed component profiling
     try profiler.profileHandEvaluation(allocator);
 
-    // 2. Instruction-level profiling
+    // 2. Equity simulation profiling
+    try profiler.profileEquitySimulation(allocator);
+
+    // 3. Instruction-level profiling
     try profiler.profileWithInstructionCounting(allocator);
 
-    // 3. Memory access pattern analysis
+    // 4. Memory access pattern analysis
     try profiler.profileMemoryAccess(allocator);
 
     print("\n=== PROFILING COMPLETE ===\n", .{});

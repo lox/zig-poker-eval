@@ -17,19 +17,21 @@ pub const ShowdownResult = struct {
     }
 };
 
-// Core showdown evaluation - determines winners from multiple hands
+const MAX_PLAYERS = 10; // Standard poker table limit
+
+// Core showdown evaluation - determines winners from multiple hands (optimized)
 pub fn evaluateShowdown(
     hands: []const poker.Hand,
     allocator: std.mem.Allocator
 ) !ShowdownResult {
     if (hands.len == 0) return error.NoHands;
+    if (hands.len > MAX_PLAYERS) return error.TooManyPlayers;
     
-    // Evaluate all hands
-    var ranks = try allocator.alloc(poker.HandRank, hands.len);
-    defer allocator.free(ranks);
-    
+    // Use stack allocation for ranks (no heap allocation!)
+    var ranks: [MAX_PLAYERS]poker.HandRank = undefined;
     var best_rank: poker.HandRank = .high_card;
     
+    // Evaluate all hands and find best rank in single pass
     for (hands, 0..) |hand, i| {
         ranks[i] = hand.evaluate();
         if (@intFromEnum(ranks[i]) > @intFromEnum(best_rank)) {
@@ -37,24 +39,19 @@ pub fn evaluateShowdown(
         }
     }
     
-    // Count winners
+    // Count and collect winners in single pass
     var winner_count: usize = 0;
-    for (ranks) |rank| {
+    var winner_indices: [MAX_PLAYERS]u8 = undefined;
+    
+    for (ranks[0..hands.len], 0..) |rank, i| {
         if (rank == best_rank) {
+            winner_indices[winner_count] = @intCast(i);
             winner_count += 1;
         }
     }
     
-    // Collect winner indices
-    var winners = try allocator.alloc(u8, winner_count);
-    var winner_idx: usize = 0;
-    
-    for (ranks, 0..) |rank, i| {
-        if (rank == best_rank) {
-            winners[winner_idx] = @intCast(i);
-            winner_idx += 1;
-        }
-    }
+    // Only allocate for final result
+    const winners = try allocator.dupe(u8, winner_indices[0..winner_count]);
     
     return ShowdownResult{
         .winners = winners,

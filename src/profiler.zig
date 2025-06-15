@@ -1,6 +1,8 @@
 const std = @import("std");
 const poker = @import("poker.zig");
 const benchmark = @import("benchmark.zig");
+const equity = @import("equity.zig");
+const simulation = @import("simulation.zig");
 
 // Detailed profiler for poker hand evaluation performance analysis
 pub const Profiler = struct {
@@ -132,6 +134,75 @@ pub fn profileHandEvaluation(allocator: std.mem.Allocator) !void {
     }
     
     profiler.printResults();
+}
+
+// Profile equity simulation components
+pub fn profileEquitySimulation(allocator: std.mem.Allocator) !void {
+    var profiler = Profiler.init(allocator);
+    defer profiler.deinit();
+    
+    const print = std.debug.print;
+    print("\n=== EQUITY SIMULATION PROFILING ===\n", .{});
+    
+    // Set up test scenario
+    const hero_hole = [_]poker.Card{ poker.Card.init(14, 0), poker.Card.init(14, 1) }; // AA
+    const villain_hole = [_]poker.Card{ poker.Card.init(13, 2), poker.Card.init(13, 3) }; // KK
+    const board = [_]poker.Card{};
+    
+    var prng = std.Random.DefaultPrng.init(42);
+    const rng = prng.random();
+    
+    const hero_bits = simulation.cardsToHoleBits(hero_hole);
+    const villain_bits = simulation.cardsToHoleBits(villain_hole);
+    const board_bits = simulation.boardToBits(&board);
+    const used_cards = hero_bits | villain_bits | board_bits;
+    const cards_needed = 5;
+    
+    print("Profiling 10000 equity simulations...\n", .{});
+    
+    // Profile each component 10000 times
+    for (0..10000) |_| {
+        // 1. Sample remaining cards
+        const time_sample = timeFunction(simulation.sampleRemainingCards, .{ used_cards, cards_needed, rng });
+        try profiler.addSample("sample_remaining_cards", time_sample);
+        
+        // 2. Combine cards (using actual sampled cards)
+        const remaining_board = simulation.sampleRemainingCards(used_cards, cards_needed, rng);
+        const final_board = board_bits | remaining_board;
+        
+        const time_combine1 = timeFunction(simulation.combineCards, .{ hero_bits, final_board });
+        try profiler.addSample("combine_hero_cards", time_combine1);
+        
+        const time_combine2 = timeFunction(simulation.combineCards, .{ villain_bits, final_board });
+        try profiler.addSample("combine_villain_cards", time_combine2);
+        
+        // 3. Evaluate showdown
+        const hero_hand = simulation.combineCards(hero_bits, final_board);
+        const villain_hand = simulation.combineCards(villain_bits, final_board);
+        const hands = [_]poker.Hand{ hero_hand, villain_hand };
+        
+        const time_showdown = timeFunction(profileShowdownWrapper, .{ &hands, allocator });
+        try profiler.addSample("evaluate_showdown", time_showdown);
+        
+        // 4. Individual hand evaluations
+        const time_hero_eval = timeFunction(poker.Hand.evaluate, .{hero_hand});
+        try profiler.addSample("hero_hand_eval", time_hero_eval);
+        
+        const time_villain_eval = timeFunction(poker.Hand.evaluate, .{villain_hand});
+        try profiler.addSample("villain_hand_eval", time_villain_eval);
+    }
+    
+    profiler.printResults();
+}
+
+// Wrapper for profiling showdown evaluation
+fn profileShowdownWrapper(hands: *const [2]poker.Hand, allocator: std.mem.Allocator) void {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+    
+    const result = simulation.evaluateShowdown(hands, arena_allocator) catch return;
+    _ = result; // Prevent optimization
 }
 
 // Helper functions for component profiling
