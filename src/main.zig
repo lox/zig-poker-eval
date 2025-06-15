@@ -27,6 +27,10 @@ pub fn main() !void {
     // Torture case benchmark 
     print("\n=== Torture Case Benchmark ===\n", .{});
     try benchmarkTortureCases(allocator);
+    
+    // Straight detection optimization benchmark
+    print("\n=== Straight Detection Optimization Benchmark ===\n", .{});
+    try benchmarkStraightDetection();
 }
 
 fn benchmarkEvaluator(allocator: std.mem.Allocator) !void {
@@ -163,4 +167,121 @@ test "benchmark random hands" {
         try std.testing.expect(@intFromEnum(result) >= 1);
         try std.testing.expect(@intFromEnum(result) <= 9);
     }
+}
+
+// Benchmark straight detection optimization
+fn benchmarkStraightDetection() !void {
+    // Generate test patterns covering all possible straights and non-straights
+    var test_masks: [32]u16 = undefined;
+    var expected_results: [32]bool = undefined;
+    
+    // Known straight patterns
+    const straight_masks = [_]u16{
+        0b1111100000000, // A-K-Q-J-T 
+        0b0111110000000, // K-Q-J-T-9
+        0b0011111000000, // Q-J-T-9-8
+        0b0001111100000, // J-T-9-8-7
+        0b0000111110000, // T-9-8-7-6
+        0b0000011111000, // 9-8-7-6-5
+        0b0000001111100, // 8-7-6-5-4
+        0b0000000111110, // 7-6-5-4-3
+        0b0000000011111, // 6-5-4-3-2
+        0b1000000001111, // A-5-4-3-2 (wheel)
+    };
+    
+    // Add straight patterns
+    for (straight_masks, 0..) |mask, i| {
+        test_masks[i] = mask;
+        expected_results[i] = true;
+    }
+    
+    // Add some non-straight patterns
+    const non_straight_masks = [_]u16{
+        0b1010101010101, // Alternating pattern
+        0b1100110011001, // Pairs pattern
+        0b1111000011110, // Gaps pattern
+        0b0000000000001, // Single card
+        0b1000000000001, // Two cards far apart
+        0b1110000000000, // Three high cards
+        0b0000000001110, // Three low cards
+        0b1010000001010, // Scattered pattern
+        0b1111000000000, // Four high, no straight
+        0b0000000011110, // Four middle, no straight
+        0b1000010001000, // Scattered aces pattern
+        0b0101010101010, // Another alternating
+    };
+    
+    for (non_straight_masks, 0..) |mask, i| {
+        test_masks[10 + i] = mask;
+        expected_results[10 + i] = false;
+    }
+    
+    // Test correctness first
+    print("Testing correctness of both implementations...\n", .{});
+    var correct_lut = true;
+    var correct_orig = true;
+    
+    for (test_masks[0..22], expected_results[0..22]) |mask, expected| {
+        const result_lut = poker.checkStraight(mask);
+        const result_orig = poker.checkStraightOriginal(mask);
+        
+        if (result_lut != expected) {
+            print("  LUT ERROR: mask {b:0>13} expected {} got {}\n", .{ mask, expected, result_lut });
+            correct_lut = false;
+        }
+        if (result_orig != expected) {
+            print("  ORIG ERROR: mask {b:0>13} expected {} got {}\n", .{ mask, expected, result_orig });
+            correct_orig = false;
+        }
+    }
+    
+    if (correct_lut and correct_orig) {
+        print("  ✓ Both implementations correct\n", .{});
+    } else {
+        print("  ✗ Implementation errors found!\n", .{});
+        return;
+    }
+    
+    // Performance comparison
+    const iterations = 100_000_000;
+    print("Benchmarking straight detection ({} iterations)...\n", .{iterations});
+    
+    // Benchmark original implementation
+    var dummy_result_orig: u32 = 0;
+    const start_orig = std.time.nanoTimestamp();
+    
+    for (0..iterations) |i| {
+        const mask = test_masks[i % test_masks.len];
+        if (poker.checkStraightOriginal(mask)) {
+            dummy_result_orig += 1;
+        }
+    }
+    
+    const end_orig = std.time.nanoTimestamp();
+    const duration_orig = end_orig - start_orig;
+    
+    // Benchmark LUT implementation  
+    var dummy_result_lut: u32 = 0;
+    const start_lut = std.time.nanoTimestamp();
+    
+    for (0..iterations) |i| {
+        const mask = test_masks[i % test_masks.len];
+        if (poker.checkStraight(mask)) {
+            dummy_result_lut += 1;
+        }
+    }
+    
+    const end_lut = std.time.nanoTimestamp();
+    const duration_lut = end_lut - start_lut;
+    
+    // Results
+    const ns_per_call_orig = @as(f64, @floatFromInt(duration_orig)) / @as(f64, @floatFromInt(iterations));
+    const ns_per_call_lut = @as(f64, @floatFromInt(duration_lut)) / @as(f64, @floatFromInt(iterations));
+    const speedup = ns_per_call_orig / ns_per_call_lut;
+    
+    print("Results:\n", .{});
+    print("  Original (shift-mask): {d:.2}ns per call\n", .{ns_per_call_orig});
+    print("  LUT implementation:    {d:.2}ns per call\n", .{ns_per_call_lut});
+    print("  Speedup: {d:.2}x {s}\n", .{ speedup, if (speedup > 1.0) "(faster)" else "(slower)" });
+    print("  Checksums: orig={} lut={} (prevents optimization)\n", .{ dummy_result_orig, dummy_result_lut });
 }

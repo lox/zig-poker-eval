@@ -81,7 +81,7 @@ pub const Hand = struct {
     }
 
     // High-performance 7-card hand evaluation using inline loops and popcount
-    pub fn evaluate(self: Hand) HandRank {
+    pub inline fn evaluate(self: Hand) HandRank {
         // Count cards of each rank using popcount (much faster)
         var rank_counts: [13]u8 = undefined;
         inline for (0..13) |rank_idx| {
@@ -89,18 +89,17 @@ pub const Hand = struct {
             rank_counts[rank_idx] = @popCount(rank_bits); // Count set bits
         }
 
-        // Get suit counts for flush detection
+        // Optimized suit counts using pre-computed bit masks  
+        const suit_masks = [4]u64{
+            0x1111111111111111, // Hearts (suit 0)
+            0x2222222222222222, // Spades (suit 1)  
+            0x4444444444444444, // Diamonds (suit 2)
+            0x8888888888888888, // Clubs (suit 3)
+        };
         var suit_counts: [4]u8 = undefined;
         inline for (0..4) |suit| {
-            var suit_bits: u64 = 0;
-            // Extract this suit from all ranks
-            inline for (0..13) |rank| {
-                const bit_pos = rank * 4 + suit;
-                if ((self.bits >> bit_pos) & 1 != 0) {
-                    suit_bits |= @as(u64, 1) << rank;
-                }
-            }
-            suit_counts[suit] = @popCount(suit_bits);
+            const extracted = self.bits & suit_masks[suit];
+            suit_counts[suit] = @popCount(extracted);
         }
 
         // Check for flush (5+ cards of same suit)
@@ -112,7 +111,7 @@ pub const Hand = struct {
             }
         }
 
-        // Check for straight
+        // Check for straight - revert to faster original implementation
         var rank_mask: u16 = 0;
         inline for (0..13) |rank| {
             const rank_bits = (self.bits >> (rank * 4)) & 0xF;
@@ -120,7 +119,7 @@ pub const Hand = struct {
                 rank_mask |= @as(u16, 1) << @intCast(rank);
             }
         }
-        const is_straight = checkStraight(rank_mask);
+        const is_straight = checkStraightOriginal(rank_mask);
 
         // Count pairs, trips, quads
         var pairs: u8 = 0;
@@ -149,8 +148,31 @@ pub const Hand = struct {
     }
 };
 
-// Optimized straight detection using bit masks
-fn checkStraight(mask: u16) bool {
+// Pre-computed straight patterns for lookup table optimization
+const STRAIGHT_PATTERNS = [_]u16{
+    0b1111100000000, // A-K-Q-J-T (royal straight)
+    0b0111110000000, // K-Q-J-T-9
+    0b0011111000000, // Q-J-T-9-8
+    0b0001111100000, // J-T-9-8-7
+    0b0000111110000, // T-9-8-7-6
+    0b0000011111000, // 9-8-7-6-5
+    0b0000001111100, // 8-7-6-5-4
+    0b0000000111110, // 7-6-5-4-3
+    0b0000000011111, // 6-5-4-3-2
+    0b1000000001111, // A-5-4-3-2 (wheel)
+};
+
+// Optimized straight detection using lookup table (Priority 1 optimization)
+pub inline fn checkStraight(mask: u16) bool {
+    // Single loop through pre-computed patterns - should be faster than shifting
+    for (STRAIGHT_PATTERNS) |pattern| {
+        if ((mask & pattern) == pattern) return true;
+    }
+    return false;
+}
+
+// Keep original implementation for testing/comparison  
+pub inline fn checkStraightOriginal(mask: u16) bool {
     // Check A-2-3-4-5 (wheel) - bits 12,0,1,2,3 (Ace is at position 12)
     if ((mask & 0b1000000001111) == 0b1000000001111) return true;
 
