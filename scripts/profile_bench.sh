@@ -9,18 +9,40 @@ fi
 
 set -e
 
-# Parse arguments
-BENCH_TYPE="both"
-if [[ $# -gt 0 ]]; then
+# Parse arguments and convert to new flag format
+BENCH_ARGS=""
+if [[ $# -eq 0 ]]; then
+    BENCH_ARGS="--eval --equity"
+    BENCH_TYPE="evaluation and single-threaded equity (default)"
+else
     case $1 in
-        eval|equity|both)
-            BENCH_TYPE=$1
+        eval)
+            BENCH_ARGS="--eval"
+            BENCH_TYPE="evaluation"
+            ;;
+        equity)
+            BENCH_ARGS="--equity"
+            BENCH_TYPE="single-threaded equity"
+            ;;
+        equityThreaded)
+            BENCH_ARGS="--equityThreaded"
+            BENCH_TYPE="multi-threaded equity"
+            ;;
+        both)
+            BENCH_ARGS="--eval --equity"
+            BENCH_TYPE="evaluation and single-threaded equity"
+            ;;
+        all)
+            BENCH_ARGS="--eval --equity --equityThreaded"
+            BENCH_TYPE="all benchmarks"
             ;;
         *)
-            echo "Usage: $0 [eval|equity|both]"
-            echo "  eval   - Profile evaluation benchmark only"
-            echo "  equity - Profile equity benchmark only"
-            echo "  both   - Profile both benchmarks (default)"
+            echo "Usage: $0 [eval|equity|equityThreaded|both|all]"
+            echo "  eval           - Profile evaluation benchmark only"
+            echo "  equity         - Profile single-threaded equity benchmark only"
+            echo "  equityThreaded - Profile multi-threaded equity benchmark only"
+            echo "  both           - Profile evaluation and single-threaded equity"
+            echo "  all            - Profile all benchmarks (default)"
             exit 1
             ;;
     esac
@@ -28,7 +50,7 @@ fi
 
 # Build benchmark first (debug mode for better profiling)
 echo "Building benchmark..."
-zig build bench
+zig build bench -Doptimize=Debug
 
 # Find the benchmark executable
 BENCH_EXE="./zig-out/bin/benchmark"
@@ -37,10 +59,10 @@ if [[ ! -f "$BENCH_EXE" ]]; then
     exit 1
 fi
 
-echo "Profiling $BENCH_TYPE benchmark(s) with sample ..."
+echo "Profiling $BENCH_TYPE with sample ..."
 
 # Start benchmark in background and profile it
-$BENCH_EXE $BENCH_TYPE &
+$BENCH_EXE $BENCH_ARGS &
 BENCH_PID=$!
 
 # Sample the running process for 10 seconds with full paths
