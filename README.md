@@ -50,18 +50,33 @@ const rank = hand.evaluate(); // .straight_flush (royal flush)
 ```zig
 const equity = @import("equity.zig");
 
-// Calculate preflop equity between pocket aces and pocket kings
-const aa = [_]poker.Card{ poker.Card.init(14, 0), poker.Card.init(14, 1) };
-const kk = [_]poker.Card{ poker.Card.init(13, 2), poker.Card.init(13, 3) };
+// Calculate preflop equity between pocket aces and pocket kings  
+const aa = [_]poker.Card{
+    poker.createCard(.hearts, .ace),
+    poker.createCard(.spades, .ace),
+};
+const kk = [_]poker.Card{
+    poker.createCard(.diamonds, .king),
+    poker.createCard(.clubs, .king),
+};
 
 var prng = std.Random.DefaultPrng.init(42);
 const result = try equity.equityMonteCarlo(aa, kk, &.{}, 100000, prng.random(), allocator);
 // result.equity() ≈ 0.80 (80% equity for AA vs KK preflop)
 
-// Multi-way equity calculation
-const qq = [_]poker.Card{ poker.Card.init(12, 0), poker.Card.init(12, 1) };
+// Multi-way equity with postflop board
+const qq = [_]poker.Card{
+    poker.createCard(.hearts, .queen),
+    poker.createCard(.spades, .queen),
+};
+const board = [_]poker.Card{
+    poker.createCard(.diamonds, .ace),   // Flop
+    poker.createCard(.hearts, .king),    // Flop  
+    poker.createCard(.spades, .seven),   // Flop
+};
+
 var hands = [_][2]poker.Card{ aa, kk, qq };
-const results = try equity.equityMultiWayMonteCarlo(&hands, &.{}, 50000, prng.random(), allocator);
+const results = try equity.equityMultiWayMonteCarlo(&hands, &board, 50000, prng.random(), allocator);
 // results[0].equity() ≈ 0.42 (AA equity in 3-way pot)
 ```
 
