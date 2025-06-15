@@ -38,6 +38,11 @@ pub fn equityMonteCarlo(
     var wins: u32 = 0;
     var ties: u32 = 0;
     
+    // Create arena allocator for all simulation allocations
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_allocator = arena.allocator();
+    
     for (0..simulations) |_| {
         // Sample remaining board cards
         const remaining_board = simulation.sampleRemainingCards(used_cards, cards_needed, rng);
@@ -48,8 +53,8 @@ pub fn equityMonteCarlo(
         const villain_hand = simulation.combineCards(villain_bits, final_board);
         
         const hands = [_]poker.Hand{ hero_hand, villain_hand };
-        const result = try simulation.evaluateShowdown(&hands, allocator);
-        defer result.deinit(allocator);
+        const result = try simulation.evaluateShowdown(&hands, arena_allocator);
+        // NO defer result.deinit() - arena owns all memory
         
         if (result.winners.len == 1) {
             if (result.winners[0] == 0) {
