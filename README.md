@@ -13,8 +13,11 @@ Uses [Hermit](https://github.com/cashapp/hermit) for dependency management:
 ## Usage
 
 ```bash
-# Run optimized benchmarks (production performance)
+# Run demo (hand evaluation + equity examples)
 zig build run -Doptimize=ReleaseFast
+
+# Run benchmarks only
+zig build bench -Doptimize=ReleaseFast
 
 # Run tests
 zig build test
@@ -42,12 +45,32 @@ const hand = poker.createHand(&.{
 const rank = hand.evaluate(); // .straight_flush (royal flush)
 ```
 
+## Equity Calculation
+
+```zig
+const equity = @import("equity.zig");
+
+// Calculate preflop equity between pocket aces and pocket kings
+const aa = [_]poker.Card{ poker.Card.init(14, 0), poker.Card.init(14, 1) };
+const kk = [_]poker.Card{ poker.Card.init(13, 2), poker.Card.init(13, 3) };
+
+var prng = std.Random.DefaultPrng.init(42);
+const result = try equity.equityMonteCarlo(aa, kk, &.{}, 100000, prng.random(), allocator);
+// result.equity() ≈ 0.80 (80% equity for AA vs KK preflop)
+
+// Multi-way equity calculation
+const qq = [_]poker.Card{ poker.Card.init(12, 0), poker.Card.init(12, 1) };
+var hands = [_][2]poker.Card{ aa, kk, qq };
+const results = try equity.equityMultiWayMonteCarlo(&hands, &.{}, 50000, prng.random(), allocator);
+// results[0].equity() ≈ 0.42 (AA equity in 3-way pot)
+```
+
 ## Performance
 
 Benchmarked on an Apple Macbook Air M1.
 
 ```bash
-zig build run -Doptimize=ReleaseFast
+zig build bench -Doptimize=ReleaseFast
 === Zig 7-Card Texas Hold'em Evaluator ===
 === Benchmark  ===
 Generating 10000 random hands...
@@ -63,9 +86,13 @@ Run 3: 55780000 ops, 17.00 ns/op
 ### Architecture
 
 - **`poker.zig`**: Core evaluation logic, data structures, and comprehensive tests
+- **`equity.zig`**: Monte Carlo and exact equity calculation for poker hands
+- **`simulation.zig`**: Low-level simulation primitives and showdown evaluation
+- **`ranges.zig`**: Hand range generation and parsing utilities
 - **`benchmark.zig`**: Performance testing and random hand generation
 - **`profiler.zig`**: Advanced profiling system for performance analysis
-- **`main.zig`**: CLI interface and integration test
+- **`main.zig`**: Demo showcasing hand evaluation and equity calculation
+- **`bench_main.zig`**: Dedicated benchmark executable
 
 ## Profiling
 
@@ -94,9 +121,13 @@ For detailed optimization techniques and experimental results, see `EXPERIMENTS.
 
 ```
 src/
-├── main.zig         # Entry point and CLI interface
+├── main.zig         # Demo showcasing hand evaluation and equity
 ├── poker.zig        # Core poker types, evaluation logic, and tests
+├── equity.zig       # Monte Carlo and exact equity calculation
+├── simulation.zig   # Low-level simulation primitives
+├── ranges.zig       # Hand range generation and parsing
 ├── benchmark.zig    # Performance testing utilities
+├── bench_main.zig   # Dedicated benchmark executable
 ├── profiler.zig     # Advanced profiling system
 └── profile_main.zig # Profiling executable entry point
 
