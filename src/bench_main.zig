@@ -9,4 +9,5 @@ pub fn main() !void {
 
     print("=== Zig 7-Card Texas Hold'em Evaluator ===\n", .{});
     try benchmark.runEvaluatorBenchmark(allocator);
+    try benchmark.runEquityBenchmark(allocator);
 }
