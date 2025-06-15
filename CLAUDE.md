@@ -20,7 +20,7 @@ zig build test
 
 ## Architecture Overview
 
-This is a high-performance 7-card Texas Hold'em poker hand evaluator achieving 34+ million evaluations per second. The core design uses bit manipulation for maximum performance:
+This is a high-performance 7-card Texas Hold'em poker hand evaluator achieving 42+ million evaluations per second. The core design uses bit manipulation for maximum performance:
 
 - **Cards as bits**: Each card represented as a single bit in a u64 bitfield
 - **Zero-cost abstractions**: Extensive use of `inline for` and `@popCount` for CPU-native operations
@@ -50,5 +50,22 @@ This is a high-performance 7-card Texas Hold'em poker hand evaluator achieving 3
 
 - Cards are represented as single bits in a u64 bitfield (52 cards + room for expansion)
 - Rank counting uses parallel bit operations across all 13 ranks simultaneously
+- Suit extraction uses pre-computed bit masks (0x1111..., 0x2222..., etc.) for parallel operations
 - Straight detection uses bit mask shifting instead of sequential checking
+- Critical functions marked `inline` for zero-cost calls
 - No large lookup tables or memory allocations in hot paths
+
+## Optimization Research
+
+This project includes extensive performance optimization research:
+
+- **`EXPERIMENTS.md`**: Cutting-edge optimization experiments with Apple M1/ARM64 focus
+- Documents both successful and failed optimizations with detailed analysis
+- Includes benchmarking frameworks and optimization roadmaps
+
+### When making performance changes:
+1. **Always benchmark**: Use the built-in benchmarking in `main.zig`
+2. **Document results**: Update both `README.md` performance table and `EXPERIMENTS.md`
+3. **Test correctness**: Ensure optimizations don't break hand evaluation accuracy
+4. **Consider complexity**: Code maintainability vs performance gains tradeoff
+5. **Target Apple M1**: Primary development/testing platform is ARM64

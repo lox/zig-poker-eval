@@ -38,6 +38,7 @@ pub const HandRank = enum(u4) {
     straight_flush = 9,
 };
 
+
 // Efficient card representation using bit manipulation
 pub const Card = struct {
     bits: u64,
@@ -111,7 +112,7 @@ pub const Hand = struct {
             }
         }
 
-        // Check for straight - revert to faster original implementation
+        // Check for straight - build rank mask with simple inline loop
         var rank_mask: u16 = 0;
         inline for (0..13) |rank| {
             const rank_bits = (self.bits >> (rank * 4)) & 0xF;

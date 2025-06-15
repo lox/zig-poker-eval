@@ -44,17 +44,35 @@ fn checkStraightLUT(mask: u16) bool {
 - LUT doesn't always beat optimized loops on modern CPUs
 - Need to measure each optimization on target hardware
 
-### 1.2 Leading/Trailing Zero Count Optimizations
+### 1.2 Parallel Bit Manipulation for Rank Mask Building ⚠️ REVERTED
 **Expected Gain**: 2-3% (1-2 cycles saved)
+**Actual Result**: 86% faster component, 0% overall improvement
 **Effort**: 0.5 days
-**Complexity**: Low
+**Complexity**: Medium
 
-Use `@clz` and `@ctz` for rank gap detection:
+**EXPERIMENT RESULT**: Strong micro-benchmark results but zero system-level impact due to Amdahl's law.
+
+**Component Performance:**
+- Rank mask building: 2.70ns → 1.45ns (1.86x speedup)
+- Overall evaluation: 42.5M → 41.6M hands/sec (0% change)
+
+**Implementation attempted:**
 ```zig
-// Get highest/lowest ranks directly
-const highest_rank = 14 - @clz(rank_mask);
-const lowest_rank = 2 + @ctz(rank_mask);
+// Parallel bit extraction approach
+const suit0 = hand_bits & 0x1111111111111111; // Hearts
+const suit1 = hand_bits & 0x2222222222222222; // Spades  
+const suit2 = hand_bits & 0x4444444444444444; // Diamonds
+const suit3 = hand_bits & 0x8888888888888888; // Clubs
+const any_suit = suit0 | (suit1 >> 1) | (suit2 >> 2) | (suit3 >> 3);
 ```
+
+**Why reverted:**
+- **Minimal impact**: Rank mask building is ~10% of total evaluation cost
+- **Code complexity**: Added 30+ lines for 0% overall gain
+- **Diminishing returns**: Original inline loop already well-optimized
+- **Maintenance burden**: More code to test and debug
+
+**Key insight**: Micro-optimizations have reached limits. Need macro-level changes (SIMD, lookup tables) for substantial gains.
 
 ### 1.3 Micro-architectural Tuning ✅ SUCCESS  
 **Expected Gain**: 2-4% (1-3 cycles saved)

@@ -1,6 +1,6 @@
 # Zig Poker Hand Evaluator
 
-A high-performance 7-card Texas Hold'em hand evaluator written in Zig, achieving **34+ million evaluations per second**.
+A high-performance 7-card Texas Hold'em hand evaluator written in Zig, achieving **42+ million evaluations per second**.
 
 ## Setup
 
@@ -30,8 +30,8 @@ zig build test
 | Test Type | Build Mode | Hands/Second | Nanoseconds/Hand |
 |-----------|------------|--------------|------------------|
 | Random hands | Debug | ~3.6M | 277ns |
-| Random hands | ReleaseFast | **~34M** | **29ns** |
-| Torture cases | ReleaseFast | **~39M** | **26ns** |
+| Random hands | ReleaseFast | **~42.6M** | **23ns** |
+| Torture cases | ReleaseFast | **~69M** | **14ns** |
 
 ## Design
 
@@ -48,9 +48,13 @@ zig build test
 
 ### Key Optimizations
 1. **Bit-packed cards**: 52 cards fit in a single u64 with room to spare
-2. **Parallel rank counting**: Process all 13 ranks simultaneously using bit shifts
-3. **Cache-friendly**: No large lookup tables, minimal memory allocations
-4. **Branchless evaluation**: Optimized control flow for consistent performance
+2. **Parallel suit extraction**: Pre-computed bit masks for efficient suit counting
+3. **Optimized straight detection**: Bit mask shifting with excellent branch prediction
+4. **Function inlining**: Critical path functions marked `inline` for zero-cost calls
+5. **Cache-friendly**: No large lookup tables, minimal memory allocations
+6. **Branchless evaluation**: Optimized control flow for consistent performance
+
+See `EXPERIMENTS.md` for detailed optimization research and failed experiments.
 
 ## Example
 

@@ -31,6 +31,7 @@ pub fn main() !void {
     // Straight detection optimization benchmark
     print("\n=== Straight Detection Optimization Benchmark ===\n", .{});
     try benchmarkStraightDetection();
+    
 }
 
 fn benchmarkEvaluator(allocator: std.mem.Allocator) !void {
