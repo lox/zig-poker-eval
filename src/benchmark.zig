@@ -57,3 +57,133 @@ pub fn generateTortureCases(allocator: std.mem.Allocator) ![]poker.Hand {
     
     return hands;
 }
+
+// Comprehensive benchmarking suite
+pub const BenchmarkResults = struct {
+    realistic_hands_per_sec: f64,
+    random_hands_per_sec: f64, // Kept for compatibility
+    straight_detection_ns: f64, // Kept for compatibility
+    memory_usage_mb: f64,
+};
+
+// Run focused performance benchmark
+pub fn runComprehensiveBenchmark(allocator: std.mem.Allocator) !BenchmarkResults {
+    const print = std.debug.print;
+    
+    print("=== Performance Benchmark ===\n", .{});
+    
+    // Realistic performance test (primary metric)
+    print("\n1. Realistic Performance Test\n", .{});
+    print("   (10M unique hands with memory pressure - real-world scenario)\n", .{});
+    const realistic_perf = try benchmarkRealistic(allocator);
+    
+    // Memory usage calculation
+    const memory_mb = 10_000_000.0 * @as(f64, @sizeOf(poker.Hand)) / 1024.0 / 1024.0;
+    
+    print("\n=== Performance Summary ===\n", .{});
+    print("  Primary Metric: {d:.2}M hands/sec\n", .{realistic_perf / 1_000_000});
+    print("  Memory (10M hands): {d:.1}MB\n", .{memory_mb});
+    
+    return BenchmarkResults{
+        .realistic_hands_per_sec = realistic_perf,
+        .random_hands_per_sec = 0.0, // Removed secondary metric
+        .straight_detection_ns = 0.0, // Removed micro-benchmark
+        .memory_usage_mb = memory_mb,
+    };
+}
+
+// Realistic performance benchmark (diverse hands with memory pressure)
+fn benchmarkRealistic(allocator: std.mem.Allocator) !f64 {
+    const print = std.debug.print;
+    const trials = 10_000_000;
+    
+    print("   Generating {} unique random hands...\n", .{trials});
+    const hands = try generateRandomHands(allocator, trials, 42);
+    defer allocator.free(hands);
+    
+    print("   Benchmarking evaluation...\n", .{});
+    const start = std.time.nanoTimestamp();
+    var dummy_result: poker.HandRank = .high_card;
+    
+    for (hands) |hand| {
+        const result = hand.evaluate();
+        if (@intFromEnum(result) > @intFromEnum(dummy_result)) {
+            dummy_result = result;
+        }
+    }
+    
+    const end = std.time.nanoTimestamp();
+    const duration_s = @as(f64, @floatFromInt(end - start)) / 1_000_000_000.0;
+    const hands_per_sec = @as(f64, @floatFromInt(trials)) / duration_s;
+    
+    print("   Result: {d:.2}M hands/sec ({d:.0}ns per hand)\n", .{ hands_per_sec / 1_000_000, @as(f64, @floatFromInt(end - start)) / @as(f64, @floatFromInt(trials)) });
+    return hands_per_sec;
+}
+
+// Random hands performance benchmark (realistic scenario)
+fn benchmarkRandomHands(allocator: std.mem.Allocator) !f64 {
+    const print = std.debug.print;
+    const trials = 1_000_000;
+    
+    print("   Generating {} diverse random hands...\n", .{trials});
+    const hands = try generateRandomHands(allocator, trials, 456);
+    defer allocator.free(hands);
+    
+    print("   Benchmarking evaluation...\n", .{});
+    const start = std.time.nanoTimestamp();
+    var dummy_result: poker.HandRank = .high_card;
+    
+    for (hands) |hand| {
+        const result = hand.evaluate();
+        if (@intFromEnum(result) > @intFromEnum(dummy_result)) {
+            dummy_result = result;
+        }
+    }
+    
+    const end = std.time.nanoTimestamp();
+    const duration_s = @as(f64, @floatFromInt(end - start)) / 1_000_000_000.0;
+    const hands_per_sec = @as(f64, @floatFromInt(trials)) / duration_s;
+    
+    print("   Result: {d:.2}M hands/sec ({d:.0}ns per hand)\n", .{ hands_per_sec / 1_000_000, @as(f64, @floatFromInt(end - start)) / @as(f64, @floatFromInt(trials)) });
+    return hands_per_sec;
+}
+
+// Micro-benchmark for straight detection
+fn benchmarkStraightDetection() !f64 {
+    const print = std.debug.print;
+    
+    // Generate test patterns
+    var test_masks: [32]u16 = undefined;
+    const straight_masks = [_]u16{
+        0b1111100000000, 0b0111110000000, 0b0011111000000, 0b0001111100000, 0b0000111110000,
+        0b0000011111000, 0b0000001111100, 0b0000000111110, 0b0000000011111, 0b1000000001111,
+    };
+    const non_straight_masks = [_]u16{
+        0b1010101010101, 0b1100110011001, 0b1111000011110, 0b0000000000001, 0b1000000000001,
+        0b1110000000000, 0b0000000001110, 0b1010000001010, 0b1111000000000, 0b0000000011110,
+    };
+    
+    for (straight_masks, 0..) |mask, i| test_masks[i] = mask;
+    for (non_straight_masks, 0..) |mask, i| test_masks[10 + i] = mask;
+    
+    // Benchmark straight detection
+    const iterations = 100_000_000;
+    print("   Testing straight detection ({} iterations)...\n", .{iterations});
+    
+    var dummy_result: u32 = 0;
+    const start = std.time.nanoTimestamp();
+    
+    for (0..iterations) |i| {
+        const mask = test_masks[i % test_masks.len];
+        if (poker.checkStraight(mask)) {
+            dummy_result += 1;
+        }
+    }
+    
+    const end = std.time.nanoTimestamp();
+    const ns_per_call = @as(f64, @floatFromInt(end - start)) / @as(f64, @floatFromInt(iterations));
+    
+    print("   Result: {d:.2}ns per call\n", .{ns_per_call});
+    print("   Checksum: {} (prevents optimization)\n", .{dummy_result});
+    return ns_per_call;
+}

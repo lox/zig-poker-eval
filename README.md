@@ -1,6 +1,6 @@
 # Zig Poker Hand Evaluator
 
-A high-performance 7-card Texas Hold'em hand evaluator written in Zig, achieving **63+ million evaluations per second**.
+A high-performance 7-card Texas Hold'em hand evaluator written in Zig, achieving **47+ million evaluations per second** in realistic scenarios using advanced lookup table optimization.
 
 ## Setup
 
@@ -29,24 +29,26 @@ zig build test
 
 | Test Type | Build Mode | Hands/Second | Nanoseconds/Hand |
 |-----------|------------|--------------|------------------|
-| Random hands | Debug | ~3.6M | 277ns |
-| Random hands | ReleaseFast | **~63M** | **16ns** |
-| Torture cases | ReleaseFast | **~69M** | **14ns** |
+| Realistic (10M unique hands) | Debug | ~9.5M | 105ns |
+| Realistic (10M unique hands) | ReleaseFast | **~47M** | **21ns** |
+
+*Realistic benchmark uses 10M unique random hands with memory pressure to simulate real-world usage patterns.*
 
 ## Design
 
-This evaluator uses efficient bit manipulation techniques optimized for modern CPUs:
+This evaluator uses advanced optimization techniques for maximum performance:
 
+- **Rank Distribution LUT**: 64-byte lookup table for instant non-flush hand categorization
 - **Cards as bits**: Each card represented as a single bit in a u64 bitfield
-- **Compile-time optimization**: Lookup tables generated at build time
+- **Compile-time optimization**: Lookup tables generated at build time using Zig's `comptime`
 - **CPU-native operations**: Leverages @popCount and inline loops for maximum performance
 - **Cache-friendly**: Minimal memory footprint with efficient data structures
 
 ### Architecture
 
-- **`poker.zig`**: Core evaluation logic and data structures
+- **`poker.zig`**: Core evaluation logic, data structures, and comprehensive tests
 - **`benchmark.zig`**: Performance testing and random hand generation  
-- **`main.zig`**: CLI interface and comprehensive test suite
+- **`main.zig`**: CLI interface and integration test
 
 For detailed optimization techniques and experimental results, see `EXPERIMENTS.md`.
 
@@ -73,10 +75,12 @@ const rank = hand.evaluate(); // .straight_flush (royal flush)
 
 ```
 src/
-├── main.zig      # Entry point, CLI, and tests
-├── poker.zig     # Core poker types and evaluation logic
+├── main.zig      # Entry point and CLI interface
+├── poker.zig     # Core poker types, evaluation logic, and tests
 └── benchmark.zig # Performance testing utilities
 
+CLAUDE.md         # AI coding assistant instructions
+EXPERIMENTS.md    # Detailed optimization research and results
 build.zig         # Build configuration
 bin/              # Hermit-managed Zig installation
 ```
