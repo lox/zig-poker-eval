@@ -16,11 +16,15 @@ zig build run -Doptimize=ReleaseFast
 
 # Run tests
 zig build test
+
+# Run comprehensive performance profiling
+zig build profile
+zig build profile -Doptimize=ReleaseFast  # For release mode profiling
 ```
 
 ## Architecture Overview
 
-This is a high-performance 7-card Texas Hold'em poker hand evaluator achieving 42+ million evaluations per second. The core design uses bit manipulation for maximum performance:
+This is a high-performance 7-card Texas Hold'em poker hand evaluator achieving 48+ million evaluations per second. The core design uses bit manipulation and optimized flush detection for maximum performance:
 
 - **Cards as bits**: Each card represented as a single bit in a u64 bitfield
 - **Zero-cost abstractions**: Extensive use of `inline for` and `@popCount` for CPU-native operations
@@ -28,9 +32,11 @@ This is a high-performance 7-card Texas Hold'em poker hand evaluator achieving 4
 
 ### Module Structure
 
-- **`src/poker.zig`**: Core types (Card, Hand, HandRank) and evaluation logic
-- **`src/main.zig`**: CLI interface, comprehensive tests, and demo code
+- **`src/poker.zig`**: Core types (Card, Hand, HandRank) and evaluation logic with comprehensive tests
+- **`src/main.zig`**: CLI interface and integration test
 - **`src/benchmark.zig`**: Performance testing utilities and torture test cases
+- **`src/profiler.zig`**: Advanced profiling system for performance analysis
+- **`src/profile_main.zig`**: Dedicated profiling executable entry point
 
 ### Key Data Structures
 
@@ -63,9 +69,59 @@ This project includes extensive performance optimization research:
 - Documents both successful and failed optimizations with detailed analysis
 - Includes benchmarking frameworks and optimization roadmaps
 
+## Profiling System
+
+The project includes a comprehensive profiling system for performance analysis:
+
+### Quick Profiling
+```bash
+# Run all profiling suites
+zig build profile -Doptimize=ReleaseFast
+```
+
+### Profiling Components
+
+1. **Component-Level Profiling**: Breaks down evaluation into individual components
+   - Full evaluation timing
+   - Rank extraction performance
+   - Flush detection performance
+   - Straight detection performance
+   - Pair counting performance
+
+2. **Instruction-Level Analysis**: Compares optimization approaches
+   - Tests different rank extraction methods
+   - Measures instruction-level performance differences
+   - Apple Silicon specific optimizations
+
+3. **Memory Access Pattern Analysis**: Tests cache behavior
+   - Sequential vs random access patterns
+   - Cache penalty measurement
+   - Memory bandwidth utilization
+
+### Profiling Results Format
+```
+Function                       Calls   Total (ms)   Avg (ns)   Min (ns)   Max (ns)
+--------------------------------------------------------------------------------
+full_evaluation               100000        1.555       15.6          0       1000
+rank_extraction               100000        1.634       16.3          0       1000
+flush_detection               100000        1.609       16.1          0       2000
+```
+
+### Advanced Profiling (Optional)
+
+For detailed CPU profiling on macOS:
+```bash
+# Build profiling executable
+zig build profile -Doptimize=ReleaseFast
+
+# Use macOS Instruments (if available)
+instruments -t "Time Profiler" ./zig-out/bin/profile
+instruments -t "Allocations" ./zig-out/bin/profile
+```
+
 ### When making performance changes:
-1. **Always benchmark**: Use the built-in benchmarking in `main.zig`
+1. **Always profile**: Use `zig build profile -Doptimize=ReleaseFast` before and after changes
 2. **Document results**: Update both `README.md` performance table and `EXPERIMENTS.md`
 3. **Test correctness**: Ensure optimizations don't break hand evaluation accuracy
-4. **Consider complexity**: Code maintainability vs performance gains tradeoff
+4. **Compare components**: Look at component-level changes to identify bottlenecks
 5. **Target Apple M1**: Primary development/testing platform is ARM64
