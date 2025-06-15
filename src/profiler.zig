@@ -94,7 +94,7 @@ pub fn profileHandEvaluation(allocator: std.mem.Allocator) !void {
     print("=== DETAILED HAND EVALUATION PROFILING ===\n", .{});
     
     // Generate test hands
-    const hands = try benchmark.generateRandomHands(allocator, 100_000, 12345);
+    const hands = try poker.generateRandomHands(allocator, 100_000, 12345);
     defer allocator.free(hands);
     
     print("Profiling {} hands...\n", .{hands.len});
@@ -181,7 +181,7 @@ pub fn profileWithInstructionCounting(allocator: std.mem.Allocator) !void {
     // This would require linking with Apple's performance monitoring framework
     // For now, we'll use high-resolution timing as a proxy
     
-    const hands = try benchmark.generateRandomHands(allocator, 10_000, 54321);
+    const hands = try poker.generateRandomHands(allocator, 10_000, 54321);
     defer allocator.free(hands);
     
     // Measure cycle counts by timing very short operations
@@ -231,10 +231,10 @@ pub fn profileMemoryAccess(allocator: std.mem.Allocator) !void {
     print("\n=== MEMORY ACCESS PATTERN ANALYSIS ===\n", .{});
     
     // Test cache behavior with different hand distributions
-    const hands_sequential = try benchmark.generateRandomHands(allocator, 50_000, 1);
+    const hands_sequential = try poker.generateRandomHands(allocator, 50_000, 1);
     defer allocator.free(hands_sequential);
     
-    const hands_random = try benchmark.generateRandomHands(allocator, 50_000, 99999);
+    const hands_random = try poker.generateRandomHands(allocator, 50_000, 99999);
     defer allocator.free(hands_random);
     
     // Sequential access pattern (cache-friendly)
