@@ -19,6 +19,22 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
+    // Profiling executable
+    const profile_exe = b.addExecutable(.{
+        .name = "profile",
+        .root_source_file = b.path("src/profile_main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    
+    b.installArtifact(profile_exe);
+    
+    const profile_cmd = b.addRunArtifact(profile_exe);
+    profile_cmd.step.dependOn(b.getInstallStep());
+    
+    const profile_step = b.step("profile", "Run performance profiling");
+    profile_step.dependOn(&profile_cmd.step);
+
     // Tests
     const unit_tests = b.addTest(.{
         .root_source_file = b.path("src/main.zig"),
