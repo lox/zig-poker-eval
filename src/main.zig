@@ -32,6 +32,10 @@ pub fn main() !void {
     print("\n=== Straight Detection Optimization Benchmark ===\n", .{});
     try benchmarkStraightDetection();
     
+    // Hash-based evaluation benchmark
+    print("\n=== Hash-Based Evaluation Benchmark ===\n", .{});
+    try benchmarkHashEvaluation(allocator);
+    
 }
 
 fn benchmarkEvaluator(allocator: std.mem.Allocator) !void {
@@ -285,4 +289,74 @@ fn benchmarkStraightDetection() !void {
     print("  LUT implementation:    {d:.2}ns per call\n", .{ns_per_call_lut});
     print("  Speedup: {d:.2}x {s}\n", .{ speedup, if (speedup > 1.0) "(faster)" else "(slower)" });
     print("  Checksums: orig={} lut={} (prevents optimization)\n", .{ dummy_result_orig, dummy_result_lut });
+}
+
+// Benchmark hash-based evaluation (flush path only for now)
+fn benchmarkHashEvaluation(allocator: std.mem.Allocator) !void {
+    const iterations = 10_000_000;
+    print("Generating test hands for hash evaluation...\n", .{});
+    
+    const hands = try benchmark.generateRandomHands(allocator, 1000, 456);
+    defer allocator.free(hands);
+    
+    print("Testing correctness of hash vs current evaluation...\n", .{});
+    
+    // Verify correctness first
+    var mismatches: u32 = 0;
+    for (hands[0..100]) |hand| {
+        const current_result = hand.evaluate();
+        const hash_result = hand.evaluateHash();
+        if (current_result != hash_result) {
+            mismatches += 1;
+        }
+    }
+    
+    if (mismatches > 0) {
+        print("  ⚠️  WARNING: {} mismatches found! Hash evaluation may be incorrect.\n", .{mismatches});
+    } else {
+        print("  ✓ Hash evaluation matches current implementation\n", .{});
+    }
+    
+    print("Benchmarking hash evaluation ({} iterations)...\n", .{iterations});
+    
+    // Benchmark current implementation
+    var checksum_current: u32 = 0;
+    const start_current = std.time.nanoTimestamp();
+    
+    for (0..iterations) |i| {
+        const hand = hands[i % hands.len];
+        const result = hand.evaluate();
+        checksum_current += @intFromEnum(result);
+    }
+    
+    const end_current = std.time.nanoTimestamp();
+    const duration_current = end_current - start_current;
+    
+    // Benchmark hash implementation
+    var checksum_hash: u32 = 0;
+    const start_hash = std.time.nanoTimestamp();
+    
+    for (0..iterations) |i| {
+        const hand = hands[i % hands.len];
+        const result = hand.evaluateHash();
+        checksum_hash += @intFromEnum(result);
+    }
+    
+    const end_hash = std.time.nanoTimestamp();
+    const duration_hash = end_hash - start_hash;
+    
+    // Results
+    const current_duration_s = @as(f64, @floatFromInt(duration_current)) / 1_000_000_000.0;
+    const hash_duration_s = @as(f64, @floatFromInt(duration_hash)) / 1_000_000_000.0;
+    
+    const current_hands_per_sec = @as(f64, @floatFromInt(iterations)) / current_duration_s;
+    const hash_hands_per_sec = @as(f64, @floatFromInt(iterations)) / hash_duration_s;
+    
+    const speedup = current_hands_per_sec / hash_hands_per_sec;
+    
+    print("Results:\n", .{});
+    print("  Current implementation: {d:.2}M hands/sec\n", .{current_hands_per_sec / 1_000_000});
+    print("  Hash implementation:    {d:.2}M hands/sec\n", .{hash_hands_per_sec / 1_000_000});
+    print("  Speedup: {d:.2}x {s}\n", .{ 1.0/speedup, if (speedup < 1.0) "(faster)" else "(slower)" });
+    print("  Checksums: current={} hash={} (prevents optimization)\n", .{ checksum_current, checksum_hash });
 }

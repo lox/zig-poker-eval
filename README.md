@@ -1,6 +1,6 @@
 # Zig Poker Hand Evaluator
 
-A high-performance 7-card Texas Hold'em hand evaluator written in Zig, achieving **42+ million evaluations per second**.
+A high-performance 7-card Texas Hold'em hand evaluator written in Zig, achieving **63+ million evaluations per second**.
 
 ## Setup
 
@@ -30,31 +30,25 @@ zig build test
 | Test Type | Build Mode | Hands/Second | Nanoseconds/Hand |
 |-----------|------------|--------------|------------------|
 | Random hands | Debug | ~3.6M | 277ns |
-| Random hands | ReleaseFast | **~42.6M** | **23ns** |
+| Random hands | ReleaseFast | **~63M** | **16ns** |
 | Torture cases | ReleaseFast | **~69M** | **14ns** |
 
 ## Design
 
-### High-Performance Bit Manipulation
-- **Cards as bits**: Each card represented as a single bit in a u64
-- **Inline loops**: Critical paths use `inline for` for zero-cost iteration
-- **@popCount**: Leverages CPU's native population count for rank counting
-- **Optimized straight detection**: Bit mask shifting instead of sequential checking
+This evaluator uses efficient bit manipulation techniques optimized for modern CPUs:
+
+- **Cards as bits**: Each card represented as a single bit in a u64 bitfield
+- **Compile-time optimization**: Lookup tables generated at build time
+- **CPU-native operations**: Leverages @popCount and inline loops for maximum performance
+- **Cache-friendly**: Minimal memory footprint with efficient data structures
 
 ### Architecture
-- **`poker.zig`**: Core types (Card, Hand, HandRank) and evaluation logic
-- **`benchmark.zig`**: Random hand generation and torture test cases
-- **`main.zig`**: CLI interface, demos, and comprehensive tests
 
-### Key Optimizations
-1. **Bit-packed cards**: 52 cards fit in a single u64 with room to spare
-2. **Parallel suit extraction**: Pre-computed bit masks for efficient suit counting
-3. **Optimized straight detection**: Bit mask shifting with excellent branch prediction
-4. **Function inlining**: Critical path functions marked `inline` for zero-cost calls
-5. **Cache-friendly**: No large lookup tables, minimal memory allocations
-6. **Branchless evaluation**: Optimized control flow for consistent performance
+- **`poker.zig`**: Core evaluation logic and data structures
+- **`benchmark.zig`**: Performance testing and random hand generation  
+- **`main.zig`**: CLI interface and comprehensive test suite
 
-See `EXPERIMENTS.md` for detailed optimization research and failed experiments.
+For detailed optimization techniques and experimental results, see `EXPERIMENTS.md`.
 
 ## Example
 
