@@ -243,22 +243,22 @@ fn evaluateNonFlushWithRankLUT(hand_bits: u64) HandRank {
 // Non-flush evaluation using pre-computed rank data (eliminates redundancy)
 inline fn evaluateNonFlushWithPrecomputedRanks(rank_counts: [13]u8, rank_mask: u16) HandRank {
     @setEvalBranchQuota(100000);
-    // 1. Count pairs, trips, quads - optimized with unrolled loop
+    // 1. Count pairs, trips, quads - optimized with manual unroll
     var pairs: u8 = 0;
     var trips: u8 = 0;
     var quads: u8 = 0;
 
-    inline for (rank_counts) |count| {
-        switch (count) {
-            2 => pairs += 1,
-            3 => trips += 1,
-            4 => quads += 1,
-            else => {},
-        }
+    // Manual unroll for better performance (13 iterations)
+    comptime var i = 0;
+    inline while (i < 13) : (i += 1) {
+        const count = rank_counts[i];
+        pairs += @intFromBool(count == 2);
+        trips += @intFromBool(count == 3);
+        quads += @intFromBool(count == 4);
     }
 
-    // 2. Single lookup replaces if/else cascade
-    const hash_key = hashRankCategory(pairs, trips, quads);
+    // 2. Single lookup replaces if/else cascade (inlined for performance)
+    const hash_key = quads * 16 + trips * 4 + pairs;
     const pair_category = RANK_CATEGORY_LUT[hash_key];
 
     // 3. Check for straight using pre-computed mask (no redundant work)
