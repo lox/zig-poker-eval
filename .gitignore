@@ -5,3 +5,6 @@ zig-out/
 # Large data files (generate with: zig build generate-tables)
 /data/
 *.bin
+
+# Profile output
+profile_output.txt

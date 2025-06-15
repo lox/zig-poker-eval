@@ -24,7 +24,7 @@ pub fn build(b: *std.Build) void {
         .name = "profile",
         .root_source_file = b.path("src/profile_main.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = optimize,
     });
 
     b.installArtifact(profile_exe);
@@ -39,7 +39,7 @@ pub fn build(b: *std.Build) void {
         .name = "benchmark",
         .root_source_file = b.path("src/bench_main.zig"),
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = optimize,
     });
 
     b.installArtifact(benchmark_exe);

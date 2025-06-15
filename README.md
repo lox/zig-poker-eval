@@ -111,15 +111,39 @@ Run 3: 55780000 ops, 17.00 ns/op
 
 ## Profiling
 
-### Quick Profiling
+Two profiling approaches are available for performance analysis:
+
+### 1. External System Profiling (Recommended)
+Uses macOS `sample` command for real execution context profiling (macOS only):
+
 ```bash
-# Run comprehensive performance analysis
+# Profile both benchmarks (debug mode for better symbol resolution)
+./scripts/profile_bench.sh
+
+# Profile specific components
+./scripts/profile_bench.sh eval    # Hand evaluation only
+./scripts/profile_bench.sh equity  # Equity calculation only
+```
+
+Both will generate a `profile_output.txt` file in the root directory.
+
+**Sample Output:**
+```
+Top functions by sample count:
+19 equity.equityMonteCarlo + 604  /src/equity.zig:48     (73% of samples)
+6  equity.equityMonteCarlo + 488  /src/equity.zig:40     (23% of samples)
+1  equity.equityMonteCarlo + 776  /src/equity.zig:52     (4% of samples)
+```
+
+### 2. Custom Micro-Benchmarking
+For detailed component-level analysis and algorithm comparisons:
+
+```bash
+# Run comprehensive micro-benchmark analysis
 zig build profile -Doptimize=ReleaseFast
 ```
 
-### Profiling Output
-The profiler provides detailed component-level analysis:
-
+**Sample Output:**
 ```
 Function                       Calls   Total (ms)   Avg (ns)   Min (ns)   Max (ns)
 --------------------------------------------------------------------------------
@@ -143,9 +167,13 @@ src/
 ├── ranges.zig       # Hand range generation and parsing
 ├── benchmark.zig    # Performance testing utilities
 ├── bench_main.zig   # Dedicated benchmark executable
-├── profiler.zig     # Advanced profiling system
+├── profiler.zig     # Custom micro-benchmarking system
 └── profile_main.zig # Profiling executable entry point
 
+scripts/
+├── profile_bench.sh   # External system profiling (recommended)
+
+AGENT.md          # AI coding assistant instructions
 CLAUDE.md         # AI coding assistant instructions
 EXPERIMENTS.md    # Detailed optimization research and results
 build.zig         # Build configuration
