@@ -20,8 +20,4 @@ pub fn main() !void {
     try profiler.profileMemoryAccess(allocator);
 
     print("\n=== PROFILING COMPLETE ===\n", .{});
-    print("Next steps:\n", .{});
-    print("1. Use 'instruments -t \"Time Profiler\" ./zig-out/bin/profile' for detailed CPU profiling\n", .{});
-    print("2. Use 'instruments -t \"Allocations\" ./zig-out/bin/profile' for memory profiling\n", .{});
-    print("3. Use 'perf record -g ./zig-out/bin/profile' on Linux for call graph analysis\n", .{});
 }
