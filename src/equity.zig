@@ -1,6 +1,7 @@
 const std = @import("std");
 const poker = @import("poker.zig");
 const simulation = @import("simulation.zig");
+const ranges = @import("ranges.zig");
 
 pub const EquityResult = struct {
     wins: u32,
@@ -20,11 +21,6 @@ pub const EquityResult = struct {
 
 // Head-to-head Monte Carlo equity calculation
 pub fn equityMonteCarlo(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card, board: []const poker.Card, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) !EquityResult {
-    const hero_bits = simulation.cardsToHoleBits(hero_hole);
-    const villain_bits = simulation.cardsToHoleBits(villain_hole);
-    const board_bits = simulation.boardToBits(board);
-    const used_cards = hero_bits | villain_bits | board_bits;
-
     const cards_needed = 5 - @as(u8, @intCast(board.len));
 
     var wins: u32 = 0;
@@ -34,16 +30,14 @@ pub fn equityMonteCarlo(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card, b
     _ = allocator; // Mark as unused
 
     for (0..simulations) |_| {
-        // Sample remaining board cards
-        const remaining_board = simulation.sampleRemainingCards(used_cards, cards_needed, rng);
-        const final_board = board_bits | remaining_board;
+        // Sample remaining board cards using clean wrapper
+        const remaining_board = simulation.sampleRemainingCardsForEquity(hero_hole, villain_hole, board, cards_needed, rng);
 
-        // Create final hands
-        const hero_hand = simulation.combineCards(hero_bits, final_board);
-        const villain_hand = simulation.combineCards(villain_bits, final_board);
+        // Create final hands using clean wrapper
+        const hands = simulation.combineCardsForEquity(hero_hole, villain_hole, remaining_board);
 
         // Use fast path for 2-player (zero allocation)
-        const result = simulation.evaluateShowdownHeadToHead(hero_hand, villain_hand);
+        const result = simulation.evaluateShowdownHeadToHead(hands.hero, hands.villain);
 
         if (!result.tie) {
             if (result.winner == 0) {
@@ -63,29 +57,21 @@ pub fn equityMonteCarlo(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card, b
 
 // Head-to-head exact equity calculation
 pub fn equityExact(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card, board: []const poker.Card, allocator: std.mem.Allocator) !EquityResult {
-    const hero_bits = simulation.cardsToHoleBits(hero_hole);
-    const villain_bits = simulation.cardsToHoleBits(villain_hole);
-    const board_bits = simulation.boardToBits(board);
-    const used_cards = hero_bits | villain_bits | board_bits;
-
     const cards_needed = 5 - @as(u8, @intCast(board.len));
 
     // Enumerate all possible board completions
-    const combinations = try simulation.enumerateCardCombinations(used_cards, cards_needed, allocator);
+    const combinations = try simulation.enumerateCardCombinationsForEquity(hero_hole, villain_hole, board, cards_needed, allocator);
     defer allocator.free(combinations);
 
     var wins: u32 = 0;
     var ties: u32 = 0;
 
     for (combinations) |remaining_board| {
-        const final_board = board_bits | remaining_board;
+        // Create final hands using clean wrapper
+        const hands = simulation.combineCardsForEquity(hero_hole, villain_hole, remaining_board);
 
-        // Create final hands
-        const hero_hand = simulation.combineCards(hero_bits, final_board);
-        const villain_hand = simulation.combineCards(villain_bits, final_board);
-
-        const hands = [_]poker.Hand{ hero_hand, villain_hand };
-        const result = try simulation.evaluateShowdown(&hands, allocator);
+        const hands_array = [_]poker.Hand{ hands.hero, hands.villain };
+        const result = try simulation.evaluateShowdown(&hands_array, allocator);
         defer result.deinit(allocator);
 
         if (result.winners.len == 1) {
@@ -104,6 +90,11 @@ pub fn equityExact(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card, board:
     };
 }
 
+// Re-export range equity functions for convenience
+pub const RangeEquityResult = ranges.RangeEquityResult;
+pub const calculateRangeEquityExact = ranges.calculateRangeEquityExact;
+pub const calculateRangeEquityMonteCarlo = ranges.calculateRangeEquityMonteCarlo;
+
 // Multi-way Monte Carlo equity calculation
 pub fn equityMultiWayMonteCarlo(hands: [][2]poker.Card, board: []const poker.Card, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) ![]EquityResult {
     const num_players = hands.len;
@@ -113,10 +104,8 @@ pub fn equityMultiWayMonteCarlo(hands: [][2]poker.Card, board: []const poker.Car
     var hole_bits = try allocator.alloc(u64, num_players);
     defer allocator.free(hole_bits);
 
-    var used_cards: u64 = simulation.boardToBits(board);
     for (hands, 0..) |hole, i| {
-        hole_bits[i] = simulation.cardsToHoleBits(hole);
-        used_cards |= hole_bits[i];
+        hole_bits[i] = hole[0].bits | hole[1].bits;
     }
 
     const cards_needed = 5 - @as(u8, @intCast(board.len));
@@ -129,15 +118,14 @@ pub fn equityMultiWayMonteCarlo(hands: [][2]poker.Card, board: []const poker.Car
 
     for (0..simulations) |_| {
         // Sample remaining board cards
-        const remaining_board = simulation.sampleRemainingCards(used_cards, cards_needed, rng);
-        const final_board = simulation.boardToBits(board) | remaining_board;
+        const remaining_board = simulation.sampleRemainingCardsForMultiway(hands, board, cards_needed, rng);
 
         // Create final hands
         var final_hands = try allocator.alloc(poker.Hand, num_players);
         defer allocator.free(final_hands);
 
-        for (hole_bits, 0..) |hole, i| {
-            final_hands[i] = simulation.combineCards(hole, final_board);
+        for (hole_bits, 0..) |_, i| {
+            final_hands[i] = simulation.combineHoleBitsWithBoard(hole_bits[i], remaining_board);
         }
 
         const result = try simulation.evaluateShowdown(final_hands, allocator);
@@ -177,12 +165,13 @@ pub fn rangeEquityMonteCarlo(hero_range: [][2]poker.Card, villain_range: [][2]po
     var total_villain_equity: f64 = 0;
     var valid_combinations: u32 = 0;
 
-    const board_bits = simulation.boardToBits(board);
+    const board_hand = poker.cardsToHand(board);
+    const board_bits = board_hand.bits;
 
     for (hero_range) |hero_hand| {
         for (villain_range) |villain_hand| {
-            const hero_bits = simulation.cardsToHoleBits(hero_hand);
-            const villain_bits = simulation.cardsToHoleBits(villain_hand);
+            const hero_bits = hero_hand[0].bits | hero_hand[1].bits;
+            const villain_bits = villain_hand[0].bits | villain_hand[1].bits;
 
             // Skip if hands conflict
             if ((hero_bits & villain_bits) != 0 or
@@ -211,14 +200,15 @@ pub fn rangeEquityMonteCarlo(hero_range: [][2]poker.Card, villain_range: [][2]po
 
 // Hand vs range Monte Carlo equity
 pub fn handVsRangeMonteCarlo(hero_hole: [2]poker.Card, villain_range: [][2]poker.Card, board: []const poker.Card, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) !f64 {
-    const hero_bits = simulation.cardsToHoleBits(hero_hole);
-    const board_bits = simulation.boardToBits(board);
+    const hero_bits = hero_hole[0].bits | hero_hole[1].bits;
+    const board_hand = poker.cardsToHand(board);
+    const board_bits = board_hand.bits;
 
     var total_equity: f64 = 0;
     var valid_hands: u32 = 0;
 
     for (villain_range) |villain_hand| {
-        const villain_bits = simulation.cardsToHoleBits(villain_hand);
+        const villain_bits = villain_hand[0].bits | villain_hand[1].bits;
 
         // Skip if hands conflict
         if ((hero_bits & villain_bits) != 0 or

@@ -32,11 +32,6 @@ fn workerThread(ctx: *ThreadContext) void {
     var prng = std.Random.DefaultPrng.init(ctx.base_seed + ctx.thread_id);
     const rng = prng.random();
 
-    const hero_bits = simulation.cardsToHoleBits(ctx.hero_hole);
-    const villain_bits = simulation.cardsToHoleBits(ctx.villain_hole);
-    const board_bits = simulation.boardToBits(ctx.board);
-    const used_cards = hero_bits | villain_bits | board_bits;
-
     const cards_needed = 5 - @as(u8, @intCast(ctx.board.len));
 
     var wins: u32 = 0;
@@ -44,16 +39,14 @@ fn workerThread(ctx: *ThreadContext) void {
 
     // Run simulations assigned to this thread
     for (0..ctx.simulations) |_| {
-        // Sample remaining board cards
-        const remaining_board = simulation.sampleRemainingCards(used_cards, cards_needed, rng);
-        const final_board = board_bits | remaining_board;
+        // Sample remaining board cards using clean wrapper
+        const remaining_board = simulation.sampleRemainingCardsForEquity(ctx.hero_hole, ctx.villain_hole, ctx.board, cards_needed, rng);
 
-        // Create final hands
-        const hero_hand = simulation.combineCards(hero_bits, final_board);
-        const villain_hand = simulation.combineCards(villain_bits, final_board);
+        // Create final hands using clean wrapper
+        const hands = simulation.combineCardsForEquity(ctx.hero_hole, ctx.villain_hole, remaining_board);
 
         // Use fast path for 2-player (zero allocation)
-        const result = simulation.evaluateShowdownHeadToHead(hero_hand, villain_hand);
+        const result = simulation.evaluateShowdownHeadToHead(hands.hero, hands.villain);
 
         if (!result.tie) {
             if (result.winner == 0) {

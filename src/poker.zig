@@ -379,13 +379,14 @@ pub fn createHand(cards: []const struct { Suit, Rank }) Hand {
     return hand;
 }
 
-// Parse card string like "AsKsQsJsTs2h3h" into a Hand
-pub fn parseCards(card_string: []const u8) !Hand {
+// Parse card string like "AsKsQsJsTs2h3h" into slice
+pub fn parseCards(card_string: []const u8, allocator: std.mem.Allocator) ![]Card {
     if (card_string.len % 2 != 0) {
         return error.InvalidCardString;
     }
 
-    var hand = Hand.init();
+    const card_count = card_string.len / 2;
+    var cards = try allocator.alloc(Card, card_count);
     var i: usize = 0;
 
     while (i < card_string.len) : (i += 2) {
@@ -412,20 +413,78 @@ pub fn parseCards(card_string: []const u8) !Hand {
             else => return error.InvalidSuit,
         };
 
-        hand.addCard(Card.init(rank, suit));
+        cards[i / 2] = Card.init(rank, suit);
     }
 
+    return cards;
+}
+
+/// Convert card slice to Hand for fast evaluation
+pub fn cardsToHand(cards: []const Card) Hand {
+    var hand = Hand.init();
+    for (cards) |card| {
+        hand.addCard(card);
+    }
     return hand;
 }
 
-// Comptime version that panics on invalid input (like Go's Must*)
-pub fn mustParseCards(comptime card_string: []const u8) Hand {
-    return parseCards(card_string) catch {
-        @compileError("Invalid card string: " ++ card_string);
-    };
+/// Compile-time card parsing - returns fixed array, no allocation needed
+pub fn mustParseCards(comptime card_string: []const u8) [card_string.len / 2]Card {
+    if (card_string.len % 2 != 0) {
+        @compileError("Invalid card string length: " ++ card_string);
+    }
+
+    const card_count = card_string.len / 2;
+    var cards: [card_count]Card = undefined;
+
+    comptime var i: usize = 0;
+    inline while (i < card_string.len) : (i += 2) {
+        const rank_char = card_string[i];
+        const suit_char = card_string[i + 1];
+
+        // Parse rank
+        const rank: u8 = switch (rank_char) {
+            '2'...'9' => rank_char - '0',
+            'T' => 10,
+            'J' => 11,
+            'Q' => 12,
+            'K' => 13,
+            'A' => 14,
+            else => @compileError("Invalid rank: " ++ [_]u8{rank_char}),
+        };
+
+        // Parse suit
+        const suit: u2 = switch (suit_char) {
+            'h' => 0, // hearts
+            's' => 1, // spades
+            'd' => 2, // diamonds
+            'c' => 3, // clubs
+            else => @compileError("Invalid suit: " ++ [_]u8{suit_char}),
+        };
+
+        cards[i / 2] = Card.init(rank, suit);
+    }
+
+    return cards;
 }
 
-// Generate random 7-card hands matching Go's methodology
+/// Evaluate 7 cards directly (convenience function)
+pub fn evaluate7(cards: [7]Card) HandRank {
+    const hand = Hand.fromCards(cards);
+    return hand.evaluate();
+}
+
+/// Evaluate card slice (convenience function)
+pub fn evaluateCards(cards: []const Card) HandRank {
+    if (cards.len != 7) {
+        // For now, only support 7-card evaluation
+        return .high_card;
+    }
+
+    const hand = cardsToHand(cards);
+    return hand.evaluate();
+}
+
 pub fn generateRandomHands(allocator: std.mem.Allocator, count: u32, seed: u64) ![]Hand {
     var rng = std.Random.DefaultPrng.init(seed);
     const random = rng.random();
@@ -519,42 +578,28 @@ test "known hand patterns correctness" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Return runtime-parsed test cases to avoid compile-time issues
-    var test_cases: [11]Hand = undefined;
-    test_cases[0] = try parseCards("AsKsQsJsTs2h3d"); // Royal flush
-    test_cases[1] = try parseCards("9s8s7s6s5s2h3d"); // Straight flush
-    test_cases[2] = try parseCards("AhAsAdAcKs2h3d"); // Four of a kind
-    test_cases[3] = try parseCards("AhAsAdKhKs2c3d"); // Full house
-    test_cases[4] = try parseCards("AhKhQhJh9h2s3d"); // Flush
-    test_cases[5] = try parseCards("AsKdQcJhTs2s3d"); // Straight
-    test_cases[6] = try parseCards("AhAsAdKcQs2h3d"); // Three of a kind
-    test_cases[7] = try parseCards("AhAsKdKhQs2c3d"); // Two pair
-    test_cases[8] = try parseCards("AhAsKdQcJs2h3d"); // One pair
-    test_cases[9] = try parseCards("AhKsQdJc9h7s2d"); // High card
-    test_cases[10] = try parseCards("Ah2s3d4c5h6s7d"); // Wheel straight
-
-    const result = try allocator.alloc(Hand, test_cases.len);
-    @memcpy(result, &test_cases);
-    defer allocator.free(result);
-
-    // Verify known hand patterns evaluate correctly
-    const expected_ranks = [_]HandRank{
-        .straight_flush, // Royal flush
-        .straight_flush, // Straight flush
-        .four_of_a_kind, // Four of a kind
-        .full_house, // Full house
-        .flush, // Flush
-        .straight, // Straight
-        .three_of_a_kind, // Three of a kind
-        .two_pair, // Two pair
-        .pair, // One pair
-        .high_card, // High card
-        .straight, // Wheel straight
+    // Test case data with card strings and expected results
+    const test_data = [_]struct { cards: []const u8, expected: HandRank }{
+        .{ .cards = "AsKsQsJsTs2h3d", .expected = .straight_flush }, // Royal flush
+        .{ .cards = "9s8s7s6s5s2h3d", .expected = .straight_flush }, // Straight flush
+        .{ .cards = "AhAsAdAcKs2h3d", .expected = .four_of_a_kind }, // Four of a kind
+        .{ .cards = "AhAsAdKhKs2c3d", .expected = .full_house }, // Full house
+        .{ .cards = "AhKhQhJh9h2s3d", .expected = .flush }, // Flush
+        .{ .cards = "AsKdQcJhTs2s3d", .expected = .straight }, // Straight
+        .{ .cards = "AhAsAdKcQs2h3d", .expected = .three_of_a_kind }, // Three of a kind
+        .{ .cards = "AhAsKdKhQs2c3d", .expected = .two_pair }, // Two pair
+        .{ .cards = "AhAsKdQcJs2h3d", .expected = .pair }, // One pair
+        .{ .cards = "AhKsQdJc9h7s2d", .expected = .high_card }, // High card
+        .{ .cards = "Ah2s3d4c5h6s7d", .expected = .straight }, // Wheel straight
     };
 
-    for (result, expected_ranks) |hand, expected| {
-        const result_hand = hand.evaluate();
-        try testing.expect(result_hand == expected);
+    // Verify known hand patterns evaluate correctly
+    for (test_data) |test_case| {
+        const cards = try parseCards(test_case.cards, allocator);
+        defer allocator.free(cards);
+
+        const result_hand = evaluateCards(cards);
+        try testing.expect(result_hand == test_case.expected);
     }
 
     // Test random hands for basic validity
@@ -569,42 +614,57 @@ test "known hand patterns correctness" {
 }
 
 test "edge cases and corner cases" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
     // Test all straight variations
-    const ace_high_straight = try parseCards("AsKsQdJcTh2h3d");
-    try testing.expect(ace_high_straight.evaluate() == .straight);
+    const ace_high_straight = try parseCards("AsKsQdJcTh2h3d", allocator);
+    defer allocator.free(ace_high_straight);
+    try testing.expect(evaluateCards(ace_high_straight) == .straight);
 
-    const wheel_straight = try parseCards("Ah2s3d4c5h6s7d");
-    try testing.expect(wheel_straight.evaluate() == .straight);
+    const wheel_straight = try parseCards("Ah2s3d4c5h6s7d", allocator);
+    defer allocator.free(wheel_straight);
+    try testing.expect(evaluateCards(wheel_straight) == .straight);
 
-    const middle_straight = try parseCards("6h7s8d9cTh2s3d");
-    try testing.expect(middle_straight.evaluate() == .straight);
+    const middle_straight = try parseCards("6h7s8d9cTh2s3d", allocator);
+    defer allocator.free(middle_straight);
+    try testing.expect(evaluateCards(middle_straight) == .straight);
 
     // Test flush vs straight priority
-    const flush_beats_straight = try parseCards("AhKhQhJhTh2s3d");
-    try testing.expect(flush_beats_straight.evaluate() == .straight_flush);
+    const flush_beats_straight = try parseCards("AhKhQhJhTh2s3d", allocator);
+    defer allocator.free(flush_beats_straight);
+    try testing.expect(evaluateCards(flush_beats_straight) == .straight_flush);
 
     // Test full house variations
-    const trips_over_pair = try parseCards("AhAsAdKhKs2c3d");
-    try testing.expect(trips_over_pair.evaluate() == .full_house);
+    const trips_over_pair = try parseCards("AhAsAdKhKs2c3d", allocator);
+    defer allocator.free(trips_over_pair);
+    try testing.expect(evaluateCards(trips_over_pair) == .full_house);
 
-    const pair_over_trips = try parseCards("AhAsKdKhKs2c3d");
-    try testing.expect(pair_over_trips.evaluate() == .full_house);
+    const pair_over_trips = try parseCards("AhAsKdKhKs2c3d", allocator);
+    defer allocator.free(pair_over_trips);
+    try testing.expect(evaluateCards(pair_over_trips) == .full_house);
 
     // Test quad variations
-    const quads_with_trips = try parseCards("AhAsAdAcKhKsKd");
-    try testing.expect(quads_with_trips.evaluate() == .four_of_a_kind);
+    const quads_with_trips = try parseCards("AhAsAdAcKhKsKd", allocator);
+    defer allocator.free(quads_with_trips);
+    try testing.expect(evaluateCards(quads_with_trips) == .four_of_a_kind);
 
     // Test two pair edge cases
-    const high_two_pair = try parseCards("AhAsKdKh2s3c4d");
-    try testing.expect(high_two_pair.evaluate() == .two_pair);
+    const high_two_pair = try parseCards("AhAsKdKh2s3c4d", allocator);
+    defer allocator.free(high_two_pair);
+    try testing.expect(evaluateCards(high_two_pair) == .two_pair);
 
-    const low_two_pair = try parseCards("3h3s2d2hAs5c6d");
-    try testing.expect(low_two_pair.evaluate() == .two_pair);
+    const low_two_pair = try parseCards("3h3s2d2hAs5c6d", allocator);
+    defer allocator.free(low_two_pair);
+    try testing.expect(evaluateCards(low_two_pair) == .two_pair);
 
     // Test minimum hands
-    const ace_high = try parseCards("AhKsQdJc9h7s2d");
-    try testing.expect(ace_high.evaluate() == .high_card);
+    const ace_high = try parseCards("AhKsQdJc9h7s2d", allocator);
+    defer allocator.free(ace_high);
+    try testing.expect(evaluateCards(ace_high) == .high_card);
 
-    const deuce_high = try parseCards("2h3s4d5c7h8s9d");
-    try testing.expect(deuce_high.evaluate() == .high_card);
+    const deuce_high = try parseCards("2h3s4d5c7h8s9d", allocator);
+    defer allocator.free(deuce_high);
+    try testing.expect(evaluateCards(deuce_high) == .high_card);
 }

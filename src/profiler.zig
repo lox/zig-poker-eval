@@ -150,9 +150,10 @@ pub fn profileEquitySimulation(allocator: std.mem.Allocator) !void {
     var prng = std.Random.DefaultPrng.init(42);
     const rng = prng.random();
 
-    const hero_bits = simulation.cardsToHoleBits(hero_hole);
-    const villain_bits = simulation.cardsToHoleBits(villain_hole);
-    const board_bits = simulation.boardToBits(&board);
+    const hero_bits = hero_hole[0].bits | hero_hole[1].bits;
+    const villain_bits = villain_hole[0].bits | villain_hole[1].bits;
+    const board_hand = poker.cardsToHand(&board);
+    const board_bits = board_hand.bits;
     const used_cards = hero_bits | villain_bits | board_bits;
     const cards_needed = 5;
 
@@ -161,22 +162,22 @@ pub fn profileEquitySimulation(allocator: std.mem.Allocator) !void {
     // Profile each component 10000 times
     for (0..10000) |_| {
         // 1. Sample remaining cards
-        const time_sample = timeFunction(simulation.sampleRemainingCards, .{ used_cards, cards_needed, rng });
+        const time_sample = timeFunction(simulation.sampleRemainingCardsBits, .{ used_cards, cards_needed, rng });
         try profiler.addSample("sample_remaining_cards", time_sample);
 
         // 2. Combine cards (using actual sampled cards)
-        const remaining_board = simulation.sampleRemainingCards(used_cards, cards_needed, rng);
+        const remaining_board = simulation.sampleRemainingCardsBits(used_cards, cards_needed, rng);
         const final_board = board_bits | remaining_board;
 
-        const time_combine1 = timeFunction(simulation.combineCards, .{ hero_bits, final_board });
+        const time_combine1 = timeFunction(simulation.combineCardsBits, .{ hero_bits, final_board });
         try profiler.addSample("combine_hero_cards", time_combine1);
 
-        const time_combine2 = timeFunction(simulation.combineCards, .{ villain_bits, final_board });
+        const time_combine2 = timeFunction(simulation.combineCardsBits, .{ villain_bits, final_board });
         try profiler.addSample("combine_villain_cards", time_combine2);
 
         // 3. Evaluate showdown
-        const hero_hand = simulation.combineCards(hero_bits, final_board);
-        const villain_hand = simulation.combineCards(villain_bits, final_board);
+        const hero_hand = simulation.combineCardsBits(hero_bits, final_board);
+        const villain_hand = simulation.combineCardsBits(villain_bits, final_board);
         const hands = [_]poker.Hand{ hero_hand, villain_hand };
 
         const time_showdown = timeFunction(profileShowdownWrapper, .{ &hands, allocator });

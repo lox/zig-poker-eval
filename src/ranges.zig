@@ -1,296 +1,472 @@
 const std = @import("std");
 const poker = @import("poker.zig");
+const simulation = @import("simulation.zig");
 
-// Generate all pocket pairs (AA, KK, QQ, ..., 22)
-pub fn generatePocketPairs(allocator: std.mem.Allocator) ![][2]poker.Card {
-    var pairs = std.ArrayList([2]poker.Card).init(allocator);
-    defer pairs.deinit();
+/// Efficient representation of a poker hand range
+/// Uses HashMap for simplicity and correctness
+pub const Range = struct {
+    /// Map from hand bits to probability
+    hands: std.AutoHashMap(u64, f32),
 
-    // Generate pairs from Aces down to Deuces
-    var rank: u8 = 14;
-    while (rank >= 2) : (rank -= 1) {
-        try pairs.append([_]poker.Card{
-            poker.Card.init(rank, 0), // hearts
-            poker.Card.init(rank, 1), // spades
-        });
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator) Range {
+        return Range{
+            .hands = std.AutoHashMap(u64, f32).init(allocator),
+            .allocator = allocator,
+        };
     }
 
-    return pairs.toOwnedSlice();
-}
-
-// Generate all suited aces (AsKs, AsQs, ..., As2s)
-pub fn generateSuitedAces(allocator: std.mem.Allocator) ![][2]poker.Card {
-    var suited_aces = std.ArrayList([2]poker.Card).init(allocator);
-    defer suited_aces.deinit();
-
-    // Generate suited aces from AK down to A2
-    for (2..14) |rank| {
-        const r = @as(u8, @intCast(rank));
-        try suited_aces.append([_]poker.Card{
-            poker.Card.init(14, 0), // Ah
-            poker.Card.init(r, 0), // Same suit
-        });
+    pub fn deinit(self: *Range) void {
+        self.hands.deinit();
     }
 
-    return suited_aces.toOwnedSlice();
-}
-
-// Generate all offsuit aces (AhKs, AhQs, ..., AhKd, etc.)
-pub fn generateOffsuitAces(allocator: std.mem.Allocator) ![][2]poker.Card {
-    var offsuit_aces = std.ArrayList([2]poker.Card).init(allocator);
-    defer offsuit_aces.deinit();
-
-    // Generate offsuit aces
-    for (2..14) |rank| {
-        const r = @as(u8, @intCast(rank));
-        // For each rank, generate all suit combinations where suits differ
-        inline for (0..4) |ace_suit| {
-            inline for (0..4) |kicker_suit| {
-                if (ace_suit != kicker_suit) {
-                    try offsuit_aces.append([_]poker.Card{
-                        poker.Card.init(14, @intCast(ace_suit)),
-                        poker.Card.init(r, @intCast(kicker_suit)),
-                    });
-                }
-            }
-        }
+    /// Add a hand to the range with given probability
+    pub fn addHand(self: *Range, hand: [2]poker.Card, probability: f32) !void {
+        // Create a unique key from the two cards
+        const hand_key = hand[0].bits | hand[1].bits;
+        try self.hands.put(hand_key, probability);
     }
 
-    return offsuit_aces.toOwnedSlice();
-}
-
-// Generate premium starting hands (AA, KK, QQ, JJ, AKs, AQs, AJs, AKo)
-pub fn generatePremiumHands(allocator: std.mem.Allocator) ![][2]poker.Card {
-    var premium = std.ArrayList([2]poker.Card).init(allocator);
-    defer premium.deinit();
-
-    // Premium pocket pairs
-    const premium_pairs = [_]u8{ 14, 13, 12, 11 }; // AA, KK, QQ, JJ
-    for (premium_pairs) |rank| {
-        try premium.append([_]poker.Card{
-            poker.Card.init(rank, 0),
-            poker.Card.init(rank, 1),
-        });
-    }
-
-    // Premium suited aces
-    const premium_aces_suited = [_]u8{ 13, 12, 11 }; // AKs, AQs, AJs
-    for (premium_aces_suited) |rank| {
-        try premium.append([_]poker.Card{
-            poker.Card.init(14, 0), // As
-            poker.Card.init(rank, 0), // Same suit
-        });
-    }
-
-    // AKo (all offsuit AK combinations)
-    inline for (0..4) |ace_suit| {
-        inline for (0..4) |king_suit| {
-            if (ace_suit != king_suit) {
-                try premium.append([_]poker.Card{
-                    poker.Card.init(14, @intCast(ace_suit)),
-                    poker.Card.init(13, @intCast(king_suit)),
-                });
-            }
-        }
-    }
-
-    return premium.toOwnedSlice();
-}
-
-// Generate all hands of a specific rank (e.g., all AK combinations)
-pub fn generateHandRank(high_rank: u8, low_rank: u8, suited_only: bool, allocator: std.mem.Allocator) ![][2]poker.Card {
-    var hands = std.ArrayList([2]poker.Card).init(allocator);
-    defer hands.deinit();
-
-    if (high_rank == low_rank) {
-        // Pocket pair - only one combination per suit pair
-        inline for (0..4) |suit1| {
-            inline for (suit1 + 1..4) |suit2| {
-                try hands.append([_]poker.Card{
-                    poker.Card.init(high_rank, @intCast(suit1)),
-                    poker.Card.init(low_rank, @intCast(suit2)),
-                });
-            }
-        }
-    } else {
-        // Non-pair hand
-        if (suited_only) {
-            // Only suited combinations
-            inline for (0..4) |suit| {
-                try hands.append([_]poker.Card{
-                    poker.Card.init(high_rank, @intCast(suit)),
-                    poker.Card.init(low_rank, @intCast(suit)),
-                });
-            }
+    /// Add a hand using poker notation (e.g., "AA", "AKs", "AKo")
+    /// For pocket pairs like "AA", this adds ALL possible combinations (6 for AA)
+    /// For suited/offsuit like "AKs"/"AKo", this adds one representative hand
+    pub fn addHandNotation(self: *Range, notation: []const u8, probability: f32) !void {
+        if (notation.len == 2 and notation[0] == notation[1]) {
+            // Pocket pair - add all combinations
+            try self.addAllPocketPairCombinations(notation, probability);
         } else {
-            // All combinations (suited and offsuit)
-            inline for (0..4) |suit1| {
-                inline for (0..4) |suit2| {
-                    try hands.append([_]poker.Card{
-                        poker.Card.init(high_rank, @intCast(suit1)),
-                        poker.Card.init(low_rank, @intCast(suit2)),
-                    });
-                }
+            // Suited/offsuit - add one representative hand
+            const hand = try parseHandNotation(notation);
+            try self.addHand(hand, probability);
+        }
+    }
+
+    /// Add all combinations of a pocket pair (e.g., "AA" adds all 6 AA combinations)
+    fn addAllPocketPairCombinations(self: *Range, notation: []const u8, probability: f32) !void {
+        if (notation.len != 2 or notation[0] != notation[1]) return error.NotAPocketPair;
+
+        const rank = parseRank(notation[0]) orelse return error.InvalidRank;
+
+        // Add all 6 combinations: 4 choose 2 = 6 combinations
+        const suits = [4]u2{ 0, 1, 2, 3 }; // h, s, d, c
+
+        for (suits, 0..) |suit1, i| {
+            for (suits[i + 1 ..]) |suit2| {
+                const hand = [2]poker.Card{
+                    poker.Card.init(rank, suit1),
+                    poker.Card.init(rank, suit2),
+                };
+                try self.addHand(hand, probability);
             }
         }
     }
 
-    return hands.toOwnedSlice();
+    /// Add multiple hands with same probability using poker notation
+    pub fn addHands(self: *Range, notations: []const []const u8, probability: f32) !void {
+        for (notations) |notation| {
+            try self.addHandNotation(notation, probability);
+        }
+    }
+
+    /// Get probability of a specific hand in range
+    pub fn getHandProbability(self: *const Range, hand: [2]poker.Card) f32 {
+        const hand_key = hand[0].bits | hand[1].bits;
+        return self.hands.get(hand_key) orelse 0.0;
+    }
+
+    /// Get total number of hand combinations in range
+    pub fn handCount(self: *const Range) u32 {
+        return @intCast(self.hands.count());
+    }
+
+    /// Iterator for efficient range traversal
+    pub const Iterator = struct {
+        inner: std.AutoHashMap(u64, f32).Iterator,
+
+        pub fn next(self: *Iterator) ?struct { hand: [2]poker.Card, probability: f32 } {
+            if (self.inner.next()) |entry| {
+                const hand_bits = entry.key_ptr.*;
+                const probability = entry.value_ptr.*;
+
+                // Convert hand bits back to two cards
+                // This is a simplification - in practice you'd need more sophisticated bit extraction
+                const hand = bitsToHand(hand_bits);
+
+                return .{ .hand = hand, .probability = probability };
+            }
+            return null;
+        }
+    };
+
+    pub fn iterator(self: *const Range) Iterator {
+        return Iterator{ .inner = self.hands.iterator() };
+    }
+};
+
+/// Convert hand bits back to two individual cards
+/// This is a simplified version - assumes exactly 2 bits are set
+fn bitsToHand(hand_bits: u64) [2]poker.Card {
+    var cards: [2]poker.Card = undefined;
+    var card_count: u8 = 0;
+    var remaining_bits = hand_bits;
+
+    while (remaining_bits != 0 and card_count < 2) {
+        const card_bit = @ctz(remaining_bits);
+        cards[card_count] = poker.Card{ .bits = @as(u64, 1) << @intCast(card_bit) };
+        remaining_bits &= remaining_bits - 1; // Clear the lowest set bit
+        card_count += 1;
+    }
+
+    return cards;
 }
 
-// Simple range parser for basic notation (e.g., "AA,KK,QQ,AKs,AKo")
-pub fn parseRange(range_str: []const u8, allocator: std.mem.Allocator) ![][2]poker.Card {
-    var range = std.ArrayList([2]poker.Card).init(allocator);
-    defer range.deinit();
+/// Parse range hand notation (e.g., "AA", "AKs", "AKo") into representative hand
+/// This is used internally by parseRange() and addHandNotation()
+fn parseHandNotation(notation: []const u8) ![2]poker.Card {
+    if (notation.len < 2 or notation.len > 3) return error.InvalidNotation;
 
-    var it = std.mem.splitSequence(u8, range_str, ",");
-    while (it.next()) |hand_str| {
-        const trimmed = std.mem.trim(u8, hand_str, " ");
-        if (trimmed.len == 0) continue;
+    const rank1 = parseRank(notation[0]) orelse return error.InvalidRank;
+    const rank2 = parseRank(notation[1]) orelse return error.InvalidRank;
 
-        const hands = try parseHandNotation(trimmed, allocator);
-        defer allocator.free(hands);
-
-        try range.appendSlice(hands);
-    }
-
-    return range.toOwnedSlice();
-}
-
-// Parse individual hand notation (AA, AKs, AKo, etc.)
-fn parseHandNotation(notation: []const u8, allocator: std.mem.Allocator) ![][2]poker.Card {
-    if (notation.len < 2 or notation.len > 3) {
-        return error.InvalidNotation;
-    }
-
-    // Parse ranks
-    const rank1 = parseRankChar(notation[0]);
-    const rank2 = parseRankChar(notation[1]);
-
-    if (rank1 == 0 or rank2 == 0) {
-        return error.InvalidRank;
-    }
-
-    // Determine if suited/offsuit/pair
     if (notation.len == 2) {
-        // Pocket pair (e.g., "AA")
-        if (rank1 != rank2) {
-            return error.InvalidPairNotation;
-        }
-        return generateHandRank(rank1, rank2, false, allocator);
-    } else if (notation.len == 3) {
-        const suit_char = notation[2];
-        const high_rank = @max(rank1, rank2);
-        const low_rank = @min(rank1, rank2);
+        // Pocket pair (e.g., "AA", "KK")
+        if (rank1 != rank2) return error.NotAPair;
+        return [2]poker.Card{ poker.Card.init(rank1, 0), poker.Card.init(rank2, 1) };
+    } else {
+        // Suited or offsuit (e.g., "AKs", "AKo")
+        const modifier = notation[2];
+        if (rank1 == rank2) return error.CannotBeSuited;
 
-        switch (suit_char) {
-            's' => return generateHandRank(high_rank, low_rank, true, allocator),
-            'o' => {
-                // Offsuit - generate all combinations then filter out suited
-                const all_hands = try generateHandRank(high_rank, low_rank, false, allocator);
-                defer allocator.free(all_hands);
-
-                var offsuit = std.ArrayList([2]poker.Card).init(allocator);
-                defer offsuit.deinit();
-
-                for (all_hands) |hand| {
-                    if (hand[0].getSuit() != hand[1].getSuit()) {
-                        try offsuit.append(hand);
-                    }
-                }
-
-                return offsuit.toOwnedSlice();
-            },
-            else => return error.InvalidSuitNotation,
+        switch (modifier) {
+            's' => return [2]poker.Card{ poker.Card.init(rank1, 0), poker.Card.init(rank2, 0) }, // Same suit
+            'o' => return [2]poker.Card{ poker.Card.init(rank1, 0), poker.Card.init(rank2, 1) }, // Different suits
+            else => return error.InvalidModifier,
         }
     }
-
-    return error.InvalidNotation;
 }
 
-// Parse rank character to numeric value
-fn parseRankChar(char: u8) u8 {
+/// Parse single rank character to numeric value
+fn parseRank(char: u8) ?u8 {
     return switch (char) {
-        '2'...'9' => char - '0',
+        '2' => 2,
+        '3' => 3,
+        '4' => 4,
+        '5' => 5,
+        '6' => 6,
+        '7' => 7,
+        '8' => 8,
+        '9' => 9,
         'T' => 10,
         'J' => 11,
         'Q' => 12,
         'K' => 13,
         'A' => 14,
-        else => 0,
+        else => null,
     };
 }
 
-// Helper to create a range from specific hands
-pub fn createRange(hands: []const [2]poker.Card, allocator: std.mem.Allocator) ![][2]poker.Card {
-    const range = try allocator.alloc([2]poker.Card, hands.len);
-    @memcpy(range, hands);
+/// Parse comma-delimited range notation (e.g., "AA,KK,QQ,AKs,AKo") into a Range
+pub fn parseRange(notation: []const u8, allocator: std.mem.Allocator) !Range {
+    var range = Range.init(allocator);
+    errdefer range.deinit();
+
+    // Split by commas and process each hand type
+    var iterator = std.mem.splitScalar(u8, notation, ',');
+    while (iterator.next()) |hand_str| {
+        const trimmed = std.mem.trim(u8, hand_str, " \t\n\r");
+        if (trimmed.len == 0) continue;
+
+        // Add with full probability (1.0) - user can adjust later if needed
+        try range.addHandNotation(trimmed, 1.0);
+    }
+
     return range;
 }
 
+/// Parse board notation (e.g., "AsKh7s" or "As Kh 7s")
+pub fn parseBoard(notation: []const u8) ![]poker.Card {
+    // TODO: Implement board parsing - for now, use individual parseCard calls
+    _ = notation;
+    return error.NotImplemented;
+}
+
+/// Range equity calculation result
+pub const RangeEquityResult = struct {
+    hero_equity: f64,
+    villain_equity: f64,
+    total_simulations: u32,
+
+    pub fn sum(self: RangeEquityResult) f64 {
+        return self.hero_equity + self.villain_equity;
+    }
+};
+
+/// Calculate exact range vs range equity
+pub fn calculateRangeEquityExact(hero_range: *const Range, villain_range: *const Range, board: []const poker.Card, allocator: std.mem.Allocator) !RangeEquityResult {
+    var total_hero_equity: f64 = 0.0;
+    var total_weight: f64 = 0.0;
+    var total_combinations: u32 = 0;
+
+    // Iterate through all combinations of hands from both ranges
+    var hero_iter = hero_range.iterator();
+    while (hero_iter.next()) |hero_entry| {
+        var villain_iter = villain_range.iterator();
+        while (villain_iter.next()) |villain_entry| {
+            // Check for card conflicts
+            if (hasCardConflict(hero_entry.hand, villain_entry.hand, board)) {
+                continue;
+            }
+
+            // Calculate exact equity for this hand combination
+            const equity = @import("equity.zig");
+            const equity_result = try equity.equityExact(hero_entry.hand, villain_entry.hand, board, allocator);
+
+            // Weight by probabilities of both hands
+            const weight = hero_entry.probability * villain_entry.probability;
+            total_hero_equity += equity_result.equity() * weight;
+            total_weight += weight;
+            total_combinations += 1;
+        }
+    }
+
+    // Normalize by total weight
+    const hero_equity = if (total_weight > 0) total_hero_equity / total_weight else 0.0;
+
+    return RangeEquityResult{
+        .hero_equity = hero_equity,
+        .villain_equity = 1.0 - hero_equity,
+        .total_simulations = total_combinations,
+    };
+}
+
+/// Calculate range vs range equity using Monte Carlo simulation
+pub fn calculateRangeEquityMonteCarlo(hero_range: *const Range, villain_range: *const Range, board: []const poker.Card, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) !RangeEquityResult {
+    var total_hero_equity: f64 = 0.0;
+    var simulation_count: u32 = 0;
+
+    for (0..simulations) |_| {
+        // Sample hands from ranges based on probabilities
+        const hero_hand = sampleHandFromRange(hero_range, rng) orelse continue;
+        const villain_hand = sampleHandFromRange(villain_range, rng) orelse continue;
+
+        // Check for card conflicts
+        if (hasCardConflict(hero_hand, villain_hand, board)) {
+            continue;
+        }
+
+        // Calculate equity for sampled hands
+        const equity = @import("equity.zig");
+        const equity_result = try equity.equityMonteCarlo(hero_hand, villain_hand, board, 100, // Sub-simulations per range sample
+            rng, allocator);
+
+        total_hero_equity += equity_result.equity();
+        simulation_count += 1;
+    }
+
+    const hero_equity = if (simulation_count > 0) total_hero_equity / @as(f64, @floatFromInt(simulation_count)) else 0.0;
+
+    return RangeEquityResult{
+        .hero_equity = hero_equity,
+        .villain_equity = 1.0 - hero_equity,
+        .total_simulations = simulation_count,
+    };
+}
+
+/// Sample a hand from a range based on probabilities
+fn sampleHandFromRange(range: *const Range, rng: std.Random) ?[2]poker.Card {
+    if (range.handCount() == 0) return null;
+
+    // Calculate cumulative probabilities
+    var cumulative_prob: f32 = 0.0;
+    const random_value = rng.float(f32);
+
+    var iter = range.iterator();
+    while (iter.next()) |entry| {
+        cumulative_prob += entry.probability;
+        if (random_value <= cumulative_prob) {
+            return entry.hand;
+        }
+    }
+
+    // Fallback to last hand if rounding errors occur
+    var last_iter = range.iterator();
+    var last_hand: ?[2]poker.Card = null;
+    while (last_iter.next()) |entry| {
+        last_hand = entry.hand;
+    }
+    return last_hand;
+}
+
+/// Check if hands or board have conflicting cards
+fn hasCardConflict(hero_hand: [2]poker.Card, villain_hand: [2]poker.Card, board: []const poker.Card) bool {
+    // Convert to bit representation for fast conflict detection
+    const hero_bits = hero_hand[0].bits | hero_hand[1].bits;
+    const villain_bits = villain_hand[0].bits | villain_hand[1].bits;
+    const board_hand = poker.cardsToHand(board);
+
+    // Check for any overlapping bits
+    return (hero_bits & villain_bits) != 0 or
+        (hero_bits & board_hand.bits) != 0 or
+        (villain_bits & board_hand.bits) != 0;
+}
+
+/// Common preflop ranges for quick setup
+pub const CommonRanges = struct {
+    /// Create a tight opening range (premium hands only)
+    pub fn tightOpen(allocator: std.mem.Allocator) !Range {
+        var range = Range.init(allocator);
+
+        // Premium pairs and suited connectors
+        try range.addHands(&.{ "AA", "KK", "QQ", "AKs" }, 1.0);
+
+        return range;
+    }
+
+    /// Create a loose calling range
+    pub fn looseCall(allocator: std.mem.Allocator) !Range {
+        var range = Range.init(allocator);
+
+        // Wide range of hands with varying probabilities
+        try range.addHands(&.{ "TT", "99", "88", "77" }, 0.8);
+        try range.addHands(&.{ "KQs", "QJs", "JTs" }, 0.7);
+        try range.addHands(&.{ "AKo", "AQo" }, 0.6);
+
+        return range;
+    }
+
+    /// Create a button opening range (wide)
+    pub fn buttonOpen(allocator: std.mem.Allocator) !Range {
+        var range = Range.init(allocator);
+
+        // Wide button range
+        try range.addHands(&.{ "AA", "KK", "QQ", "JJ", "TT", "99", "88", "77", "66", "55" }, 1.0); // Pairs
+        try range.addHands(&.{ "AKs", "AQs", "AJs", "ATs", "A9s", "A8s", "A7s", "A6s", "A5s" }, 1.0); // Suited aces
+        try range.addHands(&.{ "KQs", "KJs", "KTs", "QJs", "QTs", "JTs" }, 1.0); // Suited connectors
+        try range.addHands(&.{ "AKo", "AQo", "AJo", "ATo" }, 1.0); // Offsuit broadway
+
+        return range;
+    }
+};
+
 // Tests
-const testing = std.testing;
-
-test "generate pocket pairs" {
+test "range basic operations" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const pairs = try generatePocketPairs(allocator);
-    defer allocator.free(pairs);
+    var range = Range.init(allocator);
+    defer range.deinit();
 
-    try testing.expect(pairs.len == 13); // 13 different pocket pairs
+    const hand = [2]poker.Card{ poker.Card.init(14, 0), poker.Card.init(14, 1) }; // AA
+    try range.addHand(hand, 1.0);
 
-    // Check that AA is first
-    try testing.expect(pairs[0][0].getRank() == 14);
-    try testing.expect(pairs[0][1].getRank() == 14);
-
-    // Check that 22 is last
-    try testing.expect(pairs[12][0].getRank() == 2);
-    try testing.expect(pairs[12][1].getRank() == 2);
+    try std.testing.expect(range.handCount() == 1);
+    try std.testing.expect(range.getHandProbability(hand) == 1.0);
 }
 
-test "generate premium hands" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+test "hand bits conversion" {
+    const hand1 = [2]poker.Card{ poker.Card.init(14, 0), poker.Card.init(14, 1) }; // AA
 
-    const premium = try generatePremiumHands(allocator);
-    defer allocator.free(premium);
+    const hand_bits = hand1[0].bits | hand1[1].bits;
+    const reconstructed = bitsToHand(hand_bits);
 
-    // Should have 4 pairs + 3 suited aces + 12 offsuit AK = 19 hands
-    try testing.expect(premium.len == 19);
+    // Should reconstruct the same cards (order may differ)
+    const original_bits = hand1[0].bits | hand1[1].bits;
+    const reconstructed_bits = reconstructed[0].bits | reconstructed[1].bits;
+    try std.testing.expect(original_bits == reconstructed_bits);
 }
 
-test "parse range notation" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+test "range notation parsing" {
+    // Test pocket pairs
+    const aa = try parseHandNotation("AA");
+    try std.testing.expect(aa[0].getRank() == 14 and aa[1].getRank() == 14);
+    try std.testing.expect(aa[0].getSuit() != aa[1].getSuit()); // Different suits for pairs
 
-    const range = try parseRange("AA,KK,AKs", allocator);
-    defer allocator.free(range);
+    const kk = try parseHandNotation("KK");
+    try std.testing.expect(kk[0].getRank() == 13 and kk[1].getRank() == 13);
 
-    // Should have 6 AA combinations + 6 KK combinations + 4 AKs combinations = 16
-    try testing.expect(range.len == 16);
+    // Test suited hands
+    const aks = try parseHandNotation("AKs");
+    try std.testing.expect(aks[0].getRank() == 14 and aks[1].getRank() == 13);
+    try std.testing.expect(aks[0].getSuit() == aks[1].getSuit()); // Same suit
+
+    // Test offsuit hands
+    const ako = try parseHandNotation("AKo");
+    try std.testing.expect(ako[0].getRank() == 14 and ako[1].getRank() == 13);
+    try std.testing.expect(ako[0].getSuit() != ako[1].getSuit()); // Different suits
 }
 
-test "generate hand rank" {
+test "range with notation" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Test AKs (suited only)
-    const aks = try generateHandRank(14, 13, true, allocator);
-    defer allocator.free(aks);
-    try testing.expect(aks.len == 4); // 4 suits
+    var range = Range.init(allocator);
+    defer range.deinit();
 
-    // Test AKo (all combinations, then filter)
-    const ak_all = try generateHandRank(14, 13, false, allocator);
-    defer allocator.free(ak_all);
-    try testing.expect(ak_all.len == 16); // 4x4 combinations
+    // Add hands using notation
+    try range.addHandNotation("AA", 1.0); // Should add 6 combinations
+    try range.addHandNotation("AKs", 0.8); // Should add 1 combination
 
-    // Test AA (pocket pair)
-    const aa = try generateHandRank(14, 14, false, allocator);
-    defer allocator.free(aa);
-    try testing.expect(aa.len == 6); // C(4,2) = 6 combinations
+    // Add multiple pocket pairs
+    try range.addHands(&.{ "KK", "QQ" }, 1.0); // Should add 6 + 6 = 12 combinations
+
+    // Total: 6 (AA) + 1 (AKs) + 6 (KK) + 6 (QQ) = 19 combinations
+    try std.testing.expect(range.handCount() == 19);
+}
+
+test "pocket pair expansion" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var range = Range.init(allocator);
+    defer range.deinit();
+
+    // Add just AA - should create 6 combinations
+    try range.addHandNotation("AA", 1.0);
+    try std.testing.expect(range.handCount() == 6);
+
+    // Verify difference between range and specific hand parsing
+    // parseCards returns specific cards vs range which expands to all combinations
+}
+
+test "parseRange function" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    // Test comma-delimited range parsing
+    var range = try parseRange("AA,KK,AKs", allocator);
+    defer range.deinit();
+
+    // Should have: 6 (AA) + 6 (KK) + 1 (AKs representative) = 13 combinations
+    try std.testing.expect(range.handCount() == 13);
+}
+
+test "parseCards delegation" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    // Test that we properly use poker.parseCards
+    const single_card = try poker.parseCards("As", allocator);
+    defer allocator.free(single_card);
+    try std.testing.expect(single_card.len == 1);
+    try std.testing.expect(single_card[0].getRank() == 14);
+    try std.testing.expect(single_card[0].getSuit() == 1); // spades
+
+    const hole_cards = try poker.parseCards("AhAs", allocator);
+    defer allocator.free(hole_cards);
+    try std.testing.expect(hole_cards.len == 2);
+    try std.testing.expect(hole_cards[0].getRank() == 14);
+    try std.testing.expect(hole_cards[1].getRank() == 14);
+
+    const board_cards = try poker.parseCards("AdKh7s", allocator);
+    defer allocator.free(board_cards);
+    try std.testing.expect(board_cards.len == 3);
+    try std.testing.expect(board_cards[0].getRank() == 14); // Ad
+    try std.testing.expect(board_cards[1].getRank() == 13); // Kh
+    try std.testing.expect(board_cards[2].getRank() == 7); // 7s
 }

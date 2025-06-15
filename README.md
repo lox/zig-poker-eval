@@ -26,7 +26,9 @@ zig build test
 zig build profile -Doptimize=ReleaseFast
 ```
 
-## Example
+## Examples
+
+### Hand Evaluation
 
 ```zig
 const poker = @import("poker.zig");
@@ -45,39 +47,76 @@ const hand = poker.createHand(&.{
 const rank = hand.evaluate(); // .straight_flush (royal flush)
 ```
 
-## Equity Calculation
+### Equity Calculation
 
 ```zig
 const equity = @import("equity.zig");
+const poker = @import("poker.zig");
 
-// Calculate preflop equity between pocket aces and pocket kings
-const aa = [_]poker.Card{
-    poker.createCard(.hearts, .ace),
-    poker.createCard(.spades, .ace),
-};
-const kk = [_]poker.Card{
-    poker.createCard(.diamonds, .king),
-    poker.createCard(.clubs, .king),
-};
+// Calculate preflop equity using concise notation
+const aa_hand = try poker.parseCards("AhAs");  // Parse hole cards
+const aa = [2]poker.Card{ aa_hand.cards[0], aa_hand.cards[1] };
+const kk_hand = try poker.parseCards("KdKc");
+const kk = [2]poker.Card{ kk_hand.cards[0], kk_hand.cards[1] };
 
 var prng = std.Random.DefaultPrng.init(42);
 const result = try equity.equityMonteCarlo(aa, kk, &.{}, 100000, prng.random(), allocator);
 // result.equity() ≈ 0.80 (80% equity for AA vs KK preflop)
 
 // Multi-way equity with postflop board
-const qq = [_]poker.Card{
-    poker.createCard(.hearts, .queen),
-    poker.createCard(.spades, .queen),
-};
-const board = [_]poker.Card{
-    poker.createCard(.diamonds, .ace),   // Flop
-    poker.createCard(.hearts, .king),    // Flop
-    poker.createCard(.spades, .seven),   // Flop
-};
+const qq_hand = try poker.parseCards("QhQs");
+const qq = [2]poker.Card{ qq_hand.cards[0], qq_hand.cards[1] };
+const board_hand = try poker.parseCards("AdKh7s");  // Parse board as single string
+const board = board_hand.cards[0..board_hand.card_count];
 
 var hands = [_][2]poker.Card{ aa, kk, qq };
 const results = try equity.equityMultiWayMonteCarlo(&hands, &board, 50000, prng.random(), allocator);
 // results[0].equity() ≈ 0.42 (AA equity in 3-way pot)
+```
+
+### Range vs Range Equity
+
+```zig
+const ranges = @import("ranges.zig");
+
+// Create ranges using standard poker notation
+var hero_range = try ranges.parseRange("AA,KK,QQ,AKs,AQs", allocator);  // Tight range
+defer hero_range.deinit();
+
+var villain_range = try ranges.parseRange("TT,99,88,KQs,QJs", allocator); // Calling range
+defer villain_range.deinit();
+
+// Calculate range vs range equity
+const result = try ranges.calculateRangeEquityMonteCarlo(
+    &hero_range, &villain_range, &.{}, 10000, rng, allocator
+);
+// Hero: 49.5%, Villain: 50.5%
+```
+
+### Range Notation Syntax
+
+```
+AsAh ace of spades and ace of hearts
+AA any pair of aces
+AA, KK a pair of aces or kings
+```
+
+Not implemented yet:
+
+```
+A* any hand with an ace in it
+** any two cards
+JTs jack-ten suited
+JTo jack-ten off suit
+JT any jack-ten
+A*s any suited ace
+*h*h any two hearts
+AA, KK, AK aces, kings, and ace-king
+X% The top X% of hands
+A5-A2 equivalent to A5,A4,A3,A2
+AK-JT equivalent to AK,KQ,QJ,JT
+QTs-97s equivalent to QTs, J9s, T8s, 97s
+AA-TT, AK, AQ, AJs any pair tens or higher, any ace-king or ace-queen, and ace-jack suited
 ```
 
 ## Performance
