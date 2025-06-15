@@ -1,6 +1,6 @@
 # Zig Poker Hand Evaluator
 
-A high-performance 7-card Texas Hold'em hand evaluator written in Zig, achieving **48+ million evaluations per second** in realistic scenarios using advanced lookup table optimization and optimized flush detection.
+A high-performance 7-card Texas Hold'em hand evaluator written in Zig.
 
 ## Setup
 
@@ -13,9 +13,6 @@ Uses [Hermit](https://github.com/cashapp/hermit) for dependency management:
 ## Usage
 
 ```bash
-# Run the demo and benchmarks
-zig build run
-
 # Run optimized benchmarks (production performance)
 zig build run -Doptimize=ReleaseFast
 
@@ -26,27 +23,42 @@ zig build test
 zig build profile -Doptimize=ReleaseFast
 ```
 
+## Example
+
+```zig
+const poker = @import("poker.zig");
+
+// Create a 7-card hand (hole cards + community cards)
+const hand = poker.createHand(&.{
+    .{ .hearts, .ace },   // Hole card 1
+    .{ .spades, .ace },   // Hole card 2
+    .{ .hearts, .king },  // Flop
+    .{ .hearts, .queen }, // Flop
+    .{ .hearts, .jack },  // Flop
+    .{ .hearts, .ten },   // Turn
+    .{ .clubs, .two },    // River
+});
+
+const rank = hand.evaluate(); // .straight_flush (royal flush)
+```
+
 ## Performance
 
-**Benchmarked on Apple M1 (apple_a14)**
+Benchmarked on an Apple Macbook Air M1.
 
-| Test Type | Build Mode | Hands/Second | Nanoseconds/Hand |
-|-----------|------------|--------------|------------------|
-| Realistic (10M unique hands) | Debug | ~7.7M | 130ns |
-| Realistic (10M unique hands) | ReleaseFast | **~48M** | **21ns** |
+```bash
+zig build run -Doptimize=ReleaseFast
+=== Zig 7-Card Texas Hold'em Evaluator ===
+=== Benchmark  ===
+Generating 10000 random hands...
+Run 1: 52080000 ops, 19.00 ns/op
+Run 2: 54750000 ops, 18.00 ns/op
+Run 3: 55780000 ops, 17.00 ns/op
 
-*Realistic benchmark uses 10M unique random hands with memory pressure to simulate real-world usage patterns.*
-
-## Design
-
-This evaluator uses advanced optimization techniques for maximum performance:
-
-- **Optimized flush detection**: Parallel suit extraction with bit manipulation eliminates nested loops
-- **Rank Distribution LUT**: 64-byte lookup table for instant non-flush hand categorization
-- **Cards as bits**: Each card represented as a single bit in a u64 bitfield
-- **Compile-time optimization**: Lookup tables generated at build time using Zig's `comptime`
-- **CPU-native operations**: Leverages @popCount and inline loops for maximum performance
-- **Cache-friendly**: Minimal memory footprint with efficient data structures
+=== Performance Summary ===
+18.00 ns/op (average across 3 runs)
+55.6M evaluations/second
+```
 
 ### Architecture
 
@@ -76,33 +88,7 @@ straight_detection            100000        1.575       15.8          0       10
 pair_counting                 100000        1.590       15.9          0       2000
 ```
 
-### Profiling Features
-- **Component-level timing**: Individual function performance analysis
-- **Statistical analysis**: Min/max/average timing with variance detection
-- **Instruction-level comparison**: Different optimization approach comparisons
-- **Memory access patterns**: Cache behavior and memory bandwidth analysis
-- **Apple Silicon optimization**: M1/M2/M3 specific performance insights
-
 For detailed optimization techniques and experimental results, see `EXPERIMENTS.md`.
-
-## Example
-
-```zig
-const poker = @import("poker.zig");
-
-// Create a 7-card hand (hole cards + community cards)
-const hand = poker.createHand(&.{
-    .{ .hearts, .ace },   // Hole card 1
-    .{ .spades, .ace },   // Hole card 2
-    .{ .hearts, .king },  // Flop
-    .{ .hearts, .queen }, // Flop
-    .{ .hearts, .jack },  // Flop
-    .{ .hearts, .ten },   // Turn
-    .{ .clubs, .two },    // River
-});
-
-const rank = hand.evaluate(); // .straight_flush (royal flush)
-```
 
 ## Project Structure
 

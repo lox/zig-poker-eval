@@ -1,5 +1,6 @@
 const std = @import("std");
 const profiler = @import("profiler.zig");
+const rank_optimization = @import("rank_optimization.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -18,6 +19,9 @@ pub fn main() !void {
 
     // 3. Memory access pattern analysis
     try profiler.profileMemoryAccess(allocator);
+
+    // 4. Detailed rank extraction optimization analysis
+    try rank_optimization.profileRankExtractionDetails(allocator);
 
     print("\n=== PROFILING COMPLETE ===\n", .{});
     print("Next steps:\n", .{});

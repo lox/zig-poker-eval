@@ -9,7 +9,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     print("=== Zig 7-Card Texas Hold'em Evaluator ===\n", .{});
-    _ = try benchmark.runComprehensiveBenchmark(allocator);
+    try benchmark.runEvaluatorBenchmark(allocator);
 }
 
 // Simple integration test for main functionality
@@ -18,7 +18,7 @@ test "main integration" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    
+
     // Test that benchmark can be called
     _ = try benchmark.runComprehensiveBenchmark(allocator);
 }
