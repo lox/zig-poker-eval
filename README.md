@@ -50,7 +50,7 @@ const rank = hand.evaluate(); // .straight_flush (royal flush)
 ```zig
 const equity = @import("equity.zig");
 
-// Calculate preflop equity between pocket aces and pocket kings  
+// Calculate preflop equity between pocket aces and pocket kings
 const aa = [_]poker.Card{
     poker.createCard(.hearts, .ace),
     poker.createCard(.spades, .ace),
@@ -71,7 +71,7 @@ const qq = [_]poker.Card{
 };
 const board = [_]poker.Card{
     poker.createCard(.diamonds, .ace),   // Flop
-    poker.createCard(.hearts, .king),    // Flop  
+    poker.createCard(.hearts, .king),    // Flop
     poker.createCard(.spades, .seven),   // Flop
 };
 
