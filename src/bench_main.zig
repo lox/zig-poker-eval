@@ -12,6 +12,7 @@ pub fn main() !void {
 
     const run_eval = args.len == 1 or std.mem.eql(u8, args[1], "eval") or std.mem.eql(u8, args[1], "both");
     const run_equity = args.len == 1 or std.mem.eql(u8, args[1], "equity") or std.mem.eql(u8, args[1], "both");
+    const run_threaded = args.len == 1 or std.mem.eql(u8, args[1], "threaded") or std.mem.eql(u8, args[1], "both");
 
     print("=== Zig 7-Card Texas Hold'em Evaluator ===\n", .{});
 
@@ -21,5 +22,9 @@ pub fn main() !void {
 
     if (run_equity) {
         try benchmark.runEquityBenchmark(allocator);
+    }
+
+    if (run_threaded) {
+        try benchmark.runEquityBenchmarkThreaded(allocator);
     }
 }

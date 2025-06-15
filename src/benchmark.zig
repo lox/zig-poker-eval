@@ -1,6 +1,7 @@
 const std = @import("std");
 const poker = @import("poker.zig");
 const equity = @import("equity.zig");
+const equity_threaded = @import("equity_threaded.zig");
 pub fn runEvaluatorBenchmark(allocator: std.mem.Allocator) !void {
     const print = std.debug.print;
 
@@ -100,6 +101,47 @@ pub fn runEquityBenchmark(allocator: std.mem.Allocator) !void {
     const simulations_per_sec = 1_000_000_000.0 / avg_ns_per_sim_f64;
 
     print("\n=== Equity Performance Summary ===\n", .{});
+    print("{d:.2} ns/simulation (average across {} runs)\n", .{ avg_ns_per_sim_f64, runs });
+    print("{d:.1}K simulations/second\n", .{simulations_per_sec / 1000.0});
+}
+
+pub fn runEquityBenchmarkThreaded(allocator: std.mem.Allocator) !void {
+    const print = std.debug.print;
+
+    print("\n=== Threaded Equity Benchmark ===\n", .{});
+
+    // Same test scenario as single-threaded
+    const hero_hole = [2]poker.Card{ poker.createCard(.spades, .ace), poker.createCard(.diamonds, .king) };
+    const villain_hole = [2]poker.Card{ poker.createCard(.hearts, .queen), poker.createCard(.clubs, .jack) };
+    const board = [_]poker.Card{ poker.createCard(.hearts, .ace), poker.createCard(.spades, .seven), poker.createCard(.clubs, .two) };
+
+    const simulations_per_run = 500000; // Larger batch for threading
+    const runs = 3;
+    const base_seed: u64 = 42;
+
+    var total_simulations: u64 = 0;
+    var total_ns: u64 = 0;
+
+    for (0..runs) |run| {
+        const start = std.time.nanoTimestamp();
+
+        const result = try equity_threaded.equityMonteCarloThreaded(hero_hole, villain_hole, &board, simulations_per_run, base_seed, allocator);
+
+        const end = std.time.nanoTimestamp();
+        const duration_ns = @as(u64, @intCast(end - start));
+        const ns_per_sim = duration_ns / simulations_per_run;
+
+        print("Run {}: {} sims, {d:.2} ns/sim, Hero equity: {d:.1}%\n", .{ run + 1, simulations_per_run, @as(f64, @floatFromInt(ns_per_sim)), result.equity() * 100.0 });
+
+        total_simulations += simulations_per_run;
+        total_ns += duration_ns;
+    }
+
+    const avg_ns_per_sim = total_ns / total_simulations;
+    const avg_ns_per_sim_f64 = @as(f64, @floatFromInt(avg_ns_per_sim));
+    const simulations_per_sec = 1_000_000_000.0 / avg_ns_per_sim_f64;
+
+    print("\n=== Threaded Equity Performance Summary ===\n", .{});
     print("{d:.2} ns/simulation (average across {} runs)\n", .{ avg_ns_per_sim_f64, runs });
     print("{d:.1}K simulations/second\n", .{simulations_per_sec / 1000.0});
 }
