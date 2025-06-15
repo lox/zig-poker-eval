@@ -1,43 +1,5 @@
 const std = @import("std");
 const poker = @import("poker.zig");
-
-// Generate random 7-card hands matching Go's methodology
-pub fn generateRandomHands(allocator: std.mem.Allocator, count: u32, seed: u64) ![]poker.Hand {
-    var rng = std.Random.DefaultPrng.init(seed);
-    const random = rng.random();
-
-    const hands = try allocator.alloc(poker.Hand, count);
-
-    for (hands) |*hand| {
-        hand.* = generateRandomHand(random);
-    }
-
-    return hands;
-}
-
-fn generateRandomHand(random: std.Random) poker.Hand {
-    var hand = poker.Hand.init();
-    var used_cards = std.StaticBitSet(52).initEmpty();
-
-    // Generate 7 unique random cards
-    var cards_added: u8 = 0;
-    while (cards_added < 7) {
-        const card_idx = random.uintLessThan(u8, 52);
-        if (!used_cards.isSet(card_idx)) {
-            used_cards.set(card_idx);
-
-            // Convert card index to rank/suit
-            const rank: u8 = (card_idx / 4) + 2; // 0-51 -> ranks 2-14
-            const suit: u2 = @intCast(card_idx % 4);
-
-            hand.addCard(poker.Card.init(rank, suit));
-            cards_added += 1;
-        }
-    }
-
-    return hand;
-}
-
 pub fn runEvaluatorBenchmark(allocator: std.mem.Allocator) !void {
     const print = std.debug.print;
 
@@ -46,7 +8,7 @@ pub fn runEvaluatorBenchmark(allocator: std.mem.Allocator) !void {
     // Generate fixed set of hands like Go benchmark
     const hand_count = 10000;
     print("Generating {} random hands...\n", .{hand_count});
-    const hands = try generateRandomHands(allocator, hand_count, 42);
+    const hands = try poker.generateRandomHands(allocator, hand_count, 42);
     defer allocator.free(hands);
 
     // Warm-up run

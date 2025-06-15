@@ -3,9 +3,8 @@
 High-performance 7-card Texas Hold'em poker hand evaluator. See README.md for detailed information.
 
 ## Essential Commands
-- **Setup**: `. bin/activate-hermit` (activates Zig environment)
 - **Run**: `zig build run -Doptimize=ReleaseFast` (production performance)
-- **Test**: `zig build test` 
+- **Test**: `zig build test`
 - **Profile**: `zig build profile -Doptimize=ReleaseFast`
 
 ## Code Style

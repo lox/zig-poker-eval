@@ -3,12 +3,12 @@ const std = @import("std");
 // Card suits
 pub const Suit = enum(u2) {
     hearts = 0,
-    spades = 1, 
+    spades = 1,
     diamonds = 2,
     clubs = 3,
 };
 
-// Card ranks  
+// Card ranks
 pub const Rank = enum(u4) {
     two = 2,
     three = 3,
@@ -38,7 +38,6 @@ pub const HandRank = enum(u4) {
     straight_flush = 9,
 };
 
-
 // Perfect Hash Lookup Tables for 7-card evaluation
 // Generated at compile time for zero runtime overhead
 
@@ -56,7 +55,7 @@ const RANK_CATEGORY_LUT = generateRankCategoryLut();
 fn generateFlushTable() [8192]u16 {
     @setEvalBranchQuota(100000); // Increase compile-time loop limit
     var table: [8192]u16 = [_]u16{0} ** 8192;
-    
+
     // For each possible 13-bit rank combination
     for (0..8192) |mask| {
         const popcount = @popCount(@as(u13, @intCast(mask)));
@@ -64,7 +63,7 @@ fn generateFlushTable() [8192]u16 {
             table[mask] = 0; // Not enough cards for flush
             continue;
         }
-        
+
         // Check for straight flush
         if (checkStraightInMask(@intCast(mask))) {
             table[mask] = 9; // Straight flush (highest rank)
@@ -72,7 +71,7 @@ fn generateFlushTable() [8192]u16 {
             table[mask] = 6; // Regular flush
         }
     }
-    
+
     return table;
 }
 
@@ -80,7 +79,7 @@ fn generateFlushTable() [8192]u16 {
 fn checkStraightInMask(mask: u13) bool {
     // Check wheel (A-2-3-4-5): bits 12,0,1,2,3
     if ((mask & 0b1000000001111) == 0b1000000001111) return true;
-    
+
     // Check all 9 possible regular straights with unrolled loop
     const straight_patterns = [_]u13{
         0b1111100000000, // A-K-Q-J-T
@@ -93,11 +92,11 @@ fn checkStraightInMask(mask: u13) bool {
         0b0000000111110, // 7-6-5-4-3
         0b0000000011111, // 6-5-4-3-2
     };
-    
+
     inline for (straight_patterns) |pattern| {
         if ((mask & pattern) == pattern) return true;
     }
-    
+
     return false;
 }
 
@@ -109,21 +108,21 @@ fn hashRankCategory(pairs: u8, trips: u8, quads: u8) u8 {
     return quads * 16 + trips * 4 + pairs;
 }
 
-// Generate simplified rank category lookup table at compile time  
+// Generate simplified rank category lookup table at compile time
 // Much smaller table based on pair/trip/quad combinations
 fn generateRankCategoryLut() [64]HandRank {
     @setEvalBranchQuota(100000); // Increase compile-time loop limit
     var lut: [64]HandRank = [_]HandRank{.high_card} ** 64;
-    
+
     // Enumerate all valid combinations of pairs/trips/quads for 7 cards
     for (0..2) |quads| { // 0 or 1 quad possible
-        for (0..3) |trips| { // 0, 1, or 2 trips possible  
+        for (0..3) |trips| { // 0, 1, or 2 trips possible
             for (0..7) |pairs| { // 0 to 6 pairs possible
                 // Check if combination is valid for 7 cards
                 const total_cards = quads * 4 + trips * 3 + pairs * 2;
                 if (total_cards <= 7) {
                     const key = hashRankCategory(@intCast(pairs), @intCast(trips), @intCast(quads));
-                    
+
                     // Determine hand rank from counts
                     if (quads > 0) {
                         lut[key] = .four_of_a_kind;
@@ -142,7 +141,7 @@ fn generateRankCategoryLut() [64]HandRank {
             }
         }
     }
-    
+
     return lut;
 }
 
@@ -152,16 +151,16 @@ inline fn detectFlushOptimized(hand_bits: u64) u16 {
     // Parallel suit count extraction using bit manipulation
     const suit_masks = [4]u64{
         0x1111111111111111, // Hearts (suit 0)
-        0x2222222222222222, // Spades (suit 1)  
+        0x2222222222222222, // Spades (suit 1)
         0x4444444444444444, // Diamonds (suit 2)
         0x8888888888888888, // Clubs (suit 3)
     };
-    
+
     // Check all suits in parallel for 5+ cards
     inline for (0..4) |suit| {
         const suit_cards = hand_bits & suit_masks[suit];
         const suit_count = @popCount(suit_cards);
-        
+
         if (suit_count >= 5) {
             // Fast rank mask extraction using bit manipulation tricks
             const rank_mask = extractFlushRankMaskOptimized(suit_cards, suit);
@@ -171,7 +170,7 @@ inline fn detectFlushOptimized(hand_bits: u64) u16 {
             }
         }
     }
-    
+
     return 0; // No flush found
 }
 
@@ -180,16 +179,16 @@ inline fn extractFlushRankMaskOptimized(suit_cards: u64, suit: u3) u13 {
     // Use bit shifting and parallel extraction to build rank mask
     // This eliminates the 13-iteration loop in favor of bit manipulation
     var rank_mask: u13 = 0;
-    
+
     // Parallel rank extraction - all operations can execute simultaneously on M1
     const shifted = suit_cards >> suit;
-    
+
     // Extract all rank bits in parallel using bit manipulation
     inline for (0..13) |rank| {
         const rank_bit = (shifted >> (rank * 4)) & 1;
         rank_mask |= @as(u13, @intCast(rank_bit)) << @intCast(rank);
     }
-    
+
     return rank_mask;
 }
 
@@ -197,22 +196,22 @@ inline fn extractFlushRankMaskOptimized(suit_cards: u64, suit: u3) u13 {
 // Achieves 61% performance improvement through parallel execution
 pub inline fn extractRankDataOptimized(hand_bits: u64) struct { counts: [13]u8, mask: u16 } {
     // Manual unrolling allows all 13 popcount operations to execute in parallel on M1
-    const r0 = @popCount((hand_bits >> 0) & 0xF);   // Rank 2
-    const r1 = @popCount((hand_bits >> 4) & 0xF);   // Rank 3
-    const r2 = @popCount((hand_bits >> 8) & 0xF);   // Rank 4
-    const r3 = @popCount((hand_bits >> 12) & 0xF);  // Rank 5
-    const r4 = @popCount((hand_bits >> 16) & 0xF);  // Rank 6
-    const r5 = @popCount((hand_bits >> 20) & 0xF);  // Rank 7
-    const r6 = @popCount((hand_bits >> 24) & 0xF);  // Rank 8
-    const r7 = @popCount((hand_bits >> 28) & 0xF);  // Rank 9
-    const r8 = @popCount((hand_bits >> 32) & 0xF);  // Rank T
-    const r9 = @popCount((hand_bits >> 36) & 0xF);  // Rank J
+    const r0 = @popCount((hand_bits >> 0) & 0xF); // Rank 2
+    const r1 = @popCount((hand_bits >> 4) & 0xF); // Rank 3
+    const r2 = @popCount((hand_bits >> 8) & 0xF); // Rank 4
+    const r3 = @popCount((hand_bits >> 12) & 0xF); // Rank 5
+    const r4 = @popCount((hand_bits >> 16) & 0xF); // Rank 6
+    const r5 = @popCount((hand_bits >> 20) & 0xF); // Rank 7
+    const r6 = @popCount((hand_bits >> 24) & 0xF); // Rank 8
+    const r7 = @popCount((hand_bits >> 28) & 0xF); // Rank 9
+    const r8 = @popCount((hand_bits >> 32) & 0xF); // Rank T
+    const r9 = @popCount((hand_bits >> 36) & 0xF); // Rank J
     const r10 = @popCount((hand_bits >> 40) & 0xF); // Rank Q
     const r11 = @popCount((hand_bits >> 44) & 0xF); // Rank K
     const r12 = @popCount((hand_bits >> 48) & 0xF); // Rank A
-    
+
     // Build rank mask in parallel - all boolean conversions execute simultaneously
-    const mask = 
+    const mask =
         (@as(u16, @intFromBool(r0 > 0)) << 0) |
         (@as(u16, @intFromBool(r1 > 0)) << 1) |
         (@as(u16, @intFromBool(r2 > 0)) << 2) |
@@ -226,7 +225,7 @@ pub inline fn extractRankDataOptimized(hand_bits: u64) struct { counts: [13]u8, 
         (@as(u16, @intFromBool(r10 > 0)) << 10) |
         (@as(u16, @intFromBool(r11 > 0)) << 11) |
         (@as(u16, @intFromBool(r12 > 0)) << 12);
-    
+
     return .{
         .counts = [13]u8{ r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12 },
         .mask = mask,
@@ -248,7 +247,7 @@ inline fn evaluateNonFlushWithPrecomputedRanks(rank_counts: [13]u8, rank_mask: u
     var pairs: u8 = 0;
     var trips: u8 = 0;
     var quads: u8 = 0;
-    
+
     inline for (rank_counts) |count| {
         switch (count) {
             2 => pairs += 1,
@@ -257,17 +256,19 @@ inline fn evaluateNonFlushWithPrecomputedRanks(rank_counts: [13]u8, rank_mask: u
             else => {},
         }
     }
-    
+
     // 2. Single lookup replaces if/else cascade
     const hash_key = hashRankCategory(pairs, trips, quads);
     const pair_category = RANK_CATEGORY_LUT[hash_key];
-    
+
     // 3. Check for straight using pre-computed mask (no redundant work)
     const is_straight = checkStraight(rank_mask);
-    
+
     // 4. Return best hand (HandRank enum already ordered by strength)
-    return if (is_straight and @intFromEnum(HandRank.straight) > @intFromEnum(pair_category)) 
-        .straight else pair_category;
+    return if (is_straight and @intFromEnum(HandRank.straight) > @intFromEnum(pair_category))
+        .straight
+    else
+        pair_category;
 }
 
 // Efficient card representation using bit manipulation
@@ -320,7 +321,7 @@ pub const Hand = struct {
         if (flush_result > 0) {
             return @enumFromInt(flush_result);
         }
-        
+
         // Extract rank data once for non-flush evaluation
         const rank_data = extractRankDataOptimized(self.bits);
         return evaluateNonFlushWithPrecomputedRanks(rank_data.counts, rank_data.mask);
@@ -350,7 +351,7 @@ pub inline fn checkStraight(mask: u16) bool {
     return false;
 }
 
-// Keep original implementation for testing/comparison  
+// Keep original implementation for testing/comparison
 pub inline fn checkStraightOriginal(mask: u16) bool {
     // Check A-2-3-4-5 (wheel) - bits 12,0,1,2,3 (Ace is at position 12)
     if ((mask & 0b1000000001111) == 0b1000000001111) return true;
@@ -369,7 +370,7 @@ pub fn createCard(suit: Suit, rank: Rank) Card {
     return Card.init(@intFromEnum(rank), @intFromEnum(suit));
 }
 
-pub fn createHand(cards: []const struct{ Suit, Rank }) Hand {
+pub fn createHand(cards: []const struct { Suit, Rank }) Hand {
     var hand = Hand.init();
     for (cards) |card_info| {
         const card = createCard(card_info[0], card_info[1]);
@@ -383,14 +384,14 @@ pub fn parseCards(card_string: []const u8) !Hand {
     if (card_string.len % 2 != 0) {
         return error.InvalidCardString;
     }
-    
+
     var hand = Hand.init();
     var i: usize = 0;
-    
+
     while (i < card_string.len) : (i += 2) {
         const rank_char = card_string[i];
         const suit_char = card_string[i + 1];
-        
+
         // Parse rank
         const rank: u8 = switch (rank_char) {
             '2'...'9' => rank_char - '0',
@@ -401,19 +402,19 @@ pub fn parseCards(card_string: []const u8) !Hand {
             'A' => 14,
             else => return error.InvalidRank,
         };
-        
+
         // Parse suit
         const suit: u2 = switch (suit_char) {
             'h' => 0, // hearts
-            's' => 1, // spades  
+            's' => 1, // spades
             'd' => 2, // diamonds
             'c' => 3, // clubs
             else => return error.InvalidSuit,
         };
-        
+
         hand.addCard(Card.init(rank, suit));
     }
-    
+
     return hand;
 }
 
@@ -422,6 +423,43 @@ pub fn mustParseCards(comptime card_string: []const u8) Hand {
     return parseCards(card_string) catch {
         @compileError("Invalid card string: " ++ card_string);
     };
+}
+
+// Generate random 7-card hands matching Go's methodology
+pub fn generateRandomHands(allocator: std.mem.Allocator, count: u32, seed: u64) ![]Hand {
+    var rng = std.Random.DefaultPrng.init(seed);
+    const random = rng.random();
+
+    const hands = try allocator.alloc(Hand, count);
+
+    for (hands) |*hand| {
+        hand.* = generateRandomHand(random);
+    }
+
+    return hands;
+}
+
+pub fn generateRandomHand(random: std.Random) Hand {
+    var hand = Hand.init();
+    var used_cards = std.StaticBitSet(52).initEmpty();
+
+    // Generate 7 unique random cards
+    var cards_added: u8 = 0;
+    while (cards_added < 7) {
+        const card_idx = random.uintLessThan(u8, 52);
+        if (!used_cards.isSet(card_idx)) {
+            used_cards.set(card_idx);
+
+            // Convert card index to rank/suit
+            const rank: u8 = (card_idx / 4) + 2; // 0-51 -> ranks 2-14
+            const suit: u2 = @intCast(card_idx % 4);
+
+            hand.addCard(Card.init(rank, suit));
+            cards_added += 1;
+        }
+    }
+
+    return hand;
 }
 
 // Tests
@@ -480,39 +518,53 @@ test "known hand patterns correctness" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    
-    const benchmark = @import("benchmark.zig");
-    const torture_hands = try benchmark.generateTortureCases(allocator);
-    defer allocator.free(torture_hands);
+
+    // Return runtime-parsed test cases to avoid compile-time issues
+    var test_cases: [11]Hand = undefined;
+    test_cases[0] = try parseCards("AsKsQsJsTs2h3d"); // Royal flush
+    test_cases[1] = try parseCards("9s8s7s6s5s2h3d"); // Straight flush
+    test_cases[2] = try parseCards("AhAsAdAcKs2h3d"); // Four of a kind
+    test_cases[3] = try parseCards("AhAsAdKhKs2c3d"); // Full house
+    test_cases[4] = try parseCards("AhKhQhJh9h2s3d"); // Flush
+    test_cases[5] = try parseCards("AsKdQcJhTs2s3d"); // Straight
+    test_cases[6] = try parseCards("AhAsAdKcQs2h3d"); // Three of a kind
+    test_cases[7] = try parseCards("AhAsKdKhQs2c3d"); // Two pair
+    test_cases[8] = try parseCards("AhAsKdQcJs2h3d"); // One pair
+    test_cases[9] = try parseCards("AhKsQdJc9h7s2d"); // High card
+    test_cases[10] = try parseCards("Ah2s3d4c5h6s7d"); // Wheel straight
+
+    const result = try allocator.alloc(Hand, test_cases.len);
+    @memcpy(result, &test_cases);
+    defer allocator.free(result);
 
     // Verify known hand patterns evaluate correctly
     const expected_ranks = [_]HandRank{
         .straight_flush, // Royal flush
         .straight_flush, // Straight flush
         .four_of_a_kind, // Four of a kind
-        .full_house,     // Full house
-        .flush,          // Flush
-        .straight,       // Straight
-        .three_of_a_kind,// Three of a kind
-        .two_pair,       // Two pair
-        .pair,           // One pair
-        .high_card,      // High card
-        .straight,       // Wheel straight
+        .full_house, // Full house
+        .flush, // Flush
+        .straight, // Straight
+        .three_of_a_kind, // Three of a kind
+        .two_pair, // Two pair
+        .pair, // One pair
+        .high_card, // High card
+        .straight, // Wheel straight
     };
 
-    for (torture_hands, expected_ranks) |hand, expected| {
-        const result = hand.evaluate();
-        try testing.expect(result == expected);
+    for (result, expected_ranks) |hand, expected| {
+        const result_hand = hand.evaluate();
+        try testing.expect(result_hand == expected);
     }
 
     // Test random hands for basic validity
-    const random_hands = try benchmark.generateRandomHands(allocator, 100, 123);
+    const random_hands = try generateRandomHands(allocator, 100, 123);
     defer allocator.free(random_hands);
 
     for (random_hands) |hand| {
-        const result = hand.evaluate();
-        try testing.expect(@intFromEnum(result) >= 1);
-        try testing.expect(@intFromEnum(result) <= 9);
+        const result_hand = hand.evaluate();
+        try testing.expect(@intFromEnum(result_hand) >= 1);
+        try testing.expect(@intFromEnum(result_hand) <= 9);
     }
 }
 
@@ -520,39 +572,39 @@ test "edge cases and corner cases" {
     // Test all straight variations
     const ace_high_straight = try parseCards("AsKsQdJcTh2h3d");
     try testing.expect(ace_high_straight.evaluate() == .straight);
-    
+
     const wheel_straight = try parseCards("Ah2s3d4c5h6s7d");
     try testing.expect(wheel_straight.evaluate() == .straight);
-    
+
     const middle_straight = try parseCards("6h7s8d9cTh2s3d");
     try testing.expect(middle_straight.evaluate() == .straight);
-    
+
     // Test flush vs straight priority
     const flush_beats_straight = try parseCards("AhKhQhJhTh2s3d");
     try testing.expect(flush_beats_straight.evaluate() == .straight_flush);
-    
+
     // Test full house variations
     const trips_over_pair = try parseCards("AhAsAdKhKs2c3d");
     try testing.expect(trips_over_pair.evaluate() == .full_house);
-    
+
     const pair_over_trips = try parseCards("AhAsKdKhKs2c3d");
     try testing.expect(pair_over_trips.evaluate() == .full_house);
-    
+
     // Test quad variations
     const quads_with_trips = try parseCards("AhAsAdAcKhKsKd");
     try testing.expect(quads_with_trips.evaluate() == .four_of_a_kind);
-    
+
     // Test two pair edge cases
     const high_two_pair = try parseCards("AhAsKdKh2s3c4d");
     try testing.expect(high_two_pair.evaluate() == .two_pair);
-    
+
     const low_two_pair = try parseCards("3h3s2d2hAs5c6d");
     try testing.expect(low_two_pair.evaluate() == .two_pair);
-    
+
     // Test minimum hands
     const ace_high = try parseCards("AhKsQdJc9h7s2d");
     try testing.expect(ace_high.evaluate() == .high_card);
-    
+
     const deuce_high = try parseCards("2h3s4d5c7h8s9d");
     try testing.expect(deuce_high.evaluate() == .high_card);
 }

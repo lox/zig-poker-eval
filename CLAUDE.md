@@ -5,9 +5,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build and Test Commands
 
 ```bash
-# Activate Hermit environment (required for Zig)
-. bin/activate-hermit
-
 # Build and run optimized (production performance)
 zig build run -Doptimize=ReleaseFast
 
