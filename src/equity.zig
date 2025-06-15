@@ -30,10 +30,8 @@ pub fn equityMonteCarlo(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card, b
     var wins: u32 = 0;
     var ties: u32 = 0;
 
-    // Create arena allocator for all simulation allocations
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
+    // No allocator needed for head-to-head equity
+    _ = allocator; // Mark as unused
 
     for (0..simulations) |_| {
         // Sample remaining board cards
@@ -44,12 +42,11 @@ pub fn equityMonteCarlo(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card, b
         const hero_hand = simulation.combineCards(hero_bits, final_board);
         const villain_hand = simulation.combineCards(villain_bits, final_board);
 
-        const hands = [_]poker.Hand{ hero_hand, villain_hand };
-        const result = try simulation.evaluateShowdown(&hands, arena_allocator);
-        // NO defer result.deinit() - arena owns all memory
+        // Use fast path for 2-player (zero allocation)
+        const result = simulation.evaluateShowdownHeadToHead(hero_hand, villain_hand);
 
-        if (result.winners.len == 1) {
-            if (result.winners[0] == 0) {
+        if (!result.tie) {
+            if (result.winner == 0) {
                 wins += 1;
             }
         } else {

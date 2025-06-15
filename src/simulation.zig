@@ -56,6 +56,23 @@ pub fn evaluateShowdown(hands: []const poker.Hand, allocator: std.mem.Allocator)
     };
 }
 
+// Fast path for 2-player showdown (no allocation for common case)
+pub fn evaluateShowdownHeadToHead(hand1: poker.Hand, hand2: poker.Hand) struct { winner: u8, tie: bool, winning_rank: poker.HandRank } {
+    const rank1 = hand1.evaluate();
+    const rank2 = hand2.evaluate();
+
+    const rank1_value = @intFromEnum(rank1);
+    const rank2_value = @intFromEnum(rank2);
+
+    if (rank1_value > rank2_value) {
+        return .{ .winner = 0, .tie = false, .winning_rank = rank1 };
+    } else if (rank2_value > rank1_value) {
+        return .{ .winner = 1, .tie = false, .winning_rank = rank2 };
+    } else {
+        return .{ .winner = 0, .tie = true, .winning_rank = rank1 }; // Tie, winner doesn't matter
+    }
+}
+
 // Sample remaining cards, avoiding conflicts with used cards
 pub fn sampleRemainingCards(used_cards: u64, num_cards: u8, rng: std.Random) u64 {
     var sampled_cards: u64 = 0;
