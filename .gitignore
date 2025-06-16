@@ -8,3 +8,8 @@ zig-out/
 
 # Profile output
 profile_output.txt
+
+# Performance regression files
+baseline.json
+current.json
+bench_results.json

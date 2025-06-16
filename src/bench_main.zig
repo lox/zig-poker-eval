@@ -14,6 +14,7 @@ pub fn main() !void {
     var run_eval = false;
     var run_equity = false;
     var run_threaded = false;
+    var json_results = false;
 
     // Default to running all if no args provided
     if (args.len == 1) {
@@ -29,11 +30,14 @@ pub fn main() !void {
                 run_equity = true;
             } else if (std.mem.eql(u8, arg, "--equityThreaded")) {
                 run_threaded = true;
+            } else if (std.mem.eql(u8, arg, "--json-results")) {
+                json_results = true;
             } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
-                print("Usage: benchmark [--eval] [--equity] [--equityThreaded] [--help]\n", .{});
+                print("Usage: benchmark [--eval] [--equity] [--equityThreaded] [--json-results] [--help]\n", .{});
                 print("  --eval           Run hand evaluation benchmark\n", .{});
                 print("  --equity         Run single-threaded equity benchmark\n", .{});
                 print("  --equityThreaded Run multi-threaded equity benchmark\n", .{});
+                print("  --json-results   Write results to JSON file (silent mode)\n", .{});
                 print("  --help, -h       Show this help message\n", .{});
                 print("\nIf no flags provided, runs all benchmarks.\n", .{});
                 return;
@@ -45,17 +49,19 @@ pub fn main() !void {
         }
     }
 
-    print("=== Zig 7-Card Texas Hold'em Evaluator ===\n", .{});
+    if (!json_results) {
+        print("=== Zig 7-Card Texas Hold'em Evaluator ===\n", .{});
+    }
 
     if (run_eval) {
-        try benchmark.runEvaluatorBenchmark(allocator);
+        try benchmark.runEvaluatorBenchmark(allocator, json_results);
     }
 
     if (run_equity) {
-        try benchmark.runEquityBenchmark(allocator);
+        try benchmark.runEquityBenchmark(allocator, json_results);
     }
 
     if (run_threaded) {
-        try benchmark.runEquityBenchmarkThreaded(allocator);
+        try benchmark.runEquityBenchmarkThreaded(allocator, json_results);
     }
 }
