@@ -210,7 +210,7 @@ pub fn calculateRangeEquityExact(hero_range: *const Range, villain_range: *const
 
             // Calculate exact equity for this hand combination
             const equity = @import("equity.zig");
-            const equity_result = try equity.equityExact(hero_entry.hand, villain_entry.hand, board, allocator);
+            const equity_result = try equity.exact(hero_entry.hand, villain_entry.hand, board, allocator);
 
             // Weight by probabilities of both hands
             const weight = hero_entry.probability * villain_entry.probability;
@@ -247,7 +247,7 @@ pub fn calculateRangeEquityMonteCarlo(hero_range: *const Range, villain_range: *
 
         // Calculate equity for sampled hands
         const equity = @import("equity.zig");
-        const equity_result = try equity.equityMonteCarlo(hero_hand, villain_hand, board, 100, // Sub-simulations per range sample
+        const equity_result = try equity.monteCarlo(hero_hand, villain_hand, board, 100, // Sub-simulations per range sample
             rng, allocator);
 
         total_hero_equity += equity_result.equity();

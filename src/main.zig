@@ -94,19 +94,19 @@ fn demoEquityEvaluator(allocator: std.mem.Allocator) !void {
     const kk_cards = poker.mustParseCards("KdKc");
     const kk = [2]poker.Card{ kk_cards[0], kk_cards[1] };
 
-    const preflop_result = try equity.equityMonteCarlo(aa, kk, &.{}, 100000, rng, allocator);
+    const preflop_result = try equity.monteCarlo(aa, kk, &.{}, 100000, rng, allocator);
     print("AA vs KK preflop: {d:.1}% equity\n", .{preflop_result.equity() * 100});
 
     // Demo 2: Postflop equity
     const board_cards = poker.mustParseCards("AdKh7s");
-    const postflop_result = try equity.equityMonteCarlo(aa, kk, &board_cards, 50000, rng, allocator);
+    const postflop_result = try equity.monteCarlo(aa, kk, &board_cards, 50000, rng, allocator);
     print("AA vs KK on Ad Kh 7s: {d:.1}% equity\n", .{postflop_result.equity() * 100});
 
     // Demo 3: Multi-way equity
     const qq_cards = poker.mustParseCards("QhQs");
     const qq = [2]poker.Card{ qq_cards[0], qq_cards[1] };
     var hands = [_][2]poker.Card{ aa, kk, qq };
-    const multiway_results = try equity.equityMultiWayMonteCarlo(&hands, &.{}, 50000, rng, allocator);
+    const multiway_results = try equity.multiway(&hands, &.{}, 50000, rng, allocator);
     defer allocator.free(multiway_results);
 
     print("3-way preflop (AA vs KK vs QQ):\n", .{});
@@ -150,6 +150,6 @@ fn demoRangeEquity(allocator: std.mem.Allocator) !void {
     const tt_cards = poker.mustParseCards("TcTd");
     const tt = [2]poker.Card{ tt_cards[0], tt_cards[1] };
 
-    const individual_result = try equity.equityMonteCarlo(aa2, tt, &empty_board, 2000, rng, allocator);
+    const individual_result = try equity.monteCarlo(aa2, tt, &empty_board, 2000, rng, allocator);
     print("For comparison - AA vs TT heads-up: {d:.1}% vs {d:.1}%\n", .{ individual_result.equity() * 100.0, (1.0 - individual_result.equity()) * 100.0 });
 }

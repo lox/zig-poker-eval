@@ -58,7 +58,7 @@ const aa = poker.mustParseHoleCards("AhAs");
 const kk = poker.mustParseHoleCards("KdKc");
 
 var prng = std.Random.DefaultPrng.init(42);
-const result = try equity.equityMonteCarlo(aa, kk, &.{}, 100000, prng.random(), allocator);
+const result = try equity.monteCarlo(aa, kk, &.{}, 100000, prng.random(), allocator);
 // result.equity() ≈ 0.80 (80% equity for AA vs KK preflop)
 
 // Multi-way equity with postflop board
@@ -66,7 +66,7 @@ const qq = poker.mustParseHoleCards("QhQs");
 const board_cards = poker.mustParseCards("AdKh7s");
 
 var hands = [_][2]poker.Card{ aa, kk, qq };
-const results = try equity.equityMultiWayMonteCarlo(&hands, &board_cards, 50000, prng.random(), allocator);
+const results = try equity.multiway(&hands, &board_cards, 50000, prng.random(), allocator);
 defer allocator.free(results);
 // results[0].equity() ≈ 0.42 (AA equity in 3-way pot)
 ```
@@ -184,9 +184,9 @@ Both will generate a `profile_output.txt` file in the root directory.
 **Sample Output:**
 ```
 Top functions by sample count:
-19 equity.equityMonteCarlo + 604  /src/equity.zig:48     (73% of samples)
-6  equity.equityMonteCarlo + 488  /src/equity.zig:40     (23% of samples)
-1  equity.equityMonteCarlo + 776  /src/equity.zig:52     (4% of samples)
+19 equity.monteCarlo + 604  /src/equity.zig:48     (73% of samples)
+6  equity.monteCarlo + 488  /src/equity.zig:40     (23% of samples)
+1  equity.monteCarlo + 776  /src/equity.zig:52     (4% of samples)
 ```
 
 ### 2. Custom Micro-Benchmarking

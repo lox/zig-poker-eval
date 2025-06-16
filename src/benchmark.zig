@@ -114,7 +114,7 @@ pub fn runEquityBenchmark(allocator: std.mem.Allocator, json_output: bool) !void
     for (0..runs) |run| {
         const start = std.time.nanoTimestamp();
 
-        const result = try equity.equityMonteCarlo(hero_hole, villain_hole, &board, simulations_per_run, rng, allocator);
+        const result = try equity.monteCarlo(hero_hole, villain_hole, &board, simulations_per_run, rng, allocator);
 
         const end = std.time.nanoTimestamp();
         const duration_ns = @as(u64, @intCast(end - start));
@@ -175,7 +175,7 @@ pub fn runEquityBenchmarkThreaded(allocator: std.mem.Allocator, json_output: boo
     for (0..runs) |run| {
         const start = std.time.nanoTimestamp();
 
-        const result = try equity.equityMonteCarloThreaded(hero_hole, villain_hole, &board, simulations_per_run, base_seed, allocator);
+        const result = try equity.threaded(hero_hole, villain_hole, &board, simulations_per_run, base_seed, allocator);
 
         const end = std.time.nanoTimestamp();
         const duration_ns = @as(u64, @intCast(end - start));

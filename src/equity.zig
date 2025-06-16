@@ -20,7 +20,7 @@ pub const EquityResult = struct {
 };
 
 // Head-to-head Monte Carlo equity calculation
-pub fn equityMonteCarlo(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card, board: []const poker.Card, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) !EquityResult {
+pub fn monteCarlo(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card, board: []const poker.Card, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) !EquityResult {
     const board_hand = poker.Hand.fromBoard(board);
     const cards_needed = 5 - @as(u8, @intCast(board.len));
 
@@ -56,7 +56,7 @@ pub fn equityMonteCarlo(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card, b
 }
 
 // Head-to-head exact equity calculation
-pub fn equityExact(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card, board: []const poker.Card, allocator: std.mem.Allocator) !EquityResult {
+pub fn exact(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card, board: []const poker.Card, allocator: std.mem.Allocator) !EquityResult {
     const cards_needed = 5 - @as(u8, @intCast(board.len));
 
     // Enumerate all possible board completions
@@ -96,7 +96,7 @@ pub const calculateRangeEquityExact = ranges.calculateRangeEquityExact;
 pub const calculateRangeEquityMonteCarlo = ranges.calculateRangeEquityMonteCarlo;
 
 // Multi-way Monte Carlo equity calculation
-pub fn equityMultiWayMonteCarlo(hands: [][2]poker.Card, board: []const poker.Card, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) ![]EquityResult {
+pub fn multiway(hands: [][2]poker.Card, board: []const poker.Card, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) ![]EquityResult {
     const num_players = hands.len;
     if (num_players < 2) return error.NotEnoughPlayers;
 
@@ -146,7 +146,7 @@ pub fn heroVsFieldMonteCarlo(hero_hole: [2]poker.Card, villain_holes: [][2]poker
     all_hands[0] = hero_hole;
     @memcpy(all_hands[1..], villain_holes);
 
-    const results = try equityMultiWayMonteCarlo(all_hands, board, simulations, rng, allocator);
+    const results = try multiway(all_hands, board, simulations, rng, allocator);
     defer allocator.free(results);
 
     return results[0].equity();
@@ -173,7 +173,7 @@ pub fn rangeEquityMonteCarlo(hero_range: [][2]poker.Card, villain_range: [][2]po
                 continue;
             }
 
-            const result = try equityMonteCarlo(hero_hand, villain_hand, board, simulations, rng, allocator);
+            const result = try monteCarlo(hero_hand, villain_hand, board, simulations, rng, allocator);
             total_hero_equity += result.equity();
             total_villain_equity += 1.0 - result.equity();
             valid_combinations += 1;
@@ -209,7 +209,7 @@ pub fn handVsRangeMonteCarlo(hero_hole: [2]poker.Card, villain_range: [][2]poker
             continue;
         }
 
-        const result = try equityMonteCarlo(hero_hole, villain_hand, board, simulations, rng, allocator);
+        const result = try monteCarlo(hero_hole, villain_hand, board, simulations, rng, allocator);
         total_equity += result.equity();
         valid_hands += 1;
     }
@@ -381,7 +381,7 @@ fn workerThread(ctx: *ThreadContext) void {
 }
 
 // Multi-threaded Monte Carlo equity calculation
-pub fn equityMonteCarloThreaded(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card, board: []const poker.Card, simulations: u32, base_seed: u64, allocator: std.mem.Allocator) !EquityResult {
+pub fn threaded(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card, board: []const poker.Card, simulations: u32, base_seed: u64, allocator: std.mem.Allocator) !EquityResult {
     // Get optimal thread count (but cap at reasonable limit)
     const thread_count = @min(try std.Thread.getCpuCount(), 16);
     const sims_per_thread = simulations / thread_count;
@@ -460,7 +460,7 @@ test "basic equity calculation" {
     const aa = [_]poker.Card{ poker.Card.init(14, 0), poker.Card.init(14, 1) }; // AhAs
     const kk = [_]poker.Card{ poker.Card.init(13, 2), poker.Card.init(13, 3) }; // KdKc
 
-    const result = try equityMonteCarlo(aa, kk, &.{}, 50000, rng, allocator);
+    const result = try monteCarlo(aa, kk, &.{}, 50000, rng, allocator);
 
     // For now, just test that equity calculation works and is reasonable
     try testing.expect(result.equity() > 0.3);
@@ -487,8 +487,8 @@ test "exact vs monte carlo equity" {
         poker.Card.init(2, 3), // 2c
     };
 
-    const exact_result = try equityExact(aa, kk, &board_slice, allocator);
-    const monte_carlo_result = try equityMonteCarlo(aa, kk, &board_slice, 10000, rng, allocator);
+    const exact_result = try exact(aa, kk, &board_slice, allocator);
+    const monte_carlo_result = try monteCarlo(aa, kk, &board_slice, 10000, rng, allocator);
 
     // Results should be close (within 5%)
     const diff = @abs(exact_result.equity() - monte_carlo_result.equity());
@@ -509,10 +509,10 @@ test "threaded equity matches single-threaded" {
 
     // Run single-threaded
     var prng = std.Random.DefaultPrng.init(seed);
-    const single_result = try equityMonteCarlo(aa, kk, &board, simulations, prng.random(), allocator);
+    const single_result = try monteCarlo(aa, kk, &board, simulations, prng.random(), allocator);
 
     // Run multi-threaded
-    const threaded_result = try equityMonteCarloThreaded(aa, kk, &board, simulations, seed, allocator);
+    const threaded_result = try threaded(aa, kk, &board, simulations, seed, allocator);
 
     // Results should be close (within 5%) - threading changes RNG behavior
     const single_equity = single_result.equity();
