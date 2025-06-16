@@ -7,7 +7,7 @@ repos:
         stages: [commit-msg]
         args:
           - --types=feat,fix,chore
-          - --body-max-line-length=0
+          - --body-max-line-length=250
 
   # General file checks
   - repo: https://github.com/pre-commit/pre-commit-hooks

@@ -53,24 +53,26 @@ const rank = hand.evaluate(); // .straight_flush (royal flush)
 const equity = @import("equity.zig");
 const poker = @import("poker.zig");
 
-// Calculate preflop equity using concise notation
-const aa_hand = try poker.parseCards("AhAs");  // Parse hole cards
-const aa = [2]poker.Card{ aa_hand.cards[0], aa_hand.cards[1] };
-const kk_hand = try poker.parseCards("KdKc");
-const kk = [2]poker.Card{ kk_hand.cards[0], kk_hand.cards[1] };
+// Calculate preflop equity using compile-time parsing (no allocator needed)
+const aa_cards = poker.mustParseCards("AhAs");
+const aa = [2]poker.Card{ aa_cards[0], aa_cards[1] };
+
+const kk_cards = poker.mustParseCards("KdKc");
+const kk = [2]poker.Card{ kk_cards[0], kk_cards[1] };
 
 var prng = std.Random.DefaultPrng.init(42);
 const result = try equity.equityMonteCarlo(aa, kk, &.{}, 100000, prng.random(), allocator);
 // result.equity() ≈ 0.80 (80% equity for AA vs KK preflop)
 
 // Multi-way equity with postflop board
-const qq_hand = try poker.parseCards("QhQs");
-const qq = [2]poker.Card{ qq_hand.cards[0], qq_hand.cards[1] };
-const board_hand = try poker.parseCards("AdKh7s");  // Parse board as single string
-const board = board_hand.cards[0..board_hand.card_count];
+const qq_cards = poker.mustParseCards("QhQs");
+const qq = [2]poker.Card{ qq_cards[0], qq_cards[1] };
+
+const board_cards = poker.mustParseCards("AdKh7s");
 
 var hands = [_][2]poker.Card{ aa, kk, qq };
-const results = try equity.equityMultiWayMonteCarlo(&hands, &board, 50000, prng.random(), allocator);
+const results = try equity.equityMultiWayMonteCarlo(&hands, &board_cards, 50000, prng.random(), allocator);
+defer allocator.free(results);
 // results[0].equity() ≈ 0.42 (AA equity in 3-way pot)
 ```
 
@@ -128,21 +130,39 @@ zig build bench -Doptimize=ReleaseFast
 === Zig 7-Card Texas Hold'em Evaluator ===
 === Benchmark  ===
 Generating 10000 random hands...
-Run 1: 52080000 ops, 19.00 ns/op
-Run 2: 54750000 ops, 18.00 ns/op
-Run 3: 55780000 ops, 17.00 ns/op
+Run 1: 70690000 ops, 14.00 ns/op
+Run 2: 55730000 ops, 17.00 ns/op
+Run 3: 67180000 ops, 14.00 ns/op
 
 === Performance Summary ===
-18.00 ns/op (average across 3 runs)
-55.6M evaluations/second
+15.00 ns/op (average across 3 runs)
+66.7M evaluations/second
+
+=== Equity Benchmark ===
+Run 1: 50000 sims, 57.00 ns/sim, Hero equity: 48.0%
+Run 2: 50000 sims, 57.00 ns/sim, Hero equity: 48.0%
+Run 3: 50000 sims, 56.00 ns/sim, Hero equity: 48.1%
+
+=== Equity Performance Summary ===
+57.00 ns/simulation (average across 3 runs)
+17.5M simulations/second
+
+=== Threaded Equity Benchmark ===
+Run 1: 500000 sims, 13.00 ns/sim, Hero equity: 48.1%
+Run 2: 500000 sims, 13.00 ns/sim, Hero equity: 48.1%
+Run 3: 500000 sims, 13.00 ns/sim, Hero equity: 48.1%
+
+=== Threaded Equity Performance Summary ===
+13.00 ns/simulation (average across 3 runs)
+76.9M simulations/second
 ```
 
 ### Architecture
 
-- **`poker.zig`**: Core evaluation logic, data structures, and comprehensive tests
-- **`equity.zig`**: Monte Carlo and exact equity calculation for poker hands
+- **`poker.zig`**: Core evaluation logic, Hand data structures, and comprehensive tests
+- **`equity.zig`**: Monte Carlo and exact equity calculation with multithreading support
 - **`simulation.zig`**: Low-level simulation primitives and showdown evaluation
-- **`ranges.zig`**: Hand range generation and parsing utilities
+- **`ranges.zig`**: Hand range generation and parsing utilities with clean HandKey abstraction
 - **`benchmark.zig`**: Performance testing and random hand generation
 - **`profiler.zig`**: Advanced profiling system for performance analysis
 - **`main.zig`**: Demo showcasing hand evaluation and equity calculation
@@ -200,10 +220,10 @@ For detailed optimization techniques and experimental results, see `EXPERIMENTS.
 ```
 src/
 ├── main.zig         # Demo showcasing hand evaluation and equity
-├── poker.zig        # Core poker types, evaluation logic, and tests
-├── equity.zig       # Monte Carlo and exact equity calculation
-├── simulation.zig   # Low-level simulation primitives
-├── ranges.zig       # Hand range generation and parsing
+├── poker.zig        # Core poker types, Hand API, evaluation logic, and tests
+├── equity.zig       # Monte Carlo and exact equity calculation with threading
+├── simulation.zig   # Low-level simulation primitives and showdown evaluation
+├── ranges.zig       # Hand range generation and parsing with HandKey abstraction
 ├── benchmark.zig    # Performance testing utilities
 ├── bench_main.zig   # Dedicated benchmark executable
 ├── profiler.zig     # Custom micro-benchmarking system
