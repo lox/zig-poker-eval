@@ -2,17 +2,36 @@ const std = @import("std");
 const poker = @import("poker.zig");
 const simulation = @import("simulation.zig");
 
+/// Simple hand key for hash map - uses sorted card bits
+const HandKey = struct {
+    card1_bits: u64,
+    card2_bits: u64,
+
+    fn init(hand: [2]poker.Card) HandKey {
+        // Sort cards to ensure consistent ordering regardless of input order
+        if (hand[0].bits <= hand[1].bits) {
+            return HandKey{ .card1_bits = hand[0].bits, .card2_bits = hand[1].bits };
+        } else {
+            return HandKey{ .card1_bits = hand[1].bits, .card2_bits = hand[0].bits };
+        }
+    }
+
+    fn toHand(self: HandKey) [2]poker.Card {
+        return [2]poker.Card{ poker.Card{ .bits = self.card1_bits }, poker.Card{ .bits = self.card2_bits } };
+    }
+};
+
 /// Efficient representation of a poker hand range
 /// Uses HashMap for simplicity and correctness
 pub const Range = struct {
-    /// Map from hand bits to probability
-    hands: std.AutoHashMap(u64, f32),
+    /// Map from hand to probability
+    hands: std.AutoHashMap(HandKey, f32),
 
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) Range {
         return Range{
-            .hands = std.AutoHashMap(u64, f32).init(allocator),
+            .hands = std.AutoHashMap(HandKey, f32).init(allocator),
             .allocator = allocator,
         };
     }
@@ -23,8 +42,7 @@ pub const Range = struct {
 
     /// Add a hand to the range with given probability
     pub fn addHand(self: *Range, hand: [2]poker.Card, probability: f32) !void {
-        // Create a unique key from the two cards
-        const hand_key = hand[0].bits | hand[1].bits;
+        const hand_key = HandKey.init(hand);
         try self.hands.put(hand_key, probability);
     }
 
@@ -71,7 +89,7 @@ pub const Range = struct {
 
     /// Get probability of a specific hand in range
     pub fn getHandProbability(self: *const Range, hand: [2]poker.Card) f32 {
-        const hand_key = hand[0].bits | hand[1].bits;
+        const hand_key = HandKey.init(hand);
         return self.hands.get(hand_key) orelse 0.0;
     }
 
@@ -82,18 +100,14 @@ pub const Range = struct {
 
     /// Iterator for efficient range traversal
     pub const Iterator = struct {
-        inner: std.AutoHashMap(u64, f32).Iterator,
+        inner: std.AutoHashMap(HandKey, f32).Iterator,
 
         pub fn next(self: *Iterator) ?struct { hand: [2]poker.Card, probability: f32 } {
             if (self.inner.next()) |entry| {
-                const hand_bits = entry.key_ptr.*;
+                const hand_key = entry.key_ptr.*;
                 const probability = entry.value_ptr.*;
 
-                // Convert hand bits back to two cards
-                // This is a simplification - in practice you'd need more sophisticated bit extraction
-                const hand = bitsToHand(hand_bits);
-
-                return .{ .hand = hand, .probability = probability };
+                return .{ .hand = hand_key.toHand(), .probability = probability };
             }
             return null;
         }
@@ -103,23 +117,6 @@ pub const Range = struct {
         return Iterator{ .inner = self.hands.iterator() };
     }
 };
-
-/// Convert hand bits back to two individual cards
-/// This is a simplified version - assumes exactly 2 bits are set
-fn bitsToHand(hand_bits: u64) [2]poker.Card {
-    var cards: [2]poker.Card = undefined;
-    var card_count: u8 = 0;
-    var remaining_bits = hand_bits;
-
-    while (remaining_bits != 0 and card_count < 2) {
-        const card_bit = @ctz(remaining_bits);
-        cards[card_count] = poker.Card{ .bits = @as(u64, 1) << @intCast(card_bit) };
-        remaining_bits &= remaining_bits - 1; // Clear the lowest set bit
-        card_count += 1;
-    }
-
-    return cards;
-}
 
 /// Parse range hand notation (e.g., "AA", "AKs", "AKo") into representative hand
 /// This is used internally by parseRange() and addHandNotation()
@@ -182,13 +179,6 @@ pub fn parseRange(notation: []const u8, allocator: std.mem.Allocator) !Range {
     }
 
     return range;
-}
-
-/// Parse board notation (e.g., "AsKh7s" or "As Kh 7s")
-pub fn parseBoard(notation: []const u8) ![]poker.Card {
-    // TODO: Implement board parsing - for now, use individual parseCard calls
-    _ = notation;
-    return error.NotImplemented;
 }
 
 /// Range equity calculation result
@@ -277,38 +267,43 @@ pub fn calculateRangeEquityMonteCarlo(hero_range: *const Range, villain_range: *
 fn sampleHandFromRange(range: *const Range, rng: std.Random) ?[2]poker.Card {
     if (range.handCount() == 0) return null;
 
-    // Calculate cumulative probabilities
-    var cumulative_prob: f32 = 0.0;
-    const random_value = rng.float(f32);
-
+    // Calculate total probability first to normalize
+    var total_prob: f32 = 0.0;
     var iter = range.iterator();
     while (iter.next()) |entry| {
+        total_prob += entry.probability;
+    }
+
+    if (total_prob <= 0.0) return null;
+
+    // Generate random value and sample proportionally
+    const random_value = rng.float(f32) * total_prob;
+    var cumulative_prob: f32 = 0.0;
+    var last_hand: ?[2]poker.Card = null;
+
+    var sample_iter = range.iterator();
+    while (sample_iter.next()) |entry| {
+        last_hand = entry.hand; // Keep track of last hand for floating-point edge cases
         cumulative_prob += entry.probability;
         if (random_value <= cumulative_prob) {
             return entry.hand;
         }
     }
 
-    // Fallback to last hand if rounding errors occur
-    var last_iter = range.iterator();
-    var last_hand: ?[2]poker.Card = null;
-    while (last_iter.next()) |entry| {
-        last_hand = entry.hand;
-    }
-    return last_hand;
+    return last_hand; // Fallback for floating-point precision edge cases
 }
 
 /// Check if hands or board have conflicting cards
 fn hasCardConflict(hero_hand: [2]poker.Card, villain_hand: [2]poker.Card, board: []const poker.Card) bool {
-    // Convert to bit representation for fast conflict detection
-    const hero_bits = hero_hand[0].bits | hero_hand[1].bits;
-    const villain_bits = villain_hand[0].bits | villain_hand[1].bits;
-    const board_hand = poker.cardsToHand(board);
+    // Use Hand objects for cleaner bit operations
+    const hero = poker.Hand{ .bits = hero_hand[0].bits | hero_hand[1].bits };
+    const villain = poker.Hand{ .bits = villain_hand[0].bits | villain_hand[1].bits };
+    const board_hand = poker.Hand.fromBoard(board);
 
-    // Check for any overlapping bits
-    return (hero_bits & villain_bits) != 0 or
-        (hero_bits & board_hand.bits) != 0 or
-        (villain_bits & board_hand.bits) != 0;
+    // Check for any overlapping bits using Hand methods
+    return hero.hasConflictWith(villain) or
+        hero.hasConflictWith(board_hand) or
+        villain.hasConflictWith(board_hand);
 }
 
 /// Common preflop ranges for quick setup
@@ -365,13 +360,13 @@ test "range basic operations" {
     try std.testing.expect(range.getHandProbability(hand) == 1.0);
 }
 
-test "hand bits conversion" {
-    const hand1 = [2]poker.Card{ poker.Card.init(14, 0), poker.Card.init(14, 1) }; // AA
+test "hand key conversion" {
+    const hand1 = [2]poker.Card{ poker.Card.init(14, 0), poker.Card.init(14, 1) }; // Ah As
 
-    const hand_bits = hand1[0].bits | hand1[1].bits;
-    const reconstructed = bitsToHand(hand_bits);
+    const hand_key = HandKey.init(hand1);
+    const reconstructed = hand_key.toHand();
 
-    // Should reconstruct the same cards (order may differ)
+    // Check that the reconstructed bits match the original bits
     const original_bits = hand1[0].bits | hand1[1].bits;
     const reconstructed_bits = reconstructed[0].bits | reconstructed[1].bits;
     try std.testing.expect(original_bits == reconstructed_bits);

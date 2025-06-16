@@ -1,7 +1,7 @@
 const std = @import("std");
 const poker = @import("poker.zig");
 const equity = @import("equity.zig");
-const equity_threaded = @import("equity_threaded.zig");
+
 pub fn runEvaluatorBenchmark(allocator: std.mem.Allocator, json_output: bool) !void {
     const print = std.debug.print;
 
@@ -175,7 +175,7 @@ pub fn runEquityBenchmarkThreaded(allocator: std.mem.Allocator, json_output: boo
     for (0..runs) |run| {
         const start = std.time.nanoTimestamp();
 
-        const result = try equity_threaded.equityMonteCarloThreaded(hero_hole, villain_hole, &board, simulations_per_run, base_seed, allocator);
+        const result = try equity.equityMonteCarloThreaded(hero_hole, villain_hole, &board, simulations_per_run, base_seed, allocator);
 
         const end = std.time.nanoTimestamp();
         const duration_ns = @as(u64, @intCast(end - start));

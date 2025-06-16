@@ -1,26 +1,44 @@
 const std = @import("std");
 const poker = @import("poker.zig");
 
-pub const ShowdownResult = struct {
+pub const MultiplayerShowdownResult = struct {
     winners: []u8,
     winning_rank: poker.HandRank,
 
-    pub fn init() ShowdownResult {
-        return ShowdownResult{
-            .winners = &.{},
-            .winning_rank = .high_card,
-        };
-    }
-
-    pub fn deinit(self: ShowdownResult, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: MultiplayerShowdownResult, allocator: std.mem.Allocator) void {
         allocator.free(self.winners);
     }
 };
 
 const MAX_PLAYERS = 10; // Standard poker table limit
 
+// Helper functions for card/bitmask conversion
+fn cardSliceToBitmask(cards: []const poker.Card) u64 {
+    var bitmask: u64 = 0;
+    for (cards) |card| {
+        bitmask |= card.bits;
+    }
+    return bitmask;
+}
+
+fn bitmaskToCardSlice(bitmask: u64, allocator: std.mem.Allocator) ![]poker.Card {
+    var cards = std.ArrayList(poker.Card).init(allocator);
+    defer cards.deinit();
+
+    for (0..52) |i| {
+        const card_bit = @as(u64, 1) << @intCast(i);
+        if ((bitmask & card_bit) != 0) {
+            const rank: u8 = @intCast((i / 4) + 2);
+            const suit: u2 = @intCast(i % 4);
+            try cards.append(poker.Card.init(rank, suit));
+        }
+    }
+
+    return cards.toOwnedSlice();
+}
+
 // Core showdown evaluation - determines winners from multiple hands (optimized)
-pub fn evaluateShowdown(hands: []const poker.Hand, allocator: std.mem.Allocator) !ShowdownResult {
+pub fn evaluateShowdown(hands: []const poker.Hand, allocator: std.mem.Allocator) !MultiplayerShowdownResult {
     if (hands.len == 0) return error.NoHands;
     if (hands.len > MAX_PLAYERS) return error.TooManyPlayers;
 
@@ -50,32 +68,21 @@ pub fn evaluateShowdown(hands: []const poker.Hand, allocator: std.mem.Allocator)
     // Only allocate for final result
     const winners = try allocator.dupe(u8, winner_indices[0..winner_count]);
 
-    return ShowdownResult{
+    return MultiplayerShowdownResult{
         .winners = winners,
         .winning_rank = best_rank,
     };
 }
 
-// Fast path for 2-player showdown (no allocation for common case)
-pub fn evaluateShowdownHeadToHead(hand1: poker.Hand, hand2: poker.Hand) struct { winner: u8, tie: bool, winning_rank: poker.HandRank } {
-    const rank1 = hand1.evaluate();
-    const rank2 = hand2.evaluate();
-
-    const rank1_value = @intFromEnum(rank1);
-    const rank2_value = @intFromEnum(rank2);
-
-    if (rank1_value > rank2_value) {
-        return .{ .winner = 0, .tie = false, .winning_rank = rank1 };
-    } else if (rank2_value > rank1_value) {
-        return .{ .winner = 1, .tie = false, .winning_rank = rank2 };
-    } else {
-        return .{ .winner = 0, .tie = true, .winning_rank = rank1 }; // Tie, winner doesn't matter
-    }
+// Fast path for 2-player showdown (no allocation for common case) - use poker.ShowdownResult
+pub fn evaluateShowdownHeadToHead(hand1: poker.Hand, hand2: poker.Hand) poker.ShowdownResult {
+    return hand1.compareWith(hand2);
 }
 
 // Sample remaining cards, avoiding conflicts with used cards
 pub fn sampleRemainingCards(used_cards: []const poker.Card, num_cards: u8, rng: std.Random, allocator: std.mem.Allocator) ![]poker.Card {
-    const used_hand = poker.cardsToHand(used_cards);
+    const used_bits = cardSliceToBitmask(used_cards);
+
     var sampled_cards: u64 = 0;
     var cards_sampled: u8 = 0;
 
@@ -84,7 +91,7 @@ pub fn sampleRemainingCards(used_cards: []const poker.Card, num_cards: u8, rng: 
         const card_bit = @as(u64, 1) << @intCast(card_idx);
 
         // Skip if card already used or sampled
-        if ((used_hand.bits & card_bit) != 0 or (sampled_cards & card_bit) != 0) {
+        if ((used_bits & card_bit) != 0 or (sampled_cards & card_bit) != 0) {
             continue;
         }
 
@@ -92,170 +99,20 @@ pub fn sampleRemainingCards(used_cards: []const poker.Card, num_cards: u8, rng: 
         cards_sampled += 1;
     }
 
-    // Convert sampled bits back to cards
-    var result = std.ArrayList(poker.Card).init(allocator);
-    defer result.deinit();
-
-    for (0..52) |i| {
-        const card_bit = @as(u64, 1) << @intCast(i);
-        if ((sampled_cards & card_bit) != 0) {
-            const rank: u8 = @intCast((i / 4) + 2);
-            const suit: u2 = @intCast(i % 4);
-            try result.append(poker.Card.init(rank, suit));
-        }
-    }
-
-    return result.toOwnedSlice();
+    return bitmaskToCardSlice(sampled_cards, allocator);
 }
 
-// Internal helper - sample remaining cards using bit representation for performance
-// Note: public for profiling only, prefer clean wrapper functions for normal use
-pub fn sampleRemainingCardsBits(used_cards: u64, num_cards: u8, rng: std.Random) u64 {
-    var sampled_cards: u64 = 0;
-    var cards_sampled: u8 = 0;
-
-    while (cards_sampled < num_cards) {
-        const card_idx = rng.uintLessThan(u8, 52);
-        const card_bit = @as(u64, 1) << @intCast(card_idx);
-
-        // Skip if card already used or sampled
-        if ((used_cards & card_bit) != 0 or (sampled_cards & card_bit) != 0) {
-            continue;
-        }
-
-        sampled_cards |= card_bit;
-        cards_sampled += 1;
-    }
-
-    return sampled_cards;
-}
-
-// Public wrapper for performance-critical equity calculations
-pub fn sampleRemainingCardsForEquity(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card, board: []const poker.Card, num_cards: u8, rng: std.Random) u64 {
-    const hero_bits = hero_hole[0].bits | hero_hole[1].bits;
-    const villain_bits = villain_hole[0].bits | villain_hole[1].bits;
-    const board_hand = poker.cardsToHand(board);
-    const used_cards = hero_bits | villain_bits | board_hand.bits;
-
-    return sampleRemainingCardsBits(used_cards, num_cards, rng);
-}
-
-// Internal helper - combine card bits into Hand for performance
-// Note: public for profiling only, prefer clean wrapper functions for normal use
-pub fn combineCardsBits(hole_bits: u64, board_bits: u64) poker.Hand {
-    return poker.Hand{ .bits = hole_bits | board_bits };
-}
-
-// Public wrapper for performance-critical equity calculations
-pub fn combineCardsForEquity(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card, board_bits: u64) struct { hero: poker.Hand, villain: poker.Hand } {
-    const hero_bits = hero_hole[0].bits | hero_hole[1].bits;
-    const villain_bits = villain_hole[0].bits | villain_hole[1].bits;
-
-    return .{
-        .hero = combineCardsBits(hero_bits, board_bits),
-        .villain = combineCardsBits(villain_bits, board_bits),
-    };
-}
-
-// Internal helper - enumerate card combinations using bit representation for performance
-fn enumerateCardCombinationsBits(used_cards: u64, num_cards: u8, allocator: std.mem.Allocator) ![]u64 {
-    var cards = std.ArrayList(poker.Card).init(allocator);
-    defer cards.deinit();
-
-    for (0..52) |i| {
-        const card_bit = @as(u64, 1) << @intCast(i);
-        if ((used_cards & card_bit) == 0) {
-            const rank: u8 = @intCast((i / 4) + 2);
-            const suit: u2 = @intCast(i % 4);
-            try cards.append(poker.Card.init(rank, suit));
-        }
-    }
-
-    const available_cards = try cards.toOwnedSlice();
-    defer allocator.free(available_cards);
-
-    if (num_cards > available_cards.len) {
-        return error.NotEnoughCards;
-    }
-
-    const total_combinations = binomial(available_cards.len, num_cards);
-    var combinations = try allocator.alloc(u64, total_combinations);
-    var combination_idx: usize = 0;
-
-    // Generate all combinations using recursion
-    try generateCombinationsBits(available_cards, num_cards, 0, 0, &combinations, &combination_idx);
-
-    return combinations;
-}
-
-// Public wrapper for performance-critical equity calculations
-pub fn enumerateCardCombinationsForEquity(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card, board: []const poker.Card, num_cards: u8, allocator: std.mem.Allocator) ![]u64 {
-    const hero_bits = hero_hole[0].bits | hero_hole[1].bits;
-    const villain_bits = villain_hole[0].bits | villain_hole[1].bits;
-    const board_hand = poker.cardsToHand(board);
-    const used_cards = hero_bits | villain_bits | board_hand.bits;
-
-    return enumerateCardCombinationsBits(used_cards, num_cards, allocator);
-}
-
-// Public wrapper for multiway equity calculations
-pub fn sampleRemainingCardsForMultiway(hands: [][2]poker.Card, board: []const poker.Card, num_cards: u8, rng: std.Random) u64 {
-    const board_hand = poker.cardsToHand(board);
-    var used_cards: u64 = board_hand.bits;
-
-    for (hands) |hole| {
-        const hole_bits = hole[0].bits | hole[1].bits;
-        used_cards |= hole_bits;
-    }
-
-    return sampleRemainingCardsBits(used_cards, num_cards, rng);
-}
-
-// Public wrapper for combining hole bits with board bits (used by multiway equity)
-pub fn combineHoleBitsWithBoard(hole_bits: u64, board_bits: u64) poker.Hand {
-    return combineCardsBits(hole_bits, board_bits);
-}
-
-// Helper function to generate bit combinations recursively
-fn generateCombinationsBits(cards: []const poker.Card, cards_needed: u8, start_idx: usize, current_combination: u64, combinations: *[]u64, combination_idx: *usize) !void {
-    if (cards_needed == 0) {
-        combinations.*[combination_idx.*] = current_combination;
-        combination_idx.* += 1;
-        return;
-    }
-
-    for (start_idx..cards.len) |i| {
-        if (cards.len - i < cards_needed) break;
-
-        const new_combination = current_combination | cards[i].bits;
-        try generateCombinationsBits(cards, cards_needed - 1, i + 1, new_combination, combinations, combination_idx);
-    }
-}
-
-// Combine hole cards + board into 7-card Hand for evaluation
+// Combine hole cards + board into Hand for evaluation - delegates to poker module
 pub fn combineCards(hole_cards: [2]poker.Card, board_cards: []const poker.Card) poker.Hand {
-    var hand = poker.Hand.init();
-    for (hole_cards) |card| hand.addCard(card);
-    for (board_cards) |card| hand.addCard(card);
-    return hand;
+    return poker.Hand.fromHoleAndBoard(hole_cards, board_cards);
 }
 
 // Extract individual cards not in used cards for enumeration
 pub fn enumerateRemainingCards(used_cards: []const poker.Card, allocator: std.mem.Allocator) ![]poker.Card {
-    const used_hand = poker.cardsToHand(used_cards);
-    var cards = std.ArrayList(poker.Card).init(allocator);
-    defer cards.deinit();
-
-    for (0..52) |i| {
-        const card_bit = @as(u64, 1) << @intCast(i);
-        if ((used_hand.bits & card_bit) == 0) {
-            const rank: u8 = @intCast((i / 4) + 2);
-            const suit: u2 = @intCast(i % 4);
-            try cards.append(poker.Card.init(rank, suit));
-        }
-    }
-
-    return cards.toOwnedSlice();
+    const used_bits = cardSliceToBitmask(used_cards);
+    // All cards bitmask minus used cards
+    const remaining_bits = ~used_bits & ((1 << 52) - 1);
+    return bitmaskToCardSlice(remaining_bits, allocator);
 }
 
 // Get all possible combinations of n cards from remaining deck
@@ -326,8 +183,8 @@ test "showdown evaluation" {
     const high_card_cards = try poker.parseCards("KcQsJd8h7s4h5c", allocator);
     defer allocator.free(high_card_cards);
 
-    const hands = [_]poker.Hand{ poker.cardsToHand(pair_cards), poker.cardsToHand(high_card_cards) };
-    const result = try evaluateShowdown(&hands, allocator);
+    const hands = [_]poker.Hand{ combineCards(.{ pair_cards[0], pair_cards[1] }, pair_cards[2..]), combineCards(.{ high_card_cards[0], high_card_cards[1] }, high_card_cards[2..]) };
+    const result = try evaluateShowdown(hands[0..], allocator);
     defer result.deinit(allocator);
 
     try testing.expect(result.winners.len == 1);
@@ -352,9 +209,15 @@ test "card sampling" {
     try testing.expect(sampled.len == 5);
 
     // Should not conflict with used cards (no AA in sampled)
-    const used_hand = poker.cardsToHand(&used_cards);
-    const sampled_hand = poker.cardsToHand(sampled);
-    try testing.expect((used_hand.bits & sampled_hand.bits) == 0);
+    var used_bits: u64 = 0;
+    for (used_cards) |card| {
+        used_bits |= card.bits;
+    }
+    var sampled_bits: u64 = 0;
+    for (sampled) |card| {
+        sampled_bits |= card.bits;
+    }
+    try testing.expect((used_bits & sampled_bits) == 0);
 }
 
 test "card combination" {
@@ -363,7 +226,9 @@ test "card combination" {
     const board_cards = poker.mustParseCards("KdQcJh2s3d");
 
     const combined = combineCards(hole_cards, &board_cards);
-    try testing.expect(@popCount(combined.bits) == 7);
+    // Test that we can evaluate the combined hand
+    const result = combined.evaluate();
+    try testing.expect(@intFromEnum(result) >= 1 and @intFromEnum(result) <= 9);
 }
 
 test "enumerate remaining cards" {

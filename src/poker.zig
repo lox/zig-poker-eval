@@ -38,6 +38,270 @@ pub const HandRank = enum(u4) {
     straight_flush = 9,
 };
 
+// Efficient card representation using bit manipulation
+pub const Card = struct {
+    bits: u64,
+
+    pub fn init(rank: u8, suit: u2) Card {
+        // Each card is represented as a single bit
+        // Cards 0-51: rank 2-14, suits 0-3
+        const card_index = (rank - 2) * 4 + suit;
+        return Card{ .bits = @as(u64, 1) << @intCast(card_index) };
+    }
+
+    pub fn getRank(self: Card) u8 {
+        const card_index = @ctz(self.bits);
+        return @intCast((card_index / 4) + 2);
+    }
+
+    pub fn getSuit(self: Card) u2 {
+        const card_index = @ctz(self.bits);
+        return @intCast(card_index % 4);
+    }
+};
+
+// Simple Hand struct with cached bits for performance
+pub const Hand = struct {
+    bits: u64,
+
+    pub fn init() Hand {
+        return Hand{ .bits = 0 };
+    }
+
+    pub fn addCard(self: *Hand, card: Card) void {
+        self.bits |= card.bits;
+    }
+
+    pub fn fromCards(cards: [7]Card) Hand {
+        var hand_bits: u64 = 0;
+        // Manual unroll for performance
+        hand_bits = cards[0].bits | cards[1].bits | cards[2].bits |
+            cards[3].bits | cards[4].bits | cards[5].bits | cards[6].bits;
+        return Hand{ .bits = hand_bits };
+    }
+
+    // High-performance evaluation using cached bits
+    pub inline fn evaluate(self: Hand) HandRank {
+        // Ultra-fast flush detection with parallel suit processing
+        const flush_result = detectFlushOptimized(self.bits);
+        if (flush_result > 0) {
+            return @enumFromInt(flush_result);
+        }
+
+        // Extract rank data once for non-flush evaluation
+        const rank_data = extractRankDataOptimized(self.bits);
+        return evaluateNonFlushWithPrecomputedRanks(rank_data.counts, rank_data.mask);
+    }
+
+    // Hand composition methods
+    pub fn combineWith(self: Hand, other: Hand) Hand {
+        return Hand{ .bits = self.bits | other.bits };
+    }
+
+    pub fn fromHoleAndBoard(hole: [2]Card, board: []const Card) Hand {
+        const hole_bits = hole[0].bits | hole[1].bits;
+        const board_bits = cardsToBits(board);
+        return Hand{ .bits = hole_bits | board_bits };
+    }
+
+    pub fn fromHoleAndBoardBits(hole: [2]Card, board_bits: u64) Hand {
+        const hole_bits = hole[0].bits | hole[1].bits;
+        return Hand{ .bits = hole_bits | board_bits };
+    }
+
+    pub fn fromBoard(board: []const Card) Hand {
+        return Hand{ .bits = cardsToBits(board) };
+    }
+
+    // Check for card conflicts between hands
+    pub fn hasConflictWith(self: Hand, other: Hand) bool {
+        return (self.bits & other.bits) != 0;
+    }
+
+    // Compare two hands for showdown
+    pub fn compareWith(self: Hand, other: Hand) ShowdownResult {
+        return evaluateShowdownHeadToHeadBits(self.bits, other.bits);
+    }
+};
+
+// Convenience functions for creating cards with enums
+pub fn createCard(suit: Suit, rank: Rank) Card {
+    return Card.init(@intFromEnum(rank), @intFromEnum(suit));
+}
+
+pub fn createHand(cards: []const struct { Suit, Rank }) Hand {
+    var hand = Hand.init();
+    for (cards) |card_info| {
+        const card = createCard(card_info[0], card_info[1]);
+        hand.addCard(card);
+    }
+    return hand;
+}
+
+// Parse card string like "AsKsQsJsTs2h3h" into slice
+pub fn parseCards(card_string: []const u8, allocator: std.mem.Allocator) ![]Card {
+    if (card_string.len % 2 != 0) {
+        return error.InvalidCardString;
+    }
+
+    const card_count = card_string.len / 2;
+    var cards = try allocator.alloc(Card, card_count);
+    var i: usize = 0;
+
+    while (i < card_string.len) : (i += 2) {
+        const rank_char = card_string[i];
+        const suit_char = card_string[i + 1];
+
+        // Parse rank
+        const rank: u8 = switch (rank_char) {
+            '2'...'9' => rank_char - '0',
+            'T' => 10,
+            'J' => 11,
+            'Q' => 12,
+            'K' => 13,
+            'A' => 14,
+            else => return error.InvalidRank,
+        };
+
+        // Parse suit
+        const suit: u2 = switch (suit_char) {
+            'h' => 0, // hearts
+            's' => 1, // spades
+            'd' => 2, // diamonds
+            'c' => 3, // clubs
+            else => return error.InvalidSuit,
+        };
+
+        cards[i / 2] = Card.init(rank, suit);
+    }
+
+    return cards;
+}
+
+/// Compile-time card parsing - returns fixed array, no allocation needed
+pub fn mustParseCards(comptime card_string: []const u8) [card_string.len / 2]Card {
+    if (card_string.len % 2 != 0) {
+        @compileError("Invalid card string length: " ++ card_string);
+    }
+
+    const card_count = card_string.len / 2;
+    var cards: [card_count]Card = undefined;
+
+    comptime var i: usize = 0;
+    inline while (i < card_string.len) : (i += 2) {
+        const rank_char = card_string[i];
+        const suit_char = card_string[i + 1];
+
+        // Parse rank
+        const rank: u8 = switch (rank_char) {
+            '2'...'9' => rank_char - '0',
+            'T' => 10,
+            'J' => 11,
+            'Q' => 12,
+            'K' => 13,
+            'A' => 14,
+            else => @compileError("Invalid rank: " ++ [_]u8{rank_char}),
+        };
+
+        // Parse suit
+        const suit: u2 = switch (suit_char) {
+            'h' => 0, // hearts
+            's' => 1, // spades
+            'd' => 2, // diamonds
+            'c' => 3, // clubs
+            else => @compileError("Invalid suit: " ++ [_]u8{suit_char}),
+        };
+
+        cards[i / 2] = Card.init(rank, suit);
+    }
+
+    return cards;
+}
+
+// Common showdown result type
+pub const ShowdownResult = struct { winner: u8, tie: bool, winning_rank: HandRank };
+
+pub fn generateRandomHand(random: std.Random) Hand {
+    var hand_bits: u64 = 0;
+    var used_cards = std.StaticBitSet(52).initEmpty();
+
+    // Generate 7 unique random cards and compute bits directly
+    var cards_added: u8 = 0;
+    while (cards_added < 7) {
+        const card_idx = random.uintLessThan(u8, 52);
+        if (!used_cards.isSet(card_idx)) {
+            used_cards.set(card_idx);
+
+            // Compute bit directly without creating Card object
+            const card_bit = @as(u64, 1) << @intCast(card_idx);
+            hand_bits |= card_bit;
+
+            cards_added += 1;
+        }
+    }
+
+    return Hand{ .bits = hand_bits };
+}
+
+// Sample remaining cards avoiding conflicts with used cards
+pub fn sampleRemainingCards(used_cards: []const Card, num_cards: u8, rng: std.Random) Hand {
+    var used_bits: u64 = 0;
+    for (used_cards) |card| {
+        used_bits |= card.bits;
+    }
+    const sampled_bits = sampleRemainingCardsBits(used_bits, num_cards, rng);
+    return Hand{ .bits = sampled_bits };
+}
+
+// =============================================================================
+// IMPLEMENTATION DETAILS
+// =============================================================================
+
+// Private bit manipulation functions for performance
+inline fn cardsToBits(cards: []const Card) u64 {
+    var bits: u64 = 0;
+    for (cards) |card| {
+        bits |= card.bits;
+    }
+    return bits;
+}
+
+inline fn sampleRemainingCardsBits(used_cards: u64, num_cards: u8, rng: std.Random) u64 {
+    var sampled_cards: u64 = 0;
+    var cards_sampled: u8 = 0;
+
+    while (cards_sampled < num_cards) {
+        const card_idx = rng.uintLessThan(u8, 52);
+        const card_bit = @as(u64, 1) << @intCast(card_idx);
+
+        // Skip if card already used or sampled
+        if ((used_cards & card_bit) != 0 or (sampled_cards & card_bit) != 0) {
+            continue;
+        }
+
+        sampled_cards |= card_bit;
+        cards_sampled += 1;
+    }
+
+    return sampled_cards;
+}
+
+inline fn evaluateShowdownHeadToHeadBits(hand1_bits: u64, hand2_bits: u64) ShowdownResult {
+    const rank1 = (Hand{ .bits = hand1_bits }).evaluate();
+    const rank2 = (Hand{ .bits = hand2_bits }).evaluate();
+
+    const rank1_value = @intFromEnum(rank1);
+    const rank2_value = @intFromEnum(rank2);
+
+    if (rank1_value > rank2_value) {
+        return .{ .winner = 0, .tie = false, .winning_rank = rank1 };
+    } else if (rank2_value > rank1_value) {
+        return .{ .winner = 1, .tie = false, .winning_rank = rank2 };
+    } else {
+        return .{ .winner = 0, .tie = true, .winning_rank = rank1 };
+    }
+}
+
 // Perfect Hash Lookup Tables for 7-card evaluation
 // Generated at compile time for zero runtime overhead
 
@@ -194,7 +458,7 @@ inline fn extractFlushRankMaskOptimized(suit_cards: u64, suit: u3) u13 {
 
 // Ultra-optimized rank extraction using manual unrolling for Apple M1
 // Achieves 61% performance improvement through parallel execution
-pub inline fn extractRankDataOptimized(hand_bits: u64) struct { counts: [13]u8, mask: u16 } {
+inline fn extractRankDataOptimized(hand_bits: u64) struct { counts: [13]u8, mask: u16 } {
     // Manual unrolling allows all 13 popcount operations to execute in parallel on M1
     const r0 = @popCount((hand_bits >> 0) & 0xF); // Rank 2
     const r1 = @popCount((hand_bits >> 4) & 0xF); // Rank 3
@@ -271,63 +535,6 @@ inline fn evaluateNonFlushWithPrecomputedRanks(rank_counts: [13]u8, rank_mask: u
         pair_category;
 }
 
-// Efficient card representation using bit manipulation
-pub const Card = struct {
-    bits: u64,
-
-    pub fn init(rank: u8, suit: u2) Card {
-        // Each card is represented as a single bit
-        // Cards 0-51: rank 2-14, suits 0-3
-        const card_index = (rank - 2) * 4 + suit;
-        return Card{ .bits = @as(u64, 1) << @intCast(card_index) };
-    }
-
-    pub fn getRank(self: Card) u8 {
-        const card_index = @ctz(self.bits);
-        return @intCast((card_index / 4) + 2);
-    }
-
-    pub fn getSuit(self: Card) u2 {
-        const card_index = @ctz(self.bits);
-        return @intCast(card_index % 4);
-    }
-};
-
-// 7-card hand using bit representation for maximum performance
-pub const Hand = struct {
-    bits: u64, // All 7 cards as bits
-
-    pub fn init() Hand {
-        return Hand{ .bits = 0 };
-    }
-
-    pub fn addCard(self: *Hand, card: Card) void {
-        self.bits |= card.bits;
-    }
-
-    pub fn fromCards(cards: [7]Card) Hand {
-        var hand = init();
-        for (cards) |card| {
-            hand.bits |= card.bits;
-        }
-        return hand;
-    }
-
-    // High-performance 7-card hand evaluation with ultra-optimized flush detection
-    // Uses parallel suit extraction and eliminates nested loops
-    pub inline fn evaluate(self: Hand) HandRank {
-        // Ultra-fast flush detection with parallel suit processing
-        const flush_result = detectFlushOptimized(self.bits);
-        if (flush_result > 0) {
-            return @enumFromInt(flush_result);
-        }
-
-        // Extract rank data once for non-flush evaluation
-        const rank_data = extractRankDataOptimized(self.bits);
-        return evaluateNonFlushWithPrecomputedRanks(rank_data.counts, rank_data.mask);
-    }
-};
-
 // Pre-computed straight patterns for lookup table optimization
 const STRAIGHT_PATTERNS = [_]u16{
     0b1111100000000, // A-K-Q-J-T (royal straight)
@@ -343,7 +550,7 @@ const STRAIGHT_PATTERNS = [_]u16{
 };
 
 // Optimized straight detection using lookup table (Priority 1 optimization)
-pub inline fn checkStraight(mask: u16) bool {
+inline fn checkStraight(mask: u16) bool {
     // Single loop through pre-computed patterns - should be faster than shifting
     for (STRAIGHT_PATTERNS) |pattern| {
         if ((mask & pattern) == pattern) return true;
@@ -352,7 +559,7 @@ pub inline fn checkStraight(mask: u16) bool {
 }
 
 // Keep original implementation for testing/comparison
-pub inline fn checkStraightOriginal(mask: u16) bool {
+inline fn checkStraightOriginal(mask: u16) bool {
     // Check A-2-3-4-5 (wheel) - bits 12,0,1,2,3 (Ace is at position 12)
     if ((mask & 0b1000000001111) == 0b1000000001111) return true;
 
@@ -365,163 +572,10 @@ pub inline fn checkStraightOriginal(mask: u16) bool {
     return false;
 }
 
-// Convenience functions for creating cards with enums
-pub fn createCard(suit: Suit, rank: Rank) Card {
-    return Card.init(@intFromEnum(rank), @intFromEnum(suit));
-}
+// =============================================================================
+// TESTS
+// =============================================================================
 
-pub fn createHand(cards: []const struct { Suit, Rank }) Hand {
-    var hand = Hand.init();
-    for (cards) |card_info| {
-        const card = createCard(card_info[0], card_info[1]);
-        hand.addCard(card);
-    }
-    return hand;
-}
-
-// Parse card string like "AsKsQsJsTs2h3h" into slice
-pub fn parseCards(card_string: []const u8, allocator: std.mem.Allocator) ![]Card {
-    if (card_string.len % 2 != 0) {
-        return error.InvalidCardString;
-    }
-
-    const card_count = card_string.len / 2;
-    var cards = try allocator.alloc(Card, card_count);
-    var i: usize = 0;
-
-    while (i < card_string.len) : (i += 2) {
-        const rank_char = card_string[i];
-        const suit_char = card_string[i + 1];
-
-        // Parse rank
-        const rank: u8 = switch (rank_char) {
-            '2'...'9' => rank_char - '0',
-            'T' => 10,
-            'J' => 11,
-            'Q' => 12,
-            'K' => 13,
-            'A' => 14,
-            else => return error.InvalidRank,
-        };
-
-        // Parse suit
-        const suit: u2 = switch (suit_char) {
-            'h' => 0, // hearts
-            's' => 1, // spades
-            'd' => 2, // diamonds
-            'c' => 3, // clubs
-            else => return error.InvalidSuit,
-        };
-
-        cards[i / 2] = Card.init(rank, suit);
-    }
-
-    return cards;
-}
-
-/// Convert card slice to Hand for fast evaluation
-pub fn cardsToHand(cards: []const Card) Hand {
-    var hand = Hand.init();
-    for (cards) |card| {
-        hand.addCard(card);
-    }
-    return hand;
-}
-
-/// Compile-time card parsing - returns fixed array, no allocation needed
-pub fn mustParseCards(comptime card_string: []const u8) [card_string.len / 2]Card {
-    if (card_string.len % 2 != 0) {
-        @compileError("Invalid card string length: " ++ card_string);
-    }
-
-    const card_count = card_string.len / 2;
-    var cards: [card_count]Card = undefined;
-
-    comptime var i: usize = 0;
-    inline while (i < card_string.len) : (i += 2) {
-        const rank_char = card_string[i];
-        const suit_char = card_string[i + 1];
-
-        // Parse rank
-        const rank: u8 = switch (rank_char) {
-            '2'...'9' => rank_char - '0',
-            'T' => 10,
-            'J' => 11,
-            'Q' => 12,
-            'K' => 13,
-            'A' => 14,
-            else => @compileError("Invalid rank: " ++ [_]u8{rank_char}),
-        };
-
-        // Parse suit
-        const suit: u2 = switch (suit_char) {
-            'h' => 0, // hearts
-            's' => 1, // spades
-            'd' => 2, // diamonds
-            'c' => 3, // clubs
-            else => @compileError("Invalid suit: " ++ [_]u8{suit_char}),
-        };
-
-        cards[i / 2] = Card.init(rank, suit);
-    }
-
-    return cards;
-}
-
-/// Evaluate 7 cards directly (convenience function)
-pub fn evaluate7(cards: [7]Card) HandRank {
-    const hand = Hand.fromCards(cards);
-    return hand.evaluate();
-}
-
-/// Evaluate card slice (convenience function)
-pub fn evaluateCards(cards: []const Card) HandRank {
-    if (cards.len != 7) {
-        // For now, only support 7-card evaluation
-        return .high_card;
-    }
-
-    const hand = cardsToHand(cards);
-    return hand.evaluate();
-}
-
-pub fn generateRandomHands(allocator: std.mem.Allocator, count: u32, seed: u64) ![]Hand {
-    var rng = std.Random.DefaultPrng.init(seed);
-    const random = rng.random();
-
-    const hands = try allocator.alloc(Hand, count);
-
-    for (hands) |*hand| {
-        hand.* = generateRandomHand(random);
-    }
-
-    return hands;
-}
-
-pub fn generateRandomHand(random: std.Random) Hand {
-    var hand = Hand.init();
-    var used_cards = std.StaticBitSet(52).initEmpty();
-
-    // Generate 7 unique random cards
-    var cards_added: u8 = 0;
-    while (cards_added < 7) {
-        const card_idx = random.uintLessThan(u8, 52);
-        if (!used_cards.isSet(card_idx)) {
-            used_cards.set(card_idx);
-
-            // Convert card index to rank/suit
-            const rank: u8 = (card_idx / 4) + 2; // 0-51 -> ranks 2-14
-            const suit: u2 = @intCast(card_idx % 4);
-
-            hand.addCard(Card.init(rank, suit));
-            cards_added += 1;
-        }
-    }
-
-    return hand;
-}
-
-// Tests
 const testing = std.testing;
 
 test "card creation and properties" {
@@ -574,10 +628,6 @@ test "known hand evaluations" {
 }
 
 test "known hand patterns correctness" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
     // Test case data with card strings and expected results
     const test_data = [_]struct { cards: []const u8, expected: HandRank }{
         .{ .cards = "AsKsQsJsTs2h3d", .expected = .straight_flush }, // Royal flush
@@ -594,19 +644,20 @@ test "known hand patterns correctness" {
     };
 
     // Verify known hand patterns evaluate correctly
-    for (test_data) |test_case| {
-        const cards = try parseCards(test_case.cards, allocator);
-        defer allocator.free(cards);
-
-        const result_hand = evaluateCards(cards);
+    inline for (test_data) |test_case| {
+        const cards = mustParseCards(test_case.cards);
+        const hand = Hand.fromCards(cards);
+        const result_hand = hand.evaluate();
         try testing.expect(result_hand == test_case.expected);
     }
 
-    // Test random hands for basic validity
-    const random_hands = try generateRandomHands(allocator, 100, 123);
-    defer allocator.free(random_hands);
+    // Test random hands for basic validity (using stack allocation for test)
+    var rng = std.Random.DefaultPrng.init(123);
+    const random = rng.random();
 
-    for (random_hands) |hand| {
+    var i: u32 = 0;
+    while (i < 100) : (i += 1) {
+        const hand = generateRandomHand(random);
         const result_hand = hand.evaluate();
         try testing.expect(@intFromEnum(result_hand) >= 1);
         try testing.expect(@intFromEnum(result_hand) <= 9);
@@ -614,57 +665,42 @@ test "known hand patterns correctness" {
 }
 
 test "edge cases and corner cases" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
     // Test all straight variations
-    const ace_high_straight = try parseCards("AsKsQdJcTh2h3d", allocator);
-    defer allocator.free(ace_high_straight);
-    try testing.expect(evaluateCards(ace_high_straight) == .straight);
+    const ace_high_straight = Hand.fromCards(mustParseCards("AsKsQdJcTh2h3d"));
+    try testing.expect(ace_high_straight.evaluate() == .straight);
 
-    const wheel_straight = try parseCards("Ah2s3d4c5h6s7d", allocator);
-    defer allocator.free(wheel_straight);
-    try testing.expect(evaluateCards(wheel_straight) == .straight);
+    const wheel_straight = Hand.fromCards(mustParseCards("Ah2s3d4c5h6s7d"));
+    try testing.expect(wheel_straight.evaluate() == .straight);
 
-    const middle_straight = try parseCards("6h7s8d9cTh2s3d", allocator);
-    defer allocator.free(middle_straight);
-    try testing.expect(evaluateCards(middle_straight) == .straight);
+    const middle_straight = Hand.fromCards(mustParseCards("6h7s8d9cTh2s3d"));
+    try testing.expect(middle_straight.evaluate() == .straight);
 
     // Test flush vs straight priority
-    const flush_beats_straight = try parseCards("AhKhQhJhTh2s3d", allocator);
-    defer allocator.free(flush_beats_straight);
-    try testing.expect(evaluateCards(flush_beats_straight) == .straight_flush);
+    const flush_beats_straight = Hand.fromCards(mustParseCards("AhKhQhJhTh2s3d"));
+    try testing.expect(flush_beats_straight.evaluate() == .straight_flush);
 
     // Test full house variations
-    const trips_over_pair = try parseCards("AhAsAdKhKs2c3d", allocator);
-    defer allocator.free(trips_over_pair);
-    try testing.expect(evaluateCards(trips_over_pair) == .full_house);
+    const trips_over_pair = Hand.fromCards(mustParseCards("AhAsAdKhKs2c3d"));
+    try testing.expect(trips_over_pair.evaluate() == .full_house);
 
-    const pair_over_trips = try parseCards("AhAsKdKhKs2c3d", allocator);
-    defer allocator.free(pair_over_trips);
-    try testing.expect(evaluateCards(pair_over_trips) == .full_house);
+    const pair_over_trips = Hand.fromCards(mustParseCards("AhAsKdKhKs2c3d"));
+    try testing.expect(pair_over_trips.evaluate() == .full_house);
 
     // Test quad variations
-    const quads_with_trips = try parseCards("AhAsAdAcKhKsKd", allocator);
-    defer allocator.free(quads_with_trips);
-    try testing.expect(evaluateCards(quads_with_trips) == .four_of_a_kind);
+    const quads_with_trips = Hand.fromCards(mustParseCards("AhAsAdAcKhKsKd"));
+    try testing.expect(quads_with_trips.evaluate() == .four_of_a_kind);
 
     // Test two pair edge cases
-    const high_two_pair = try parseCards("AhAsKdKh2s3c4d", allocator);
-    defer allocator.free(high_two_pair);
-    try testing.expect(evaluateCards(high_two_pair) == .two_pair);
+    const high_two_pair = Hand.fromCards(mustParseCards("AhAsKdKh2s3c4d"));
+    try testing.expect(high_two_pair.evaluate() == .two_pair);
 
-    const low_two_pair = try parseCards("3h3s2d2hAs5c6d", allocator);
-    defer allocator.free(low_two_pair);
-    try testing.expect(evaluateCards(low_two_pair) == .two_pair);
+    const low_two_pair = Hand.fromCards(mustParseCards("3h3s2d2hAs5c6d"));
+    try testing.expect(low_two_pair.evaluate() == .two_pair);
 
     // Test minimum hands
-    const ace_high = try parseCards("AhKsQdJc9h7s2d", allocator);
-    defer allocator.free(ace_high);
-    try testing.expect(evaluateCards(ace_high) == .high_card);
+    const ace_high = Hand.fromCards(mustParseCards("AhKsQdJc9h7s2d"));
+    try testing.expect(ace_high.evaluate() == .high_card);
 
-    const deuce_high = try parseCards("2h3s4d5c7h8s9d", allocator);
-    defer allocator.free(deuce_high);
-    try testing.expect(evaluateCards(deuce_high) == .high_card);
+    const deuce_high = Hand.fromCards(mustParseCards("2h3s4d5c7h8s9d"));
+    try testing.expect(deuce_high.evaluate() == .high_card);
 }
