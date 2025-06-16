@@ -218,6 +218,15 @@ pub fn mustParseCards(comptime card_string: []const u8) [card_string.len / 2]Car
     return cards;
 }
 
+/// Compile-time hole card parsing - returns exactly 2 cards
+pub fn mustParseHoleCards(comptime card_string: []const u8) [2]Card {
+    if (card_string.len != 4) {
+        @compileError("Hole cards must be exactly 4 characters (e.g., 'AhAs'): " ++ card_string);
+    }
+    const cards = mustParseCards(card_string);
+    return [2]Card{ cards[0], cards[1] };
+}
+
 // Common showdown result type
 pub const ShowdownResult = struct { winner: u8, tie: bool, winning_rank: HandRank };
 
@@ -662,6 +671,16 @@ test "known hand patterns correctness" {
         try testing.expect(@intFromEnum(result_hand) >= 1);
         try testing.expect(@intFromEnum(result_hand) <= 9);
     }
+}
+
+test "mustParseHoleCards helper" {
+    const aa = mustParseHoleCards("AhAs");
+    try testing.expect(aa[0].getRank() == 14 and aa[0].getSuit() == 0); // Ah
+    try testing.expect(aa[1].getRank() == 14 and aa[1].getSuit() == 1); // As
+
+    const kq = mustParseHoleCards("KdQc");
+    try testing.expect(kq[0].getRank() == 13 and kq[0].getSuit() == 2); // Kd
+    try testing.expect(kq[1].getRank() == 12 and kq[1].getSuit() == 3); // Qc
 }
 
 test "edge cases and corner cases" {

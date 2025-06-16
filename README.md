@@ -53,21 +53,16 @@ const rank = hand.evaluate(); // .straight_flush (royal flush)
 const equity = @import("equity.zig");
 const poker = @import("poker.zig");
 
-// Calculate preflop equity using compile-time parsing (no allocator needed)
-const aa_cards = poker.mustParseCards("AhAs");
-const aa = [2]poker.Card{ aa_cards[0], aa_cards[1] };
-
-const kk_cards = poker.mustParseCards("KdKc");
-const kk = [2]poker.Card{ kk_cards[0], kk_cards[1] };
+// Calculate preflop equity using simplified parsing
+const aa = poker.mustParseHoleCards("AhAs");
+const kk = poker.mustParseHoleCards("KdKc");
 
 var prng = std.Random.DefaultPrng.init(42);
 const result = try equity.equityMonteCarlo(aa, kk, &.{}, 100000, prng.random(), allocator);
 // result.equity() ≈ 0.80 (80% equity for AA vs KK preflop)
 
 // Multi-way equity with postflop board
-const qq_cards = poker.mustParseCards("QhQs");
-const qq = [2]poker.Card{ qq_cards[0], qq_cards[1] };
-
+const qq = poker.mustParseHoleCards("QhQs");
 const board_cards = poker.mustParseCards("AdKh7s");
 
 var hands = [_][2]poker.Card{ aa, kk, qq };
