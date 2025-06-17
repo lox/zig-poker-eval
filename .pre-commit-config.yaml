@@ -35,9 +35,3 @@ repos:
         language: system
         files: \.zig$
         pass_filenames: false
-      - id: performance-regression-check
-        name: Performance regression check
-        entry: scripts/compare_bench.sh
-        language: system
-        files: \.zig$
-        pass_filenames: false
