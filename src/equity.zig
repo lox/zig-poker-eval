@@ -449,7 +449,7 @@ pub fn threaded(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card, board: []
 // Tests
 const testing = std.testing;
 
-test "basic equity calculation" {
+test "AA vs KK equity should be ~80%" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
@@ -460,12 +460,79 @@ test "basic equity calculation" {
     const aa = [_]poker.Card{ poker.Card.init(14, 0), poker.Card.init(14, 1) }; // AhAs
     const kk = [_]poker.Card{ poker.Card.init(13, 2), poker.Card.init(13, 3) }; // KdKc
 
-    const result = try monteCarlo(aa, kk, &.{}, 50000, rng, allocator);
+    const result = try monteCarlo(aa, kk, &.{}, 100000, rng, allocator);
 
-    // For now, just test that equity calculation works and is reasonable
-    try testing.expect(result.equity() > 0.3);
-    try testing.expect(result.equity() < 0.9);
-    try testing.expect(result.total_simulations == 50000);
+    // AA should beat KK roughly 80% of the time
+    try testing.expect(result.equity() > 0.75);
+    try testing.expect(result.equity() < 0.85);
+}
+
+test "AA vs 22 equity should be ~85%" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var prng = std.Random.DefaultPrng.init(42);
+    const rng = prng.random();
+
+    const aa = [_]poker.Card{ poker.Card.init(14, 0), poker.Card.init(14, 1) }; // AhAs
+    const twos = [_]poker.Card{ poker.Card.init(2, 2), poker.Card.init(2, 3) }; // 2d2c
+
+    const result = try monteCarlo(aa, twos, &.{}, 100000, rng, allocator);
+
+    // AA should dominate 22
+    try testing.expect(result.equity() > 0.80);
+    try testing.expect(result.equity() < 0.90);
+}
+
+test "hand evaluation sanity check" {
+    // Test with a very simple case that should clearly work
+    const aa_hole = [2]poker.Card{ poker.Card.init(14, 0), poker.Card.init(14, 1) }; // AhAs
+    const two_hole = [2]poker.Card{ poker.Card.init(2, 2), poker.Card.init(2, 3) }; // 2d2c
+
+    // Simple board that doesn't improve either
+    const board = [_]poker.Card{
+        poker.Card.init(7, 2), // 7d
+        poker.Card.init(8, 3), // 8c
+        poker.Card.init(9, 0), // 9h
+        poker.Card.init(3, 1), // 3s
+        poker.Card.init(4, 2), // 4d
+    };
+
+    const aa_final = poker.Hand.fromHoleAndBoard(aa_hole, &board);
+    const two_final = poker.Hand.fromHoleAndBoard(two_hole, &board);
+
+    const result = evaluateEquityShowdown(aa_final, two_final);
+
+    // AA should definitely beat 22
+    try testing.expect(!result.tie);
+    try testing.expect(result.winner == 0); // AA is player 0
+}
+
+test "single board scenario" {
+    // Test a specific known scenario
+    _ = std.heap.GeneralPurposeAllocator(.{}){};
+
+    const aa = [_]poker.Card{ poker.Card.init(14, 0), poker.Card.init(14, 1) }; // AhAs
+    const kk = [_]poker.Card{ poker.Card.init(13, 2), poker.Card.init(13, 3) }; // KdKc
+
+    // Board that doesn't help either: 7h 8s 9d 3c 4h
+    const board = [_]poker.Card{
+        poker.Card.init(7, 0), // 7h
+        poker.Card.init(8, 1), // 8s
+        poker.Card.init(9, 2), // 9d
+        poker.Card.init(3, 3), // 3c
+        poker.Card.init(4, 0), // 4h
+    };
+
+    const aa_hand = poker.Hand.fromHoleAndBoard(aa, &board);
+    const kk_hand = poker.Hand.fromHoleAndBoard(kk, &board);
+
+    const result = evaluateEquityShowdown(aa_hand, kk_hand);
+
+    // AA should beat KK on this board
+    try testing.expect(!result.tie);
+    try testing.expect(result.winner == 0);
 }
 
 test "exact vs monte carlo equity" {

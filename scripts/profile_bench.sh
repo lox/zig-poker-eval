@@ -25,7 +25,7 @@ else
             BENCH_TYPE="single-threaded equity"
             ;;
         equityThreaded)
-            BENCH_ARGS="--equityThreaded"
+            BENCH_ARGS="--threaded"
             BENCH_TYPE="multi-threaded equity"
             ;;
         both)
@@ -33,7 +33,7 @@ else
             BENCH_TYPE="evaluation and single-threaded equity"
             ;;
         all)
-            BENCH_ARGS="--eval --equity --equityThreaded"
+            BENCH_ARGS="--eval --equity --threaded"
             BENCH_TYPE="all benchmarks"
             ;;
         *)
@@ -50,10 +50,10 @@ fi
 
 # Build benchmark first (debug mode for better profiling)
 echo "Building benchmark..."
-zig build bench -Doptimize=Debug
+zig build -Doptimize=Debug
 
 # Find the benchmark executable
-BENCH_EXE="./zig-out/bin/benchmark"
+BENCH_EXE="./zig-out/bin/zig-poker-eval"
 if [[ ! -f "$BENCH_EXE" ]]; then
     echo "Error: Benchmark executable not found at $BENCH_EXE"
     exit 1
@@ -62,7 +62,7 @@ fi
 echo "Profiling $BENCH_TYPE with sample ..."
 
 # Start benchmark in background and profile it
-$BENCH_EXE $BENCH_ARGS &
+$BENCH_EXE bench $BENCH_ARGS &
 BENCH_PID=$!
 
 # Sample the running process for 10 seconds with full paths

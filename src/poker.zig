@@ -82,15 +82,22 @@ pub const Hand = struct {
 
     // High-performance evaluation using cached bits
     pub inline fn evaluate(self: Hand) HandRank {
-        // Ultra-fast flush detection with parallel suit processing
+        return self.evaluateDetailed().rank;
+    }
+
+    // Detailed evaluation for proper hand comparison
+    pub inline fn evaluateDetailed(self: Hand) HandEvaluation {
+        // Extract rank data once
+        const rank_data = extractRankDataOptimized(self.bits);
+
+        // Check for flush first
         const flush_result = detectFlushOptimized(self.bits);
         if (flush_result > 0) {
-            return @enumFromInt(flush_result);
+            return buildFlushEvaluation(@enumFromInt(flush_result), rank_data.counts);
         }
 
-        // Extract rank data once for non-flush evaluation
-        const rank_data = extractRankDataOptimized(self.bits);
-        return evaluateNonFlushWithPrecomputedRanks(rank_data.counts, rank_data.mask);
+        // Non-flush hands
+        return buildNonFlushEvaluation(rank_data.counts, rank_data.mask);
     }
 
     // Hand composition methods
@@ -120,7 +127,9 @@ pub const Hand = struct {
 
     // Compare two hands for showdown
     pub fn compareWith(self: Hand, other: Hand) ShowdownResult {
-        return evaluateShowdownHeadToHeadBits(self.bits, other.bits);
+        const self_eval = self.evaluateDetailed();
+        const other_eval = other.evaluateDetailed();
+        return self_eval.compare(other_eval);
     }
 };
 
@@ -227,6 +236,52 @@ pub fn mustParseHoleCards(comptime card_string: []const u8) [2]Card {
     return [2]Card{ cards[0], cards[1] };
 }
 
+// Detailed hand evaluation with rank hierarchy for proper comparison
+pub const HandEvaluation = struct {
+    rank: HandRank,
+    primary: u8, // Highest pair/trip/quad rank
+    secondary: u8, // Second pair rank for two pair/full house
+    kickers: [5]u8, // Remaining cards for tiebreaking (sorted high to low)
+
+    pub fn compare(self: HandEvaluation, other: HandEvaluation) ShowdownResult {
+        // First compare hand ranks
+        const self_rank_value = @intFromEnum(self.rank);
+        const other_rank_value = @intFromEnum(other.rank);
+
+        if (self_rank_value > other_rank_value) {
+            return .{ .winner = 0, .tie = false, .winning_rank = self.rank };
+        } else if (other_rank_value > self_rank_value) {
+            return .{ .winner = 1, .tie = false, .winning_rank = other.rank };
+        }
+
+        // Same hand rank - compare by primary rank
+        if (self.primary > other.primary) {
+            return .{ .winner = 0, .tie = false, .winning_rank = self.rank };
+        } else if (other.primary > self.primary) {
+            return .{ .winner = 1, .tie = false, .winning_rank = other.rank };
+        }
+
+        // Same primary - compare secondary (for two pair, full house)
+        if (self.secondary > other.secondary) {
+            return .{ .winner = 0, .tie = false, .winning_rank = self.rank };
+        } else if (other.secondary > self.secondary) {
+            return .{ .winner = 1, .tie = false, .winning_rank = other.rank };
+        }
+
+        // Compare kickers
+        for (0..5) |i| {
+            if (self.kickers[i] > other.kickers[i]) {
+                return .{ .winner = 0, .tie = false, .winning_rank = self.rank };
+            } else if (other.kickers[i] > self.kickers[i]) {
+                return .{ .winner = 1, .tie = false, .winning_rank = other.rank };
+            }
+        }
+
+        // True tie
+        return .{ .winner = 0xFF, .tie = true, .winning_rank = self.rank };
+    }
+};
+
 // Common showdown result type
 pub const ShowdownResult = struct { winner: u8, tie: bool, winning_rank: HandRank };
 
@@ -293,22 +348,6 @@ inline fn sampleRemainingCardsBits(used_cards: u64, num_cards: u8, rng: std.Rand
     }
 
     return sampled_cards;
-}
-
-inline fn evaluateShowdownHeadToHeadBits(hand1_bits: u64, hand2_bits: u64) ShowdownResult {
-    const rank1 = (Hand{ .bits = hand1_bits }).evaluate();
-    const rank2 = (Hand{ .bits = hand2_bits }).evaluate();
-
-    const rank1_value = @intFromEnum(rank1);
-    const rank2_value = @intFromEnum(rank2);
-
-    if (rank1_value > rank2_value) {
-        return .{ .winner = 0, .tie = false, .winning_rank = rank1 };
-    } else if (rank2_value > rank1_value) {
-        return .{ .winner = 1, .tie = false, .winning_rank = rank2 };
-    } else {
-        return .{ .winner = 0, .tie = true, .winning_rank = rank1 };
-    }
 }
 
 // Perfect Hash Lookup Tables for 7-card evaluation
@@ -581,6 +620,162 @@ inline fn checkStraightOriginal(mask: u16) bool {
     return false;
 }
 
+// Build detailed evaluation for flush hands
+inline fn buildFlushEvaluation(hand_rank: HandRank, rank_counts: [13]u8) HandEvaluation {
+    var kickers: [5]u8 = [_]u8{0} ** 5;
+    var primary: u8 = 0;
+
+    // For straight flushes, find the high card of the straight (like straights)
+    // For regular flushes, collect the top 5 cards as kickers
+    if (hand_rank == .straight_flush) {
+        // For straight flushes, primary is the high card of the straight
+        // The flush detection already verified it's a straight flush
+        // We need to determine the straight high card from the rank counts
+        var rank_mask: u16 = 0;
+        for (rank_counts, 0..) |count, rank| {
+            if (count > 0) {
+                rank_mask |= @as(u16, 1) << @intCast(rank);
+            }
+        }
+
+        // Check for wheel straight flush
+        if ((rank_mask & 0b1000000001111) == 0b1000000001111) {
+            primary = 5; // Wheel straight flush, 5 is high
+        } else {
+            // Find highest straight
+            var high_rank_idx: i8 = 12;
+            while (high_rank_idx >= 4) : (high_rank_idx -= 1) {
+                const shift_amount = @as(u4, @intCast(high_rank_idx - 4));
+                const straight_mask = (@as(u16, 0b11111) << shift_amount);
+                if ((rank_mask & straight_mask) == straight_mask) {
+                    primary = @intCast(high_rank_idx + 2);
+                    break;
+                }
+            }
+        }
+        // Straight flushes don't use kickers
+        kickers = [_]u8{0} ** 5;
+    } else {
+        // Regular flush: collect top 5 cards as kickers
+        var kicker_idx: usize = 0;
+        var rank_idx: i8 = 12; // Start from ace
+        while (rank_idx >= 0 and kicker_idx < 5) : (rank_idx -= 1) {
+            const rank = @as(usize, @intCast(rank_idx));
+            if (rank_counts[rank] > 0) {
+                kickers[kicker_idx] = @intCast(rank + 2); // Convert to card rank
+                kicker_idx += 1;
+            }
+        }
+    }
+
+    return HandEvaluation{
+        .rank = hand_rank,
+        .primary = primary,
+        .secondary = 0, // Not applicable for flushes
+        .kickers = kickers,
+    };
+}
+
+// Build detailed evaluation for non-flush hands
+inline fn buildNonFlushEvaluation(rank_counts: [13]u8, rank_mask: u16) HandEvaluation {
+    var pairs: [3]u8 = [_]u8{0} ** 3;
+    var trips: [2]u8 = [_]u8{0} ** 2;
+    var quads: u8 = 0;
+    var kickers: [5]u8 = [_]u8{0} ** 5;
+
+    var pair_count: usize = 0;
+    var trip_count: usize = 0;
+
+    // Collect pairs, trips, quads (reverse order - ace to deuce)
+    var rank_idx: i8 = 12;
+    while (rank_idx >= 0) : (rank_idx -= 1) {
+        const rank = @as(usize, @intCast(rank_idx));
+        const count = rank_counts[rank];
+        const card_rank = @as(u8, @intCast(rank + 2));
+
+        if (count == 4) {
+            quads = card_rank;
+        } else if (count == 3 and trip_count < 2) {
+            trips[trip_count] = card_rank;
+            trip_count += 1;
+        } else if (count == 2 and pair_count < 3) {
+            pairs[pair_count] = card_rank;
+            pair_count += 1;
+        }
+    }
+
+    // Collect kickers (single cards)
+    var kicker_idx: usize = 0;
+    rank_idx = 12;
+    while (rank_idx >= 0 and kicker_idx < 5) : (rank_idx -= 1) {
+        const rank = @as(usize, @intCast(rank_idx));
+        if (rank_counts[rank] == 1) {
+            kickers[kicker_idx] = @intCast(rank + 2);
+            kicker_idx += 1;
+        }
+    }
+
+    // Determine hand rank and set primary/secondary
+    var hand_rank: HandRank = .high_card;
+    var primary: u8 = 0;
+    var secondary: u8 = 0;
+
+    if (quads > 0) {
+        hand_rank = .four_of_a_kind;
+        primary = quads;
+    } else if (trip_count > 0 and pair_count > 0) {
+        hand_rank = .full_house;
+        primary = trips[0];
+        secondary = pairs[0];
+    } else if (trip_count > 0) {
+        hand_rank = .three_of_a_kind;
+        primary = trips[0];
+    } else if (pair_count >= 2) {
+        hand_rank = .two_pair;
+        primary = pairs[0]; // Higher pair
+        secondary = pairs[1]; // Lower pair
+    } else if (pair_count == 1) {
+        hand_rank = .pair;
+        primary = pairs[0];
+    } else {
+        // Check for straight
+        const is_straight = checkStraight(rank_mask);
+        if (is_straight) {
+            hand_rank = .straight;
+            // For straights, primary is the high card of the actual straight
+            if ((rank_mask & 0b1000000001111) == 0b1000000001111) {
+                primary = 5; // Wheel straight (A-2-3-4-5), 5 is high
+            } else {
+                // Find the highest card of the 5-card straight by checking for 5 consecutive bits
+                var high_rank_idx: i8 = 12; // Start checking from Ace (index 12)
+                while (high_rank_idx >= 4) : (high_rank_idx -= 1) {
+                    // Create a mask for a 5-card straight ending at this rank index
+                    const shift_amount = @as(u4, @intCast(high_rank_idx - 4));
+                    const straight_mask = (@as(u16, 0b11111) << shift_amount);
+                    if ((rank_mask & straight_mask) == straight_mask) {
+                        primary = @intCast(high_rank_idx + 2); // Convert index to rank (2-14)
+                        break;
+                    }
+                }
+            }
+        } else {
+            hand_rank = .high_card;
+        }
+    }
+
+    // For straights and flushes, kickers don't matter - only the primary rank
+    if (hand_rank == .straight or hand_rank == .straight_flush) {
+        kickers = [_]u8{0} ** 5; // Clear kickers for straights
+    }
+
+    return HandEvaluation{
+        .rank = hand_rank,
+        .primary = primary,
+        .secondary = secondary,
+        .kickers = kickers,
+    };
+}
+
 // =============================================================================
 // TESTS
 // =============================================================================
@@ -722,4 +917,106 @@ test "edge cases and corner cases" {
 
     const deuce_high = Hand.fromCards(mustParseCards("2h3s4d5c7h8s9d"));
     try testing.expect(deuce_high.evaluate() == .high_card);
+}
+
+test "hand comparison - pairs hierarchy" {
+    // AA should beat KK, KK should beat 22, etc.
+
+    // Fixed: Use non-sequential cards to avoid accidental straights
+    const aa = Hand.fromCards(mustParseCards("AhAs2d7c9h8s3d"));
+    const kk = Hand.fromCards(mustParseCards("KhKs2d7c9h8s3d"));
+    const tt = Hand.fromCards(mustParseCards("ThTs2d7c9h8s3d"));
+    const twos = Hand.fromCards(mustParseCards("2h2s7d9c8h3sKd"));
+
+    // All should evaluate to .pair
+    try testing.expect(aa.evaluate() == .pair);
+    try testing.expect(kk.evaluate() == .pair);
+    try testing.expect(tt.evaluate() == .pair);
+    try testing.expect(twos.evaluate() == .pair);
+
+    // But compareWith shows them as ties (BUG!)
+    const aa_vs_kk = aa.compareWith(kk);
+    const aa_vs_twos = aa.compareWith(twos);
+    const kk_vs_twos = kk.compareWith(twos);
+
+    // These should NOT be ties - AA should beat KK and 22:
+    try testing.expect(aa_vs_kk.tie == false and aa_vs_kk.winner == 0); // AA beats KK
+    try testing.expect(aa_vs_twos.tie == false and aa_vs_twos.winner == 0); // AA beats 22
+    try testing.expect(kk_vs_twos.tie == false and kk_vs_twos.winner == 0); // KK beats 22
+}
+
+test "hand comparison - different hand types" {
+    // This works correctly - different hand types are compared properly
+    const aa = Hand.fromCards(mustParseCards("AhAs2d7c9h8s3d")); // pair
+    const ace_high = Hand.fromCards(mustParseCards("AhKd2d7c9h8s3d")); // high card
+    const flush = Hand.fromCards(mustParseCards("AhKh2h7h9h8s3d")); // flush
+
+    try testing.expect(aa.evaluate() == .pair);
+    try testing.expect(ace_high.evaluate() == .high_card);
+    try testing.expect(flush.evaluate() == .flush);
+
+    // These comparisons work correctly (different hand types)
+    const aa_vs_ace_high = aa.compareWith(ace_high);
+    const flush_vs_aa = flush.compareWith(aa);
+
+    try testing.expect(aa_vs_ace_high.tie == false);
+    try testing.expect(aa_vs_ace_high.winner == 0); // AA wins
+    try testing.expect(flush_vs_aa.tie == false);
+    try testing.expect(flush_vs_aa.winner == 0); // flush wins
+}
+
+test "hand comparison - high card hierarchy" {
+    // AK should beat AQ, AQ should beat AT, etc.
+    const ak = Hand.fromCards(mustParseCards("AhKd2d7c9h8s3d"));
+    const aq = Hand.fromCards(mustParseCards("AhQd2d7c9h8s3d"));
+    const a2 = Hand.fromCards(mustParseCards("AhTd2d7c9h8s3d"));
+
+    try testing.expect(ak.evaluate() == .high_card);
+    try testing.expect(aq.evaluate() == .high_card);
+    try testing.expect(a2.evaluate() == .high_card);
+
+    // These should not be ties - AK should beat AQ and AT
+    const ak_vs_aq = ak.compareWith(aq);
+    const ak_vs_a2 = ak.compareWith(a2);
+
+    try testing.expect(ak_vs_aq.tie == false and ak_vs_aq.winner == 0); // AK beats AQ
+    try testing.expect(ak_vs_a2.tie == false and ak_vs_a2.winner == 0); // AK beats AT
+}
+
+test "hand comparison - two pair hierarchy" {
+    // AA22 should beat KK33 and QQ22
+    const aa22 = Hand.fromCards(mustParseCards("AhAs2d2c7h9s8d"));
+    const kk33 = Hand.fromCards(mustParseCards("KhKs3d3c7h9s8d"));
+    const qq22 = Hand.fromCards(mustParseCards("QhQs2d2c7h9s8d"));
+
+    try testing.expect(aa22.evaluate() == .two_pair);
+    try testing.expect(kk33.evaluate() == .two_pair);
+    try testing.expect(qq22.evaluate() == .two_pair);
+
+    const aa22_vs_kk33 = aa22.compareWith(kk33);
+    const aa22_vs_qq22 = aa22.compareWith(qq22);
+
+    try testing.expect(aa22_vs_kk33.tie == false and aa22_vs_kk33.winner == 0); // AA22 beats KK33
+    try testing.expect(aa22_vs_qq22.tie == false and aa22_vs_qq22.winner == 0); // AA22 beats QQ22
+}
+
+test "straight ranking bug fix" {
+    // Critical bug: hand with A,8,7,6,5,4 should be 8-high straight, not ace-high
+    const hand_with_ace_and_straight = Hand.fromCards(mustParseCards("Ah8s7d6c5h4s2d"));
+    const eight_high_straight = Hand.fromCards(mustParseCards("8h7s6d5c4h3s2d"));
+
+    // Both should evaluate as straights
+    try testing.expect(hand_with_ace_and_straight.evaluate() == .straight);
+    try testing.expect(eight_high_straight.evaluate() == .straight);
+
+    // Should tie (both 8-high straights)
+    const result = hand_with_ace_and_straight.compareWith(eight_high_straight);
+    try testing.expect(result.tie == true);
+
+    // Test against a 9-high straight to ensure 8-high is ranked correctly
+    const nine_high_straight = Hand.fromCards(mustParseCards("9h8s7d6c5h4s2d"));
+    try testing.expect(nine_high_straight.evaluate() == .straight);
+
+    const vs_nine_high = hand_with_ace_and_straight.compareWith(nine_high_straight);
+    try testing.expect(vs_nine_high.tie == false and vs_nine_high.winner == 1); // 9-high beats 8-high
 }

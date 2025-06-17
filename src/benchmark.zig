@@ -1,12 +1,14 @@
 const std = @import("std");
 const poker = @import("poker.zig");
 const equity = @import("equity.zig");
+const ansi = @import("ansi.zig");
 
 pub fn runEvaluatorBenchmark(allocator: std.mem.Allocator, json_output: bool) !void {
     const print = std.debug.print;
 
     if (!json_output) {
-        print("=== Benchmark  ===\n", .{});
+        ansi.printBold("✋ Hand Evaluation Benchmark\n", .{});
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
     }
 
     // Generate fixed set of hands using Hand API
@@ -84,7 +86,8 @@ pub fn runEvaluatorBenchmark(allocator: std.mem.Allocator, json_output: bool) !v
             return;
         };
     } else {
-        print("\n=== Performance Summary ===\n", .{});
+        ansi.printBold("\n📊 Performance Summary\n", .{});
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
         print("{d:.2} ns/op (average across {} runs)\n", .{ avg_ns_per_op_f64, runs });
         print("{d:.1}M evaluations/second\n", .{evaluations_per_sec / 1_000_000.0});
     }
@@ -94,7 +97,8 @@ pub fn runEquityBenchmark(allocator: std.mem.Allocator, json_output: bool) !void
     const print = std.debug.print;
 
     if (!json_output) {
-        print("\n=== Equity Benchmark ===\n", .{});
+        ansi.printBold("\n🎯 Equity Benchmark\n", .{});
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
     }
 
     var prng = std.Random.DefaultPrng.init(42);
@@ -147,7 +151,8 @@ pub fn runEquityBenchmark(allocator: std.mem.Allocator, json_output: bool) !void
             return;
         };
     } else {
-        print("\n=== Equity Performance Summary ===\n", .{});
+        ansi.printBold("\n📊 Equity Performance Summary\n", .{});
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
         print("{d:.2} ns/simulation (average across {} runs)\n", .{ avg_ns_per_sim_f64, runs });
         print("{d:.1}K simulations/second\n", .{simulations_per_sec / 1000.0});
     }
@@ -157,7 +162,8 @@ pub fn runEquityBenchmarkThreaded(allocator: std.mem.Allocator, json_output: boo
     const print = std.debug.print;
 
     if (!json_output) {
-        print("\n=== Threaded Equity Benchmark ===\n", .{});
+        ansi.printBold("\n🚀 Threaded Equity Benchmark\n", .{});
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
     }
 
     // Same test scenario as single-threaded
@@ -208,7 +214,8 @@ pub fn runEquityBenchmarkThreaded(allocator: std.mem.Allocator, json_output: boo
             return;
         };
     } else {
-        print("\n=== Threaded Equity Performance Summary ===\n", .{});
+        ansi.printBold("\n📊 Threaded Equity Performance Summary\n", .{});
+        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
         print("{d:.2} ns/simulation (average across {} runs)\n", .{ avg_ns_per_sim_f64, runs });
         print("{d:.1}K simulations/second\n", .{simulations_per_sec / 1000.0});
     }

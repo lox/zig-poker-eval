@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const exe = b.addExecutable(.{
-        .name = "poker",
+        .name = "zig-poker-eval",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
@@ -16,26 +16,23 @@ pub fn build(b: *std.Build) void {
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
 
+    if (b.args) |args| {
+        run_cmd.addArgs(args);
+    }
+
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    const benchmark_exe = b.addExecutable(.{
-        .name = "benchmark",
-        .root_source_file = b.path("src/bench_main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    b.installArtifact(benchmark_exe);
-
-    const bench_cmd = b.addRunArtifact(benchmark_exe);
+    // Legacy bench command - now use: zig-poker-eval bench
+    const bench_cmd = b.addRunArtifact(exe);
     bench_cmd.step.dependOn(b.getInstallStep());
+    bench_cmd.addArgs(&.{"bench"});
 
     if (b.args) |args| {
         bench_cmd.addArgs(args);
     }
 
-    const bench_step = b.step("bench", "Run benchmarks");
+    const bench_step = b.step("bench", "Run benchmarks via CLI");
     bench_step.dependOn(&bench_cmd.step);
 
     // Tests
