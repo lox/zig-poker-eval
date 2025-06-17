@@ -14,7 +14,10 @@ WORKTREE_DIR=$(mktemp -d)
 cleanup() {
     cd "$PROJECT_ROOT"
     rm -f bench_results.json baseline.json current.json
-    git worktree remove "$WORKTREE_DIR" --force 2>/dev/null || true
+    if [ -d "$WORKTREE_DIR" ]; then
+        git worktree remove "$WORKTREE_DIR" --force 2>/dev/null || true
+        rm -rf "$WORKTREE_DIR" 2>/dev/null || true
+    fi
 }
 trap cleanup EXIT
 
@@ -27,14 +30,21 @@ cd "$PROJECT_ROOT"
 
 # Create worktree for baseline
 echo "Creating baseline worktree..."
-git worktree add "$WORKTREE_DIR" "$BASELINE_COMMIT" >/dev/null
+if ! git worktree add "$WORKTREE_DIR" "$BASELINE_COMMIT" >/dev/null 2>&1; then
+    echo "Failed to create worktree. Trying alternative approach..."
+    mkdir -p "$WORKTREE_DIR"
+    git clone . "$WORKTREE_DIR" >/dev/null 2>&1
+    cd "$WORKTREE_DIR"
+    git checkout "$BASELINE_COMMIT" >/dev/null 2>&1
+    cd "$PROJECT_ROOT"
+fi
 
 # Build and benchmark baseline
 echo "Building baseline..."
 cd "$WORKTREE_DIR"
 zig build -Doptimize=ReleaseFast >/dev/null
 echo "Running baseline benchmark..."
-zig build bench -Doptimize=ReleaseFast -- --eval --json-results >/dev/null
+zig build bench -Doptimize=ReleaseFast -- --eval --format json >/dev/null
 mv bench_results.json "$PROJECT_ROOT/baseline.json"
 
 baseline_ns=$(jq -r '.ns_per_op' "$PROJECT_ROOT/baseline.json")
@@ -45,7 +55,7 @@ echo "Building current version..."
 cd "$PROJECT_ROOT"
 zig build -Doptimize=ReleaseFast >/dev/null
 echo "Running current benchmark..."
-zig build bench -Doptimize=ReleaseFast -- --eval --json-results >/dev/null
+zig build bench -Doptimize=ReleaseFast -- --eval --format json >/dev/null
 mv bench_results.json current.json
 
 current_ns=$(jq -r '.ns_per_op' current.json)

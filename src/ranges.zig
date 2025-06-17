@@ -1,5 +1,6 @@
 const std = @import("std");
 const poker = @import("poker.zig");
+const notation_parser = @import("notation.zig");
 const simulation = @import("simulation.zig");
 
 /// Simple hand key for hash map - uses sorted card bits
@@ -49,14 +50,39 @@ pub const Range = struct {
     /// Add a hand using poker notation (e.g., "AA", "AKs", "AKo")
     /// For pocket pairs like "AA", this adds ALL possible combinations (6 for AA)
     /// For suited/offsuit like "AKs"/"AKo", this adds one representative hand
+    /// For unpaired notation like "AK", adds all combinations (16 total)
     pub fn addHandNotation(self: *Range, notation: []const u8, probability: f32) !void {
         if (notation.len == 2 and notation[0] == notation[1]) {
             // Pocket pair - add all combinations
             try self.addAllPocketPairCombinations(notation, probability);
+        } else if (notation.len == 2 and notation[0] != notation[1]) {
+            // Unpaired hand without modifier (e.g., "AK") - use notation parser for all combinations
+            const allocator = std.heap.page_allocator;
+            const combinations = notation_parser.parse(notation, allocator) catch {
+                // Fallback to single representative hand if parsing fails
+                const hand = try parseHandNotation(notation);
+                try self.addHand(hand, probability);
+                return;
+            };
+            defer allocator.free(combinations);
+
+            for (combinations) |combo| {
+                try self.addHand(combo, probability);
+            }
         } else {
-            // Suited/offsuit - add one representative hand
-            const hand = try parseHandNotation(notation);
-            try self.addHand(hand, probability);
+            // Suited/offsuit - use notation parser for all combinations
+            const allocator = std.heap.page_allocator;
+            const combinations = notation_parser.parse(notation, allocator) catch {
+                // Fallback to single representative hand if parsing fails
+                const hand = try parseHandNotation(notation);
+                try self.addHand(hand, probability);
+                return;
+            };
+            defer allocator.free(combinations);
+
+            for (combinations) |combo| {
+                try self.addHand(combo, probability);
+            }
         }
     }
 
@@ -127,9 +153,13 @@ fn parseHandNotation(notation: []const u8) ![2]poker.Card {
     const rank2 = parseRank(notation[1]) orelse return error.InvalidRank;
 
     if (notation.len == 2) {
-        // Pocket pair (e.g., "AA", "KK")
-        if (rank1 != rank2) return error.NotAPair;
-        return [2]poker.Card{ poker.Card.init(rank1, 0), poker.Card.init(rank2, 1) };
+        if (rank1 == rank2) {
+            // Pocket pair (e.g., "AA", "KK")
+            return [2]poker.Card{ poker.Card.init(rank1, 0), poker.Card.init(rank2, 1) };
+        } else {
+            // Unpaired hand without modifier - this is ambiguous, so we need to handle it at range level
+            return error.AmbiguousNotation;
+        }
     } else {
         // Suited or offsuit (e.g., "AKs", "AKo")
         const modifier = notation[2];
@@ -407,8 +437,8 @@ test "range with notation" {
     // Add multiple pocket pairs
     try range.addHands(&.{ "KK", "QQ" }, 1.0); // Should add 6 + 6 = 12 combinations
 
-    // Total: 6 (AA) + 1 (AKs) + 6 (KK) + 6 (QQ) = 19 combinations
-    try std.testing.expect(range.handCount() == 19);
+    // Total: 6 (AA) + 4 (AKs) + 6 (KK) + 6 (QQ) = 22 combinations
+    try std.testing.expect(range.handCount() == 22);
 }
 
 test "pocket pair expansion" {
@@ -436,8 +466,113 @@ test "parseRange function" {
     var range = try parseRange("AA,KK,AKs", allocator);
     defer range.deinit();
 
-    // Should have: 6 (AA) + 6 (KK) + 1 (AKs representative) = 13 combinations
-    try std.testing.expect(range.handCount() == 13);
+    // Should have: 6 (AA) + 6 (KK) + 4 (AKs all combinations) = 16 combinations
+    try std.testing.expect(range.handCount() == 16);
+}
+
+// Table-driven tests for range notation parsing
+test "range notation parsing - comprehensive" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const test_cases = [_]struct {
+        notation: []const u8,
+        expected_count: u32,
+        should_work: bool,
+        description: []const u8,
+    }{
+        // Pocket pairs
+        .{ .notation = "AA", .expected_count = 6, .should_work = true, .description = "Pocket aces (6 combinations)" },
+        .{ .notation = "KK", .expected_count = 6, .should_work = true, .description = "Pocket kings" },
+        .{ .notation = "22", .expected_count = 6, .should_work = true, .description = "Pocket deuces" },
+
+        // Suited hands
+        .{ .notation = "AKs", .expected_count = 4, .should_work = true, .description = "Ace-king suited" },
+        .{ .notation = "AQs", .expected_count = 4, .should_work = true, .description = "Ace-queen suited" },
+        .{ .notation = "KQs", .expected_count = 4, .should_work = true, .description = "King-queen suited" },
+
+        // Offsuit hands
+        .{ .notation = "AKo", .expected_count = 12, .should_work = true, .description = "Ace-king offsuit" },
+        .{ .notation = "AQo", .expected_count = 12, .should_work = true, .description = "Ace-queen offsuit" },
+        .{ .notation = "KQo", .expected_count = 12, .should_work = true, .description = "King-queen offsuit" },
+
+        // Any hands (both suited and offsuit)
+        .{ .notation = "AK", .expected_count = 16, .should_work = true, .description = "Ace-king any (suited + offsuit)" },
+        .{ .notation = "AQ", .expected_count = 16, .should_work = true, .description = "Ace-queen any" },
+        .{ .notation = "KQ", .expected_count = 16, .should_work = true, .description = "King-queen any" },
+
+        // Invalid cases
+        .{ .notation = "AKx", .expected_count = 0, .should_work = false, .description = "Invalid modifier" },
+        .{ .notation = "XY", .expected_count = 0, .should_work = false, .description = "Invalid ranks" },
+        .{ .notation = "A", .expected_count = 0, .should_work = false, .description = "Too short" },
+        .{ .notation = "AKQJ", .expected_count = 0, .should_work = false, .description = "Too long" },
+    };
+
+    for (test_cases) |test_case| {
+        var range = Range.init(allocator);
+        defer range.deinit();
+
+        const result = range.addHandNotation(test_case.notation, 1.0);
+
+        if (test_case.should_work) {
+            result catch |err| {
+                std.debug.print("FAIL: {s} - Expected to work but got error: {}\n", .{ test_case.description, err });
+                try std.testing.expect(false);
+            };
+
+            const actual_count = range.handCount();
+            if (actual_count != test_case.expected_count) {
+                std.debug.print("FAIL: {s} - Expected {} hands, got {}\n", .{ test_case.description, test_case.expected_count, actual_count });
+            }
+            try std.testing.expectEqual(test_case.expected_count, actual_count);
+
+            std.debug.print("PASS: {s} - {} hands\n", .{ test_case.description, actual_count });
+        } else {
+            if (result) |_| {
+                std.debug.print("FAIL: {s} - Expected to fail but succeeded\n", .{test_case.description});
+                try std.testing.expect(false);
+            } else |_| {
+                std.debug.print("PASS: {s} - Correctly failed\n", .{test_case.description});
+            }
+        }
+    }
+}
+
+test "range notation parsing - comma separated ranges" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const test_cases = [_]struct {
+        range_str: []const u8,
+        expected_count: u32,
+        description: []const u8,
+    }{
+        .{ .range_str = "AA,KK,QQ", .expected_count = 18, .description = "Three pocket pairs (6+6+6)" },
+        .{ .range_str = "AKs,AKo", .expected_count = 16, .description = "AK suited + offsuit" },
+        .{ .range_str = "AK", .expected_count = 16, .description = "AK any (both s+o)" },
+        .{ .range_str = "AA,AKs,AKo", .expected_count = 22, .description = "Mix: AA(6) + AKs(4) + AKo(12)" },
+        .{ .range_str = "AA,AK", .expected_count = 22, .description = "Mix: AA(6) + AK(16)" },
+        .{ .range_str = "KK,KQo,AJo", .expected_count = 30, .description = "KK(6) + KQo(12) + AJo(12)" },
+    };
+
+    for (test_cases) |test_case| {
+        var range = parseRange(test_case.range_str, allocator) catch |err| {
+            std.debug.print("FAIL: {s} - Parse error: {}\n", .{ test_case.description, err });
+            try std.testing.expect(false);
+            continue;
+        };
+        defer range.deinit();
+
+        const actual_count = range.handCount();
+        if (actual_count != test_case.expected_count) {
+            std.debug.print("FAIL: {s} - Expected {} hands, got {}\n", .{ test_case.description, test_case.expected_count, actual_count });
+        }
+        try std.testing.expectEqual(test_case.expected_count, actual_count);
+
+        std.debug.print("PASS: {s} - {} hands\n", .{ test_case.description, actual_count });
+    }
 }
 
 test "parseCards delegation" {

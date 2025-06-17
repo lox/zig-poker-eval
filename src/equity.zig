@@ -12,12 +12,250 @@ pub const EquityResult = struct {
         return @as(f64, @floatFromInt(self.wins)) / @as(f64, @floatFromInt(self.total_simulations));
     }
 
+    pub fn tieRate(self: EquityResult) f64 {
+        return @as(f64, @floatFromInt(self.ties)) / @as(f64, @floatFromInt(self.total_simulations));
+    }
+
+    pub fn lossRate(self: EquityResult) f64 {
+        const losses = self.total_simulations - self.wins - self.ties;
+        return @as(f64, @floatFromInt(losses)) / @as(f64, @floatFromInt(self.total_simulations));
+    }
+
     pub fn equity(self: EquityResult) f64 {
         const win_equity = @as(f64, @floatFromInt(self.wins));
         const tie_equity = @as(f64, @floatFromInt(self.ties)) * 0.5;
         return (win_equity + tie_equity) / @as(f64, @floatFromInt(self.total_simulations));
     }
 };
+
+// Hand category tracking for detailed analysis
+pub const HandCategories = struct {
+    high_card: u32 = 0,
+    pair: u32 = 0,
+    two_pair: u32 = 0,
+    three_of_a_kind: u32 = 0,
+    straight: u32 = 0,
+    flush: u32 = 0,
+    full_house: u32 = 0,
+    four_of_a_kind: u32 = 0,
+    straight_flush: u32 = 0,
+    total: u32 = 0,
+
+    pub fn addHand(self: *HandCategories, hand_rank: poker.HandRank) void {
+        self.total += 1;
+        switch (hand_rank) {
+            .high_card => self.high_card += 1,
+            .pair => self.pair += 1,
+            .two_pair => self.two_pair += 1,
+            .three_of_a_kind => self.three_of_a_kind += 1,
+            .straight => self.straight += 1,
+            .flush => self.flush += 1,
+            .full_house => self.full_house += 1,
+            .four_of_a_kind => self.four_of_a_kind += 1,
+            .straight_flush => self.straight_flush += 1,
+        }
+    }
+
+    pub fn percentage(self: HandCategories, count: u32) f64 {
+        if (self.total == 0) return 0.0;
+        return @as(f64, @floatFromInt(count)) / @as(f64, @floatFromInt(self.total)) * 100.0;
+    }
+};
+
+// Enhanced equity result with detailed statistics
+pub const DetailedEquityResult = struct {
+    wins: u32,
+    ties: u32,
+    total_simulations: u32,
+    hand1_categories: HandCategories = HandCategories{},
+    hand2_categories: HandCategories = HandCategories{},
+
+    pub fn equity(self: DetailedEquityResult) f64 {
+        const win_equity = @as(f64, @floatFromInt(self.wins));
+        const tie_equity = @as(f64, @floatFromInt(self.ties)) * 0.5;
+        return (win_equity + tie_equity) / @as(f64, @floatFromInt(self.total_simulations));
+    }
+
+    pub fn winRate(self: DetailedEquityResult) f64 {
+        return @as(f64, @floatFromInt(self.wins)) / @as(f64, @floatFromInt(self.total_simulations));
+    }
+
+    pub fn tieRate(self: DetailedEquityResult) f64 {
+        return @as(f64, @floatFromInt(self.ties)) / @as(f64, @floatFromInt(self.total_simulations));
+    }
+
+    pub fn lossRate(self: DetailedEquityResult) f64 {
+        const losses = self.total_simulations - self.wins - self.ties;
+        return @as(f64, @floatFromInt(losses)) / @as(f64, @floatFromInt(self.total_simulations));
+    }
+
+    // Calculate 95% confidence interval for equity
+    pub fn confidenceInterval(self: DetailedEquityResult) struct { lower: f64, upper: f64 } {
+        const equity_val = self.equity();
+        const n = @as(f64, @floatFromInt(self.total_simulations));
+
+        // Standard error for binomial proportion
+        const se = @sqrt((equity_val * (1.0 - equity_val)) / n);
+
+        // 95% confidence interval (±1.96 * SE)
+        const margin = 1.96 * se;
+
+        return .{
+            .lower = @max(0.0, equity_val - margin),
+            .upper = @min(1.0, equity_val + margin),
+        };
+    }
+};
+
+// Outs analysis for poker hands
+pub const OutsAnalysis = struct {
+    outs: u8,
+    percentage: f64,
+    description: []const u8,
+
+    pub fn calculatePercentage(outs: u8, cards_remaining: u8) f64 {
+        if (cards_remaining == 0) return 0.0;
+        return @as(f64, @floatFromInt(outs)) / @as(f64, @floatFromInt(cards_remaining)) * 100.0;
+    }
+};
+
+// Calculate outs for a hand against another hand
+pub fn calculateOuts(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card, board: []const poker.Card, allocator: std.mem.Allocator) !OutsAnalysis {
+    _ = allocator;
+
+    if (board.len == 0) {
+        // Preflop outs analysis
+        return calculatePreflipOuts(hero_hole, villain_hole);
+    } else {
+        // Post-flop outs analysis (more complex)
+        return calculatePostflopOuts(hero_hole, villain_hole, board);
+    }
+}
+
+// Calculate preflop outs (when behind with unpaired hand vs pair)
+fn calculatePreflipOuts(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card) OutsAnalysis {
+    // Check if hero has unpaired hand vs villain pair
+    const hero_rank1 = hero_hole[0].getRank();
+    const hero_rank2 = hero_hole[1].getRank();
+    const villain_rank1 = villain_hole[0].getRank();
+    const villain_rank2 = villain_hole[1].getRank();
+
+    // Hero unpaired vs villain pair
+    if (hero_rank1 != hero_rank2 and villain_rank1 == villain_rank2) {
+        var outs: u8 = 0;
+
+        // Hero gets 3 outs for each of their ranks (4 total - 1 already dealt)
+        if (hero_rank1 != villain_rank1) {
+            outs += 3; // 3 remaining cards of hero's first rank
+        }
+        if (hero_rank2 != villain_rank1) {
+            outs += 3; // 3 remaining cards of hero's second rank
+        }
+
+        return OutsAnalysis{
+            .outs = outs,
+            .percentage = OutsAnalysis.calculatePercentage(outs, 48), // 52 - 2 hero - 2 villain = 48
+            .description = "Pair outs: 6 cards to make a pair",
+        };
+    }
+
+    // Default: no clear outs calculation preflop
+    return OutsAnalysis{
+        .outs = 0,
+        .percentage = 0.0,
+        .description = "Complex preflop spot",
+    };
+}
+
+// Simplified postflop outs (placeholder for now)
+fn calculatePostflopOuts(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card, board: []const poker.Card) OutsAnalysis {
+    _ = hero_hole;
+    _ = villain_hole;
+    _ = board;
+
+    // This would be much more complex - analyzing draws, pair outs, etc.
+    return OutsAnalysis{
+        .outs = 0,
+        .percentage = 0.0,
+        .description = "Postflop outs analysis not implemented",
+    };
+}
+
+// Street-by-street equity analysis
+pub const StreetEquity = struct {
+    street_name: []const u8,
+    hero_equity: f64,
+    villain_equity: f64,
+    description: []const u8,
+};
+
+// Calculate representative street scenarios
+pub fn calculateStreetByStreet(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) ![]StreetEquity {
+    var scenarios = try allocator.alloc(StreetEquity, 4);
+
+    // Preflop
+    const preflop_result = try monteCarlo(hero_hole, villain_hole, &.{}, simulations / 4, rng, allocator);
+    scenarios[0] = StreetEquity{
+        .street_name = "Preflop",
+        .hero_equity = preflop_result.equity(),
+        .villain_equity = 1.0 - preflop_result.equity(),
+        .description = "No community cards",
+    };
+
+    // Representative flop scenarios
+    // Dry flop (when hero misses)
+    const dry_board = [_]poker.Card{
+        poker.Card.init(7, 0), // 7h
+        poker.Card.init(2, 1), // 2s
+        poker.Card.init(9, 2), // 9d
+    };
+    const dry_result = try monteCarlo(hero_hole, villain_hole, &dry_board, simulations / 4, rng, allocator);
+    scenarios[1] = StreetEquity{
+        .street_name = "Flop (dry)",
+        .hero_equity = dry_result.equity(),
+        .villain_equity = 1.0 - dry_result.equity(),
+        .description = "When missing (e.g., 7♥2♠9♦)",
+    };
+
+    // Flop when hero hits (create board with one of hero's ranks, avoiding conflicts)
+    const hero_rank1 = hero_hole[0].getRank();
+    const hero_rank2 = hero_hole[1].getRank();
+    const villain_rank1 = villain_hole[0].getRank();
+    const villain_rank2 = villain_hole[1].getRank();
+
+    // Choose a hero rank that doesn't conflict with villain pair
+    const hit_rank = if (hero_rank1 != villain_rank1 and hero_rank1 != villain_rank2) hero_rank1 else hero_rank2;
+
+    const hit_board = [_]poker.Card{
+        poker.Card.init(hit_rank, 2), // Hero's rank on board (different suit)
+        poker.Card.init(6, 1), // 6s
+        poker.Card.init(2, 2), // 2d
+    };
+    const hit_result = try monteCarlo(hero_hole, villain_hole, &hit_board, simulations / 4, rng, allocator);
+
+    scenarios[2] = StreetEquity{
+        .street_name = "Flop (hit)",
+        .hero_equity = hit_result.equity(),
+        .villain_equity = 1.0 - hit_result.equity(),
+        .description = "When hitting pair",
+    };
+
+    // Coordinated board
+    const coord_board = [_]poker.Card{
+        poker.Card.init(9, 0), // 9h
+        poker.Card.init(8, 1), // 8s
+        poker.Card.init(7, 2), // 7d
+    };
+    const coord_result = try monteCarlo(hero_hole, villain_hole, &coord_board, simulations / 4, rng, allocator);
+    scenarios[3] = StreetEquity{
+        .street_name = "Flop (coord)",
+        .hero_equity = coord_result.equity(),
+        .villain_equity = 1.0 - coord_result.equity(),
+        .description = "Coordinated board (e.g., 9♥8♠7♦)",
+    };
+
+    return scenarios;
+}
 
 // Head-to-head Monte Carlo equity calculation
 pub fn monteCarlo(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card, board: []const poker.Card, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) !EquityResult {
@@ -52,6 +290,51 @@ pub fn monteCarlo(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card, board: 
         .wins = wins,
         .ties = ties,
         .total_simulations = simulations,
+    };
+}
+
+// Detailed Monte Carlo with hand category tracking
+pub fn detailedMonteCarlo(hero_hole: [2]poker.Card, villain_hole: [2]poker.Card, board: []const poker.Card, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) !DetailedEquityResult {
+    const board_hand = poker.Hand.fromBoard(board);
+    const cards_needed = 5 - @as(u8, @intCast(board.len));
+
+    var wins: u32 = 0;
+    var ties: u32 = 0;
+    var hand1_categories = HandCategories{};
+    var hand2_categories = HandCategories{};
+
+    // No allocator needed for head-to-head equity
+    _ = allocator; // Mark as unused
+
+    for (0..simulations) |_| {
+        // Sample remaining board cards
+        const board_completion = sampleRemainingCardsForEquity(&.{ hero_hole, villain_hole }, board_hand, cards_needed, rng);
+
+        // Create final hands and evaluate showdown
+        const hero_hand = poker.Hand.fromHoleAndBoardBits(hero_hole, board_completion.bits);
+        const villain_hand = poker.Hand.fromHoleAndBoardBits(villain_hole, board_completion.bits);
+
+        // Track hand categories
+        hand1_categories.addHand(hero_hand.evaluate());
+        hand2_categories.addHand(villain_hand.evaluate());
+
+        const result = evaluateEquityShowdown(hero_hand, villain_hand);
+
+        if (!result.tie) {
+            if (result.winner == 0) {
+                wins += 1;
+            }
+        } else {
+            ties += 1;
+        }
+    }
+
+    return DetailedEquityResult{
+        .wins = wins,
+        .ties = ties,
+        .total_simulations = simulations,
+        .hand1_categories = hand1_categories,
+        .hand2_categories = hand2_categories,
     };
 }
 

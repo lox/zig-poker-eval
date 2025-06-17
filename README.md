@@ -93,29 +93,14 @@ const result = try ranges.calculateRangeEquityMonteCarlo(
 ### Range Notation Syntax
 
 ```
-AsAh ace of spades and ace of hearts
-AA any pair of aces
-AA, KK a pair of aces or kings
+AsAh       specific cards (ace of spades and ace of hearts)
+AA         pocket pairs (any pair of aces)
+AA, KK     comma-separated ranges (aces or kings)
+JTs        suited combinations (jack-ten suited)
+JTo        offsuit combinations (jack-ten offsuit)
+JT         any combinations (jack-ten suited + offsuit)
+AA, KK, AK mixed ranges (pocket pairs + unpaired hands)
 ```
-
-Not implemented yet:
-
-```
-A* any hand with an ace in it
-** any two cards
-JTs jack-ten suited
-JTo jack-ten off suit
-JT any jack-ten
-A*s any suited ace
-*h*h any two hearts
-AA, KK, AK aces, kings, and ace-king
-X% The top X% of hands
-A5-A2 equivalent to A5,A4,A3,A2
-AK-JT equivalent to AK,KQ,QJ,JT
-QTs-97s equivalent to QTs, J9s, T8s, 97s
-AA-TT, AK, AQ, AJs any pair tens or higher, any ace-king or ace-queen, and ace-jack suited
-```
-
 ## Performance
 
 Benchmarked on an Apple Macbook Air M1.

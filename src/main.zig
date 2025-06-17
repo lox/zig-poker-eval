@@ -6,6 +6,37 @@ const ranges = @import("ranges.zig");
 const notation = @import("notation.zig");
 const ansi = @import("ansi.zig");
 
+// Helper function to print hand categories statistics
+fn printHandCategories(categories: equity.HandCategories) void {
+    if (categories.high_card > 0) {
+        print("  High Card:      {d:.1}%\n", .{categories.percentage(categories.high_card)});
+    }
+    if (categories.pair > 0) {
+        print("  One Pair:       {d:.1}%\n", .{categories.percentage(categories.pair)});
+    }
+    if (categories.two_pair > 0) {
+        print("  Two Pair:       {d:.1}%\n", .{categories.percentage(categories.two_pair)});
+    }
+    if (categories.three_of_a_kind > 0) {
+        print("  Three of a Kind:{d:.1}%\n", .{categories.percentage(categories.three_of_a_kind)});
+    }
+    if (categories.straight > 0) {
+        print("  Straight:       {d:.1}%\n", .{categories.percentage(categories.straight)});
+    }
+    if (categories.flush > 0) {
+        print("  Flush:          {d:.1}%\n", .{categories.percentage(categories.flush)});
+    }
+    if (categories.full_house > 0) {
+        print("  Full House:     {d:.1}%\n", .{categories.percentage(categories.full_house)});
+    }
+    if (categories.four_of_a_kind > 0) {
+        print("  Four of a Kind: {d:.1}%\n", .{categories.percentage(categories.four_of_a_kind)});
+    }
+    if (categories.straight_flush > 0) {
+        print("  Straight Flush: {d:.1}%\n", .{categories.percentage(categories.straight_flush)});
+    }
+}
+
 const Command = enum { equity, eval, range, bench, demo, help };
 
 fn formatCard(card: poker.Card) [2]u8 {
@@ -38,10 +69,14 @@ fn formatCard(card: poker.Card) [2]u8 {
 
 /// Parse hand notation (e.g., "AKo", "88", "AhKs") into a specific 2-card hand
 fn parseHandNotation(hand_str: []const u8, rng: std.Random, allocator: std.mem.Allocator) ![2]poker.Card {
-    // Try notation parsing first (AKo, AKs, 88, etc.)
-    if (notation.getRandomCombination(hand_str, rng, allocator) catch null) |hand| {
-        return hand;
-    }
+    // Try unified notation parsing first (AKo, AKs, 88, ranges, etc.)
+    if (notation.parse(hand_str, allocator)) |combinations| {
+        defer allocator.free(combinations);
+        if (combinations.len > 0) {
+            const idx = rng.intRangeLessThan(usize, 0, combinations.len);
+            return combinations[idx];
+        }
+    } else |_| {}
 
     // Fall back to specific card parsing (AhKs)
     const cards = try poker.parseCards(hand_str, allocator);
@@ -182,19 +217,57 @@ fn handleHandEquity(hand1_str: []const u8, hand2_str: []const u8, config: Config
         try allocator.alloc(poker.Card, 0);
     defer if (config.board != null) allocator.free(board_cards);
 
-    const result = try equity.monteCarlo(hand1, hand2, board_cards, config.sims, rng, allocator);
+    const detailed_result = try equity.detailedMonteCarlo(hand1, hand2, board_cards, config.sims, rng, allocator);
 
     switch (config.format) {
         .table => {
-            ansi.printBold("🎯 Hand Equity Analysis\n", .{});
+            // Show simulations and confidence margin once at the top
+            const ci = detailed_result.confidenceInterval();
+            ansi.printBold("🎯 Equity Analysis ({} simulations, ±{d:.1}% margin)\n", .{ config.sims, (ci.upper - ci.lower) * 50 });
             print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
-            ansi.printGreen("Hand 1: {s} - {d:.1}%\n", .{ hand1_str, result.equity() * 100 });
-            ansi.printRed("Hand 2: {s} - {d:.1}%\n", .{ hand2_str, (1.0 - result.equity()) * 100 });
+            ansi.printGreen("Hand 1: {s} - {d:.1}% equity ({d:.1}% win, {d:.1}% tie, {d:.1}% loss)\n", .{ hand1_str, detailed_result.equity() * 100, detailed_result.winRate() * 100, detailed_result.tieRate() * 100, detailed_result.lossRate() * 100 });
+            ansi.printRed("Hand 2: {s} - {d:.1}% equity ({d:.1}% win, {d:.1}% tie, {d:.1}% loss)\n", .{ hand2_str, (1.0 - detailed_result.equity()) * 100, detailed_result.lossRate() * 100, detailed_result.tieRate() * 100, detailed_result.winRate() * 100 });
+
             if (config.board) |board| ansi.printCyan("Board:  {s}\n", .{board});
-            print("Simulations: {}\n", .{config.sims});
+
+            print("\n", .{});
+
+            // Hand categories analysis
+            ansi.printCyan("🃏 Hand Categories Analysis\n", .{});
+            print("{s} makes:\n", .{hand1_str});
+            printHandCategories(detailed_result.hand1_categories);
+            print("\n{s} makes:\n", .{hand2_str});
+            printHandCategories(detailed_result.hand2_categories);
+
+            // Outs analysis
+            const outs_analysis = try equity.calculateOuts(hand1, hand2, board_cards, allocator);
+            if (outs_analysis.outs > 0) {
+                print("\n", .{});
+                ansi.printBlue("🎯 Outs Analysis\n", .{});
+                print("When behind: {} outs = {d:.1}%\n", .{ outs_analysis.outs, outs_analysis.percentage });
+                print("{s}\n", .{outs_analysis.description});
+            }
+
+            // Street-by-street equity
+            if (board_cards.len == 0) { // Only for preflop
+                print("\n", .{});
+                ansi.printBlue("📊 Street-by-Street Equity\n", .{});
+                const street_scenarios = try equity.calculateStreetByStreet(hand1, hand2, config.sims, rng, allocator);
+                defer allocator.free(street_scenarios);
+
+                for (street_scenarios) |scenario| {
+                    print("{s:<12}: Hand 1 {d:.1}% vs Hand 2 {d:.1}% - {s}\n", .{
+                        scenario.street_name,
+                        scenario.hero_equity * 100,
+                        scenario.villain_equity * 100,
+                        scenario.description,
+                    });
+                }
+            }
         },
         .json => {
-            print("{{\"hand1\": \"{s}\", \"equity1\": {d:.3}, \"hand2\": \"{s}\", \"equity2\": {d:.3}, \"simulations\": {}}}\n", .{ hand1_str, result.equity(), hand2_str, 1.0 - result.equity(), config.sims });
+            const result_simple = equity.EquityResult{ .wins = detailed_result.wins, .ties = detailed_result.ties, .total_simulations = detailed_result.total_simulations };
+            print("{{\"hand1\": \"{s}\", \"equity1\": {d:.3}, \"hand2\": \"{s}\", \"equity2\": {d:.3}, \"simulations\": {}}}\n", .{ hand1_str, result_simple.equity(), hand2_str, 1.0 - result_simple.equity(), config.sims });
         },
     }
 }
@@ -216,12 +289,18 @@ fn handleRangeEquity(range1_str: []const u8, range2_str: []const u8, config: Con
 
     switch (config.format) {
         .table => {
-            ansi.printBold("📊 Range vs Range Equity\n", .{});
+            ansi.printBold("🎯 Range Equity Analysis ({} simulations)\n", .{result.total_simulations});
             print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
-            ansi.printGreen("Range 1: {s} ({} combos) - {d:.1}%\n", .{ range1_str, range1.handCount(), result.hero_equity * 100 });
-            ansi.printRed("Range 2: {s} ({} combos) - {d:.1}%\n", .{ range2_str, range2.handCount(), result.villain_equity * 100 });
+            ansi.printGreen("Range 1: {s} ({} combos) - {d:.1}% equity\n", .{ range1_str, range1.handCount(), result.hero_equity * 100 });
+            ansi.printRed("Range 2: {s} ({} combos) - {d:.1}% equity\n", .{ range2_str, range2.handCount(), result.villain_equity * 100 });
+
             if (config.board) |board| ansi.printCyan("Board:   {s}\n", .{board});
-            print("Valid simulations: {}\n", .{result.total_simulations});
+
+            print("\n", .{});
+            ansi.printYellow("💡 Range Analysis Note\n", .{});
+            print("Range analysis shows aggregate equity across all hand combinations.\n", .{});
+            print("For detailed breakdown (hand categories, outs, street-by-street),\n", .{});
+            print("use specific hands: 'AKo vs 88' or 'AKs vs JJ'.\n", .{});
         },
         .json => {
             print("{{\"range1\": \"{s}\", \"equity1\": {d:.3}, \"range2\": \"{s}\", \"equity2\": {d:.3}, \"simulations\": {}}}\n", .{ range1_str, result.hero_equity, range2_str, result.villain_equity, result.total_simulations });

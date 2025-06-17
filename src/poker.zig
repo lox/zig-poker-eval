@@ -236,6 +236,84 @@ pub fn mustParseHoleCards(comptime card_string: []const u8) [2]Card {
     return [2]Card{ cards[0], cards[1] };
 }
 
+/// Generate all combinations for a pocket pair (6 combinations)
+pub fn generatePocketPair(rank: Rank, allocator: std.mem.Allocator) ![]const [2]Card {
+    var combinations = try allocator.alloc([2]Card, 6);
+
+    const suits = [_]Suit{ .hearts, .spades, .diamonds, .clubs };
+    var idx: usize = 0;
+
+    // Generate all suit combinations for pocket pairs
+    for (suits, 0..) |suit1, i| {
+        for (suits[i + 1 ..]) |suit2| {
+            combinations[idx] = [2]Card{
+                createCard(suit1, rank),
+                createCard(suit2, rank),
+            };
+            idx += 1;
+        }
+    }
+
+    return combinations;
+}
+
+/// Generate all suited combinations (4 combinations)
+pub fn generateSuitedCombinations(rank1: Rank, rank2: Rank, allocator: std.mem.Allocator) ![]const [2]Card {
+    var combinations = try allocator.alloc([2]Card, 4);
+    const suits = [_]Suit{ .hearts, .spades, .diamonds, .clubs };
+
+    for (suits, 0..) |suit, i| {
+        combinations[i] = [2]Card{
+            createCard(suit, rank1),
+            createCard(suit, rank2),
+        };
+    }
+
+    return combinations;
+}
+
+/// Generate all offsuit combinations (12 combinations)
+pub fn generateOffsuitCombinations(rank1: Rank, rank2: Rank, allocator: std.mem.Allocator) ![]const [2]Card {
+    var combinations = try allocator.alloc([2]Card, 12);
+    const suits = [_]Suit{ .hearts, .spades, .diamonds, .clubs };
+    var idx: usize = 0;
+
+    // Generate all suit combinations where suits are different
+    for (suits) |suit1| {
+        for (suits) |suit2| {
+            if (suit1 != suit2) {
+                combinations[idx] = [2]Card{
+                    createCard(suit1, rank1),
+                    createCard(suit2, rank2),
+                };
+                idx += 1;
+            }
+        }
+    }
+
+    return combinations;
+}
+
+/// Generate all combinations (suited + offsuit = 16 combinations)
+pub fn generateAllCombinations(rank1: Rank, rank2: Rank, allocator: std.mem.Allocator) ![]const [2]Card {
+    var combinations = try allocator.alloc([2]Card, 16);
+    const suits = [_]Suit{ .hearts, .spades, .diamonds, .clubs };
+    var idx: usize = 0;
+
+    // Generate all possible suit combinations
+    for (suits) |suit1| {
+        for (suits) |suit2| {
+            combinations[idx] = [2]Card{
+                createCard(suit1, rank1),
+                createCard(suit2, rank2),
+            };
+            idx += 1;
+        }
+    }
+
+    return combinations;
+}
+
 // Detailed hand evaluation with rank hierarchy for proper comparison
 pub const HandEvaluation = struct {
     rank: HandRank,
