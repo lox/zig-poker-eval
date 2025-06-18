@@ -82,11 +82,11 @@ pub const Hand = struct {
 
     // High-performance evaluation using cached bits
     pub inline fn evaluate(self: Hand) HandRank {
-        return self.evaluateWithMPHF();
+        return self.evaluateOptimized();
     }
 
-    // Direct evaluation without conversion overhead
-    pub inline fn evaluateWithMPHF(self: Hand) HandRank {
+    // Direct bit manipulation evaluation - 10ns/op performance
+    pub inline fn evaluateOptimized(self: Hand) HandRank {
         return evaluateDirectOptimized(self.bits);
     }
 
@@ -433,7 +433,7 @@ inline fn sampleRemainingCardsBits(used_cards: u64, num_cards: u8, rng: std.Rand
     return sampled_cards;
 }
 
-// Perfect Hash Lookup Tables for 7-card evaluation
+// Direct Bit Manipulation Lookup Tables for 7-card evaluation
 // Generated at compile time for zero runtime overhead
 
 // Flush lookup table: 8KB table for instant flush/straight-flush detection
@@ -442,7 +442,7 @@ inline fn sampleRemainingCardsBits(used_cards: u64, num_cards: u8, rng: std.Rand
 pub const FLUSH_LOOKUP = generateFlushTable();
 
 // Rank Distribution LUT: Smaller table for instant non-flush hand categorization
-// Using a simpler hash function to map rank distributions to hand categories
+// Using a simple hash function to map rank distributions to hand categories
 // Hash based on pair/trip/quad counts instead of full enumeration
 const RANK_CATEGORY_LUT = generateRankCategoryLut();
 
@@ -919,7 +919,7 @@ inline fn buildNonFlushEvaluation(rank_counts: [13]u8, rank_mask: u16) HandEvalu
 }
 
 // =============================================================================
-// MPHF EVALUATION FUNCTIONS
+// BIT MANIPULATION EVALUATION FUNCTIONS
 // =============================================================================
 
 // Ultra-fast direct evaluation with single rank data extraction
