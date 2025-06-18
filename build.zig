@@ -35,6 +35,18 @@ pub fn build(b: *std.Build) void {
     const bench_step = b.step("bench", "Run benchmarks via CLI");
     bench_step.dependOn(&bench_cmd.step);
 
+    // MPHF generator for build-time table creation
+    const mphf_generator_exe = b.addExecutable(.{
+        .name = "mphf-generator",
+        .root_source_file = b.path("build_tools/standalone_mphf_generator.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const mphf_generator_cmd = b.addRunArtifact(mphf_generator_exe);
+    const mphf_generator_step = b.step("generate-tables", "Generate MPHF lookup tables");
+    mphf_generator_step.dependOn(&mphf_generator_cmd.step);
+
     // Tests
     const test_step = b.step("test", "Run unit tests");
     for ([_][]const u8{

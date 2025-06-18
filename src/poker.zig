@@ -1,4 +1,5 @@
 const std = @import("std");
+const generated_tables = @import("generated_poker_tables.zig");
 
 // Card suits
 pub const Suit = enum(u2) {
@@ -83,6 +84,11 @@ pub const Hand = struct {
     // High-performance evaluation using cached bits
     pub inline fn evaluate(self: Hand) HandRank {
         return self.evaluateDetailed().rank;
+    }
+
+    // MPHF-optimized evaluation using pre-computed lookup tables
+    pub inline fn evaluateWithMPHF(self: Hand) HandRank {
+        return evaluateWithStaticTables(self.bits);
     }
 
     // Detailed evaluation for proper hand comparison
@@ -1097,4 +1103,119 @@ test "straight ranking bug fix" {
 
     const vs_nine_high = hand_with_ace_and_straight.compareWith(nine_high_straight);
     try testing.expect(vs_nine_high.tie == false and vs_nine_high.winner == 1); // 9-high beats 8-high
+}
+
+// =============================================================================
+// MPHF EVALUATION FUNCTIONS
+// =============================================================================
+
+// Ultra-fast MPHF-based evaluation using static generated tables
+inline fn evaluateWithStaticTables(hand_bits: u64) HandRank {
+    const flush_rank = checkFlushWithStaticTables(hand_bits);
+    if (flush_rank != .high_card) return flush_rank;
+
+    const rank_counts = extractRankCounts(hand_bits);
+    const unique_ranks = countUniqueRanks(rank_counts);
+
+    if (unique_ranks >= 5) {
+        const rank_mask = buildRankMask(rank_counts);
+        const table_value = generated_tables.NON_FLUSH_LOOKUP[rank_mask];
+        if (table_value != 0) return @enumFromInt(table_value);
+    }
+
+    const prime_product = calculatePrimeProduct(rank_counts);
+    return @enumFromInt(generated_tables.lookupPairedHand(prime_product));
+}
+
+// Check for flush using static generated tables
+inline fn checkFlushWithStaticTables(hand_bits: u64) HandRank {
+    // Extract suit masks for each suit using current card layout
+    // Current layout: card at position (rank-2)*4 + suit
+    // Hearts=0, Spades=1, Diamonds=2, Clubs=3
+
+    var suit_rank_masks: [4]u16 = [_]u16{0} ** 4;
+
+    // Extract rank masks for each suit
+    for (0..4) |suit| {
+        var rank_mask: u16 = 0;
+        for (0..13) |rank| {
+            const card_bit_pos = rank * 4 + suit;
+            if ((hand_bits >> @intCast(card_bit_pos)) & 1 != 0) {
+                rank_mask |= (@as(u16, 1) << @intCast(rank));
+            }
+        }
+        suit_rank_masks[suit] = rank_mask;
+    }
+
+    // Check each suit for 5+ cards using static tables
+    for (suit_rank_masks) |rank_mask| {
+        if (@popCount(rank_mask) >= 5) {
+            const value = generated_tables.FLUSH_LOOKUP[rank_mask];
+            if (value != 0) return @enumFromInt(value);
+        }
+    }
+
+    return .high_card; // No flush
+}
+
+// Fast rank count extraction for MPHF evaluation
+inline fn extractRankCounts(hand_bits: u64) [13]u8 {
+    // Extract rank counts using current card layout
+    // Current layout: card at position (rank-2)*4 + suit, so rank R has 4 consecutive bits
+    var counts: [13]u8 = undefined;
+
+    // Manual unrolling for maximum performance - each rank has 4 consecutive bits
+    counts[0] = @popCount((hand_bits >> 0) & 0xF); // Rank 2 (bits 0-3)
+    counts[1] = @popCount((hand_bits >> 4) & 0xF); // Rank 3 (bits 4-7)
+    counts[2] = @popCount((hand_bits >> 8) & 0xF); // Rank 4 (bits 8-11)
+    counts[3] = @popCount((hand_bits >> 12) & 0xF); // Rank 5 (bits 12-15)
+    counts[4] = @popCount((hand_bits >> 16) & 0xF); // Rank 6 (bits 16-19)
+    counts[5] = @popCount((hand_bits >> 20) & 0xF); // Rank 7 (bits 20-23)
+    counts[6] = @popCount((hand_bits >> 24) & 0xF); // Rank 8 (bits 24-27)
+    counts[7] = @popCount((hand_bits >> 28) & 0xF); // Rank 9 (bits 28-31)
+    counts[8] = @popCount((hand_bits >> 32) & 0xF); // Rank T (bits 32-35)
+    counts[9] = @popCount((hand_bits >> 36) & 0xF); // Rank J (bits 36-39)
+    counts[10] = @popCount((hand_bits >> 40) & 0xF); // Rank Q (bits 40-43)
+    counts[11] = @popCount((hand_bits >> 44) & 0xF); // Rank K (bits 44-47)
+    counts[12] = @popCount((hand_bits >> 48) & 0xF); // Rank A (bits 48-51)
+
+    return counts;
+}
+
+// Count unique ranks present in the hand
+inline fn countUniqueRanks(rank_counts: [13]u8) u8 {
+    var unique_count: u8 = 0;
+    inline for (rank_counts) |count| {
+        if (count > 0) unique_count += 1;
+    }
+    return unique_count;
+}
+
+// Build rank mask from rank counts for table lookup
+inline fn buildRankMask(rank_counts: [13]u8) u16 {
+    var mask: u16 = 0;
+    inline for (rank_counts, 0..) |count, i| {
+        if (count > 0) {
+            mask |= (@as(u16, 1) << @intCast(i));
+        }
+    }
+    return mask;
+}
+
+// Prime numbers for Cactus Kev-style rank mapping
+const RANK_PRIMES = [13]u64{ 2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41 };
+
+// Calculate prime product for rank composition (Cactus Kev approach)
+inline fn calculatePrimeProduct(rank_counts: [13]u8) u64 {
+    var product: u64 = 1;
+    for (rank_counts, 0..) |count, rank_idx| {
+        if (count > 0) {
+            const prime = RANK_PRIMES[rank_idx];
+            // Multiply by prime^count for this rank
+            for (0..count) |_| {
+                product *= prime;
+            }
+        }
+    }
+    return product;
 }
