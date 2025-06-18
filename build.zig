@@ -38,11 +38,13 @@ pub fn build(b: *std.Build) void {
     // Tests
     const test_step = b.step("test", "Run unit tests");
     for ([_][]const u8{
+        "src/ansi.zig",
+        "src/benchmark.zig",
+        "src/equity.zig",
+        "src/notation.zig",
         "src/poker.zig",
         "src/simulation.zig",
-        "src/equity.zig",
         "src/ranges.zig",
-        "src/benchmark.zig",
     }) |test_file| {
         const unit_tests = b.addTest(.{
             .root_source_file = b.path(test_file),

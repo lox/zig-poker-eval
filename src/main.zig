@@ -103,6 +103,9 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
+    // MPHF tables will be initialized here when ready
+    // TODO: poker.initMPHFTables();
+
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
 
