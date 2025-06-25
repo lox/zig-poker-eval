@@ -74,59 +74,35 @@ pub const SimdEvaluator = struct {
                                   result_mask[12], result_mask[13], result_mask[14], result_mask[15] };
     }
     
-    // Section 2.2: Non-flush path - HYBRID SIMD VERSION
+    // Section 2.2: Non-flush path - HYBRID SIMD/SCALAR VERSION (CHD lookup still scalar)
     // "All maths are one-cycle INT ops; the critical path is 7 ish scalar cycles"
     fn evaluateNonFlushPath(self: *const SimdEvaluator, hands: HandBatch) RankBatch {
+        _ = self;
         
-        // VECTORIZED: Extract suit masks for all 16 hands at once
+        // STEP 1: Extract suit masks for all 16 hands at once (VECTORIZED)
         const clubs_batch = hands & @as(HandBatch, @splat(0x1FFF));
         const diamonds_batch = (hands >> @as(HandBatch, @splat(13))) & @as(HandBatch, @splat(0x1FFF));
         const hearts_batch = (hands >> @as(HandBatch, @splat(26))) & @as(HandBatch, @splat(0x1FFF));
         const spades_batch = (hands >> @as(HandBatch, @splat(39))) & @as(HandBatch, @splat(0x1FFF));
         
+        // STEP 2: Create 13-bit rank masks (DESIGN.md: "Obtain the 13-bit rank mask r")
+        // rank_mask = clubs OR diamonds OR hearts OR spades (which ranks are present)
+        const rank_masks = clubs_batch | diamonds_batch | hearts_batch | spades_batch;
+        
+        // STEP 3-6: Implement DESIGN.md 2-level perfect hash lookup
         var results: [16]u16 = undefined;
         
-        // SCALAR: Per-hand RPC encoding and CHD lookup (complex table operations)
         for (0..16) |i| {
-            // Use pre-extracted suit masks
-            const clubs = @as(u16, @truncate(clubs_batch[i]));
-            const diamonds = @as(u16, @truncate(diamonds_batch[i]));
-            const hearts = @as(u16, @truncate(hearts_batch[i]));
-            const spades = @as(u16, @truncate(spades_batch[i]));
-            
-            // Vectorized rank counting - count all ranks at once
-            const rank_counts = self.vectorizedRankCounts(clubs, diamonds, hearts, spades);
-            const rpc = chd.encodeRPC(rank_counts);
-            
-            // CHD lookup (remains scalar due to complex table access pattern)
-            results[i] = chd.chdLookup(rpc, &tables.CHD_DISPLACEMENTS, &tables.CHD_VALUES);
+            const rank_mask = @as(u16, @truncate(rank_masks[i]));
+            // Use proper CHD lookup with the new rank mask tables
+            results[i] = chd.chdLookup(rank_mask, &tables.CHD_DISPLACEMENTS, &tables.CHD_VALUES);
         }
         
         return RankBatch{ results[0], results[1], results[2], results[3], results[4], results[5], results[6], results[7],
                          results[8], results[9], results[10], results[11], results[12], results[13], results[14], results[15] };
     }
     
-    // Vectorized rank counting for a single hand
-    fn vectorizedRankCounts(self: *const SimdEvaluator, clubs: u16, diamonds: u16, hearts: u16, spades: u16) [13]u8 {
-        _ = self;
-        
-        var counts = [_]u8{0} ** 13;
-        
-        // Process all 13 ranks using bit manipulation instead of loops
-        // This is much faster than the scalar version in chd.getRankCounts
-        var i: u4 = 0;
-        while (i < 13) : (i += 1) {
-            const mask = @as(u16, 1) << i;
-            var count: u8 = 0;
-            if (clubs & mask != 0) count += 1;
-            if (diamonds & mask != 0) count += 1;
-            if (hearts & mask != 0) count += 1;
-            if (spades & mask != 0) count += 1;
-            counts[i] = count;
-        }
-        
-        return counts;
-    }
+    // TODO: Add vectorized CHD lookup and AVX-512 gather functions in future commit
     
     // Section 2.3: Flush path (for lanes in cnt5)
     // "Multiply flushRanks by a third magic constant, shift → index a FlushRank table (8 KB)"

@@ -3,12 +3,12 @@ const evaluator = @import("evaluator.zig");
 const chd = @import("chd.zig");
 const bbhash = @import("bbhash.zig");
 
-// DESIGN.md compliant table generator using RPC (Rank Pattern Code) encoding
+// DESIGN.md compliant table generator using 13-bit rank masks (NOT RPC)
 const MAX_HANDS_LIMIT = 133_784_560; // Full C(52,7) = 133M
 
-// DESIGN.md compliant patterns
-const RPCPattern = struct {
-    rpc: u32, // Rank Pattern Code (32-bit encoding of rank multiplicities)
+// DESIGN.md Section 2.2: Simple 13-bit rank mask patterns (which ranks are present)
+const RankMaskPattern = struct {
+    rank_mask: u16, // 13-bit mask of which ranks are present (NOT count)
     value: u16, // hand strength (0-7461)
 };
 
@@ -61,16 +61,16 @@ fn cardsToHand(cards: [7]u8) u64 {
     return hand;
 }
 
-// Build CHD hash table for RPCs
-fn buildRPCHash(allocator: std.mem.Allocator, patterns: []const RPCPattern) !chd.CHDResult {
-    var rpcs = try allocator.alloc(u64, patterns.len);
-    defer allocator.free(rpcs);
+// Build CHD hash table for rank masks (DESIGN.md approach)
+fn buildRankMaskHash(allocator: std.mem.Allocator, patterns: []const RankMaskPattern) !chd.CHDResult {
+    var rank_masks = try allocator.alloc(u64, patterns.len);
+    defer allocator.free(rank_masks);
 
     for (patterns, 0..) |pattern, i| {
-        rpcs[i] = @as(u64, pattern.rpc);
+        rank_masks[i] = @as(u64, pattern.rank_mask);
     }
 
-    return try chd.buildCHDHash(allocator, rpcs);
+    return try chd.buildCHDHash(allocator, rank_masks);
 }
 
 // BBHash for flush patterns (simplified)
@@ -93,13 +93,13 @@ pub fn main() !void {
     print("Limit: {} hands (C(52,7) = 133,784,560 total)\n", .{MAX_HANDS_LIMIT});
 
     var enumerator = HandEnumerator.init();
-    var non_flush_patterns = std.ArrayList(RPCPattern).init(allocator);
+    var non_flush_patterns = std.ArrayList(RankMaskPattern).init(allocator);
     defer non_flush_patterns.deinit();
     var flush_patterns = std.ArrayList(FlushPattern).init(allocator);
     defer flush_patterns.deinit();
 
-    var rpc_map = std.AutoHashMap(u32, u16).init(allocator);
-    defer rpc_map.deinit();
+    var rank_mask_map = std.AutoHashMap(u16, u16).init(allocator);
+    defer rank_mask_map.deinit();
     var flush_map = std.AutoHashMap(u16, u16).init(allocator);
     defer flush_map.deinit();
 
@@ -111,7 +111,7 @@ pub fn main() !void {
         const is_flush = evaluator.hasFlush(hand);
 
         if (enumerator.count % 1_000_000 == 0) {
-            print("  Processed: {d:.1}M hands, Non-flush: {}, Flush: {}\n", .{ @as(f64, @floatFromInt(enumerator.count)) / 1_000_000.0, rpc_map.count(), flush_map.count() });
+            print("  Processed: {d:.1}M hands, Non-flush: {}, Flush: {}\n", .{ @as(f64, @floatFromInt(enumerator.count)) / 1_000_000.0, rank_mask_map.count(), flush_map.count() });
         }
 
         if (is_flush) {
@@ -131,45 +131,28 @@ pub fn main() !void {
                 }
             }
         } else {
-            // Use RPC encoding for non-flush hands
-            const rank_counts = chd.getRankCounts(hand);
-            const rpc = chd.encodeRPC(rank_counts);
-
-            const result = try rpc_map.getOrPut(rpc);
+            // DESIGN.md Section 2.2: Use simple 13-bit rank mask (which ranks are present)
+            const suits = evaluator.getSuitMasks(hand);
+            const rank_mask = suits[0] | suits[1] | suits[2] | suits[3]; // OR all suits to get rank presence
+            
+            const result = try rank_mask_map.getOrPut(rank_mask);
             if (!result.found_existing) {
                 result.value_ptr.* = hand_value;
                 try non_flush_patterns.append(.{
-                    .rpc = rpc,
+                    .rank_mask = rank_mask,
                     .value = hand_value,
                 });
-                
-                // Debug the problematic RPC patterns
-                if (rpc == 0x48000000 or rpc == 0x89000000) {
-                    print("  DEBUG: Found problematic RPC 0x{x:08} with value {} for hand 0x{x:013}\n", 
-                          .{ rpc, hand_value, hand });
-                }
             } else {
-                // RPC collision: store the MAXIMUM value for this pattern
+                // Rank mask collision: store the MAXIMUM value for this pattern
                 if (hand_value > result.value_ptr.*) {
                     result.value_ptr.* = hand_value;
                     
                     // Update the stored pattern with the higher value
                     for (non_flush_patterns.items) |*pattern| {
-                        if (pattern.rpc == rpc) {
+                        if (pattern.rank_mask == rank_mask) {
                             pattern.value = hand_value;
                             break;
                         }
-                    }
-                    
-                    if (rpc == 0x48000000 or rpc == 0x89000000) {
-                        print("  UPDATE: RPC 0x{x:08} updated to higher value {} for hand 0x{x:013}\n", 
-                              .{ rpc, hand_value, hand });
-                    }
-                } else if (result.value_ptr.* != hand_value) {
-                    // Same RPC but lower/equal value - this is expected
-                    if (rpc == 0x48000000 or rpc == 0x89000000) {
-                        print("  IGNORE: RPC 0x{x:08} keeping value {}, ignoring lower {} for hand 0x{x:013}\n", 
-                              .{ rpc, result.value_ptr.*, hand_value, hand });
                     }
                 }
             }
@@ -178,14 +161,14 @@ pub fn main() !void {
 
     print("\nFINAL COUNTS:\n", .{});
     print("  Hands processed: {}\n", .{enumerator.count});
-    print("  Unique RPC patterns: {}\n", .{non_flush_patterns.items.len});
+    print("  Unique rank mask patterns: {}\n", .{non_flush_patterns.items.len});
     print("  Unique flush patterns: {}\n", .{flush_patterns.items.len});
 
-    // Build CHD hash for RPCs
+    // Build CHD hash for rank masks (DESIGN.md approach)
     print("\n=== CHD HASH CONSTRUCTION (DESIGN.md COMPLIANT) ===\n", .{});
-    print("RPC patterns: {}\n", .{non_flush_patterns.items.len});
+    print("Rank mask patterns: {}\n", .{non_flush_patterns.items.len});
 
-    const chd_result = try buildRPCHash(allocator, non_flush_patterns.items);
+    const chd_result = try buildRankMaskHash(allocator, non_flush_patterns.items);
     defer chd.deinit(chd_result, allocator);
 
     print("CHD construction SUCCESS:\n", .{});
@@ -202,7 +185,7 @@ pub fn main() !void {
 
     // Populate CHD value table using the same lookup logic as runtime
     for (non_flush_patterns.items) |pattern| {
-        const final_idx = chd.lookup(@as(u64, pattern.rpc), chd_result);
+        const final_idx = chd.lookup(@as(u64, pattern.rank_mask), chd_result);
         if (final_idx < chd_values.len) {
             chd_values[final_idx] = pattern.value;
         }
@@ -329,26 +312,26 @@ pub fn main() !void {
     print("\n=== SUCCESS ===\n", .{});
     print("DESIGN.md compliant CHD tables generated successfully!\n", .{});
 
-    // VALIDATION: Test RPC encoding and CHD lookup with real poker data
+    // VALIDATION: Test rank mask encoding and CHD lookup with real poker data
     print("\n=== VALIDATION ===\n", .{});
-    print("Testing RPC encoding on sample hands...\n", .{});
+    print("Testing rank mask encoding on sample hands...\n", .{});
 
-    // Test RPC encoding on first few patterns
+    // Test rank mask encoding on first few patterns
     const sample_size = @min(5, non_flush_patterns.items.len);
     for (non_flush_patterns.items[0..sample_size]) |pattern| {
-        print("  RPC 0x{x:08} -> value {}\n", .{ pattern.rpc, pattern.value });
+        print("  Rank mask 0x{x:04} -> value {}\n", .{ pattern.rank_mask, pattern.value });
     }
 
     // Performance test of optimized CHD lookup
     if (non_flush_patterns.items.len > 0) {
         print("\nTesting CHD lookup performance...\n", .{});
-        const test_rpc = non_flush_patterns.items[0].rpc;
+        const test_rank_mask = non_flush_patterns.items[0].rank_mask;
         const iterations = 1_000_000;
         var checksum: u64 = 0;
 
         const start = std.time.nanoTimestamp();
         for (0..iterations) |_| {
-            const value = chd.chdLookup(test_rpc, chd_result.displacements, chd_values);
+            const value = chd.chdLookup(test_rank_mask, chd_result.displacements, chd_values);
             checksum +%= value;
         }
         const end = std.time.nanoTimestamp();
