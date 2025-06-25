@@ -1,140 +1,184 @@
 const std = @import("std");
 const evaluator = @import("evaluator.zig");
+const simd_evaluator = @import("simd_evaluator.zig");
+const chd = @import("chd.zig");
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+// Generate random hands for testing and benchmarking
+pub fn generateRandomHandBatch(rng: *std.Random) simd_evaluator.HandBatch {
+    var hands: [16]u64 = undefined;
 
-    try runEvaluatorBenchmark(allocator);
+    for (&hands) |*hand| {
+        hand.* = generateRandomHand(rng);
+    }
+
+    return simd_evaluator.HandBatch{ hands[0], hands[1], hands[2], hands[3], hands[4], hands[5], hands[6], hands[7], hands[8], hands[9], hands[10], hands[11], hands[12], hands[13], hands[14], hands[15] };
 }
 
-pub fn runEvaluatorBenchmark(allocator: std.mem.Allocator) !void {
+fn generateRandomHand(rng: *std.Random) evaluator.Hand {
+    var hand: evaluator.Hand = 0;
+    var cards_dealt: u8 = 0;
+
+    while (cards_dealt < 7) {
+        const suit = rng.intRangeAtMost(u8, 0, 3);
+        const rank = rng.intRangeAtMost(u8, 0, 12);
+        const card = evaluator.makeCard(suit, rank);
+
+        if ((hand & card) == 0) {
+            hand |= card;
+            cards_dealt += 1;
+        }
+    }
+
+    return hand;
+}
+
+// Test the SIMD evaluator
+pub fn testSimdEvaluator() !void {
+    _ = std.mem.Allocator;
     const print = std.debug.print;
 
-    print("✋ Ultra-Fast Poker Hand Evaluator Benchmark\n", .{});
-    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
+    print("Testing SIMD evaluator (DESIGN.md implementation)...\n", .{});
 
-    // Generate fixed set of random hands
-    const hand_count = 10000;
-    print("Generating {} random hands...\n", .{hand_count});
-    
-    const hands = try allocator.alloc(u64, hand_count);
-    defer allocator.free(hands);
+    const simd_eval = simd_evaluator.SimdEvaluator.init();
 
-    var rng = std.Random.DefaultPrng.init(42);
-    const random = rng.random();
-    
-    for (hands) |*hand| {
-        // Generate 7 unique random cards (0-51)
-        var cards: [7]u8 = undefined;
-        var used = std.bit_set.IntegerBitSet(52).initEmpty();
-        
-        for (0..7) |i| {
-            var card: u8 = undefined;
-            while (true) {
-                card = @intCast(random.uintLessThan(u32, 52));
-                if (!used.isSet(card)) {
-                    used.set(card);
-                    break;
-                }
-            }
-            cards[i] = card;
-        }
-        
-        hand.* = evaluator.encodeCards(&cards);
-    }
+    // Generate test batch
+    var prng = std.Random.DefaultPrng.init(42);
+    var rng = prng.random();
+    const batch = generateRandomHandBatch(&rng);
 
-    // Warm-up run
-    var dummy: u64 = 0;
-    for (hands) |hand| {
-        const result = evaluator.eval7(hand);
-        dummy +%= result;
-    }
+    // Evaluate batch
+    const batch_results = simd_eval.evaluateBatch(batch);
 
-    // Main benchmark - multiple runs
-    const runs = 3;
-    var total_ops: u64 = 0;
-    var total_ns: u64 = 0;
-    var run_results = try allocator.alloc(f64, runs);
-    defer allocator.free(run_results);
+    // Validate against single-hand evaluation
+    print("Validation against single-hand evaluation:\n", .{});
+    var matches: u32 = 0;
 
-    for (0..runs) |run| {
-        const start = std.time.nanoTimestamp();
-        var ops: u64 = 0;
-        const target_duration_ns = 1_000_000_000; // 1 second target
+    for (0..16) |i| {
+        const hand = batch[i];
+        const batch_result = batch_results[i];
+        const single_result = evaluator.evaluateHand(hand);
 
-        // Run for approximately 1 second
-        while (std.time.nanoTimestamp() - start < target_duration_ns) {
-            for (hands) |hand| {
-                const result = evaluator.eval7(hand);
-                dummy +%= result;
-                ops += 1;
-            }
+        if (batch_result == single_result) {
+            matches += 1;
         }
 
-        const end = std.time.nanoTimestamp();
-        const duration_ns = @as(u64, @intCast(end - start));
-        const ns_per_op = @as(f64, @floatFromInt(duration_ns)) / @as(f64, @floatFromInt(ops));
-
-        print("Run {}: {} ops, {d:.2} ns/op\n", .{ run + 1, ops, ns_per_op });
-        
-        run_results[run] = ns_per_op;
-        total_ops += ops;
-        total_ns += duration_ns;
+        if (i < 5) { // Show first 5 for debugging
+            print("  Hand {}: batch={}, single={}, match={}\n", .{ i, batch_result, single_result, batch_result == single_result });
+        }
     }
 
-    // Calculate statistics
-    const avg_ns_per_op = @as(f64, @floatFromInt(total_ns)) / @as(f64, @floatFromInt(total_ops));
-    const evaluations_per_sec = 1_000_000_000.0 / avg_ns_per_op;
+    print("Accuracy: {}/16 ({d:.1}%)\n", .{ matches, @as(f64, @floatFromInt(matches)) * 100.0 / 16.0 });
+    print("SIMD evaluator test complete\n", .{});
+}
 
-    // Calculate standard deviation
-    var variance: f64 = 0;
-    for (run_results) |result| {
-        const diff = result - avg_ns_per_op;
-        variance += diff * diff;
+// Benchmark the SIMD evaluator (target: 2-5 ns/hand)
+pub fn benchmarkSimdEvaluator(iterations: u32) !void {
+    _ = std.mem.Allocator;
+    const print = std.debug.print;
+
+    print("SIMD Evaluator Benchmark (DESIGN.md target: 2-5 ns/hand)\n", .{});
+    print("=========================================================\n", .{});
+
+    // Tables are now pre-compiled in tables.zig
+
+    const simd_eval = simd_evaluator.SimdEvaluator.init();
+
+    // Generate test batches
+    var prng = std.Random.DefaultPrng.init(42);
+    var rng = prng.random();
+
+    var test_batches: [100]simd_evaluator.HandBatch = undefined;
+    for (&test_batches) |*batch| {
+        batch.* = generateRandomHandBatch(&rng);
     }
-    variance /= @as(f64, @floatFromInt(runs));
-    const std_dev = @sqrt(variance);
-    const coefficient_of_variation = (std_dev / avg_ns_per_op) * 100.0;
 
-    // Find min/max
-    var min_result = run_results[0];
-    var max_result = run_results[0];
-    for (run_results[1..]) |result| {
-        if (result < min_result) min_result = result;
-        if (result > max_result) max_result = result;
+    // Warmup
+    for (0..100) |i| {
+        _ = simd_eval.evaluateBatch(test_batches[i % test_batches.len]);
     }
 
-    print("\n📊 Performance Summary\n", .{});
-    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
-    print("Average:     {d:.2} ns/op (across {} runs)\n", .{ avg_ns_per_op, runs });
-    print("Std Dev:     {d:.2} ns/op ({d:.1}% CV)\n", .{ std_dev, coefficient_of_variation });
-    print("Min/Max:     {d:.2} - {d:.2} ns/op\n", .{ min_result, max_result });
-    print("Throughput:  {d:.1}M evaluations/second\n", .{ evaluations_per_sec / 1_000_000.0 });
+    // Measure performance
+    var checksum: u64 = 0; // Prevent optimization
+    const start = std.time.nanoTimestamp();
 
-    print("\n🎯 Performance Comparison\n", .{});
-    print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
-    print("OMPEval target:  1.3 ns/op\n", .{});
-    print("Ultra-fast:      {d:.2} ns/op\n", .{avg_ns_per_op});
-    print("Factor slower:   {d:.1}x\n", .{avg_ns_per_op / 1.3});
+    for (0..iterations) |i| {
+        const results = simd_eval.evaluateBatch(test_batches[i % test_batches.len]);
+        // Sum results to prevent optimization
+        for (0..16) |j| {
+            checksum +%= results[j];
+        }
+    }
 
-    if (avg_ns_per_op <= 1.3) {
-        print("Status: ✅ TARGET ACHIEVED!\n", .{});
-    } else if (avg_ns_per_op <= 5.0) {
-        print("Status: 🟡 Close to target (within 4x)\n", .{});
+    const end = std.time.nanoTimestamp();
+
+    // Use checksum to prevent dead code elimination
+    if (checksum == 0) {
+        print("Warning: unexpected zero checksum\n", .{});
+    }
+
+    // Calculate metrics
+    const total_ns = @as(f64, @floatFromInt(end - start));
+    const total_hands = @as(f64, @floatFromInt(iterations * 16));
+    const ns_per_hand = total_ns / total_hands;
+    const ns_per_batch = total_ns / @as(f64, @floatFromInt(iterations));
+    const hands_per_sec = 1_000_000_000.0 / ns_per_hand;
+
+    // Results
+    print("Iterations: {} batches ({} hands)\n", .{ iterations, iterations * 16 });
+    print("Total time: {d:.2} ms\n", .{total_ns / 1_000_000.0});
+    print("Time per batch: {d:.2} ns\n", .{ns_per_batch});
+    print("Time per hand: {d:.2} ns\n", .{ns_per_hand});
+    print("Hands per second: {d:.0}\n", .{hands_per_sec});
+    print("Checksum: {} (prevents optimization)\n", .{checksum});
+
+    // Compare with DESIGN.md targets
+    print("\nDESIGN.md Performance Targets:\n", .{});
+    print("  Hot L1, random hands: 2.0-2.4 ns/hand\n", .{});
+    print("  Stressed L2 (multi-thread): 2.9 ns/hand\n", .{});
+    print("  AVX2 (8-lane) fallback: 5.0 ns/hand\n", .{});
+
+    if (ns_per_hand <= 2.4) {
+        print("  Status: 🎯 TARGET ACHIEVED! (Hot L1 performance)\n", .{});
+    } else if (ns_per_hand <= 2.9) {
+        print("  Status: 🔥 EXCELLENT! (Stressed L2 performance)\n", .{});
+    } else if (ns_per_hand <= 5.0) {
+        print("  Status: ✅ GOOD! (AVX2 fallback performance)\n", .{});
+    } else if (ns_per_hand <= 10.0) {
+        print("  Status: 🔄 Close ({d:.1}x slower than target)\n", .{ns_per_hand / 5.0});
     } else {
-        print("Status: 🔴 Needs more optimization\n", .{});
+        print("  Status: ⚠️  Needs optimization ({d:.1}x slower than target)\n", .{ns_per_hand / 5.0});
     }
 
-    // Variability assessment
-    if (coefficient_of_variation < 5.0) {
-        print("Stability: ✅ Very stable (CV < 5%)\n", .{});
-    } else if (coefficient_of_variation < 10.0) {
-        print("Stability: 🟡 Moderately stable (CV < 10%)\n", .{});
+    print("\n", .{});
+}
+
+// Benchmark CHD lookup performance
+pub fn benchmarkCHD(iterations: u32) !void {
+    const print = std.debug.print;
+    
+    print("CHD Lookup Benchmark (DESIGN.md RPC tables)\n", .{});
+    print("============================================\n", .{});
+    
+    const ns_per_lookup = chd.benchmarkCHDLookup(iterations);
+    const lookups_per_sec = 1_000_000_000.0 / ns_per_lookup;
+    
+    print("Iterations: {}\n", .{iterations});
+    print("Time per lookup: {d:.2} ns\n", .{ns_per_lookup});
+    print("Lookups per second: {d:.0}\n", .{lookups_per_sec});
+    
+    print("\nCHD vs DESIGN.md targets:\n", .{});
+    if (ns_per_lookup <= 2.5) {
+        print("  Status: 🎯 EXCELLENT! (Within 2.5ns target)\n", .{});
+    } else if (ns_per_lookup <= 5.0) {
+        print("  Status: ✅ GOOD! (Within 5ns target)\n", .{});
     } else {
-        print("Stability: 🔴 High variability (CV > 10%)\n", .{});
+        print("  Status: ⚠️  Needs optimization ({d:.1}x slower than 2.5ns target)\n", .{ns_per_lookup / 2.5});
     }
+    
+    print("\n", .{});
+}
 
-    print("Checksum (prevent optimization): {}\n", .{dummy});
+pub fn main() !void {
+    try benchmarkCHD(100000);
+    try benchmarkSimdEvaluator(1000000);
 }
