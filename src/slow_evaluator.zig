@@ -79,7 +79,7 @@ fn getHighestRanks(ranks: u16, count: u8) u16 {
 fn getStraightMask(ranks: u16) u16 {
     // Check for wheel (A-2-3-4-5)
     if ((ranks & 0x100F) == 0x100F) { // A,2,3,4,5
-        return 0x000F; // Return 2,3,4,5 (wheel straight uses 5 as high card)
+        return 0x100F; // Return full wheel pattern including Ace for straight flush detection
     }
 
     // Check for regular straights
@@ -123,8 +123,8 @@ pub fn evaluateHand(hand: Hand) HandRank {
             if (straight_in_flush == 0x1F00) { // 10,J,Q,K,A
                 return 0; // Royal flush (rank 0 = best possible hand)
             }
-            // Straight flush - rank 1-9 based on high card
-            if (straight_in_flush == 0x000F) { // A-2-3-4-5 wheel (5-high)
+            // Wheel straight flush (A-2-3-4-5) - 5-high
+            if (straight_in_flush == 0x100F) { // A,2,3,4,5 wheel (full pattern)
                 return 9; // Worst straight flush
             }
             // Other straight flushes: K-high=1, Q-high=2, ..., 6-high=8
@@ -387,4 +387,25 @@ test "flush detection" {
     
     const no_flush = makeCard(0, 12) | makeCard(1, 10) | makeCard(2, 8) | makeCard(3, 6);
     try std.testing.expect(!hasFlush(no_flush));
+}
+
+test "wheel straight flush (A-5-4-3-2)" {
+    // Wheel straight flush: A,2,3,4,5 all clubs + 2 off-suit cards  
+    // Ranks: A=12, 2=0, 3=1, 4=2, 5=3 → pattern 0x100F
+    const wheel_sf = makeCard(0, 12) | makeCard(0, 0) | makeCard(0, 1) | makeCard(0, 2) | makeCard(0, 3) |
+        makeCard(1, 10) | makeCard(2, 8); // Add two off-suit cards
+    
+    const rank = evaluateHand(wheel_sf);
+    std.debug.print("Wheel straight flush rank: {} (expected: 9 for worst straight flush)\n", .{rank});
+    
+    // Check if it's being detected as straight flush vs regular flush
+    const suits = getSuitMasks(wheel_sf);
+    const club_mask = suits[0]; // clubs = suit 0
+    const straight_in_flush = getStraightMask(club_mask);
+    
+    std.debug.print("Club mask: 0x{X}, getStraightMask result: 0x{X}\n", .{club_mask, straight_in_flush});
+    std.debug.print("Expected wheel pattern in flush: 0x100F (A,5,4,3,2)\n", .{});
+    
+    // Should be rank 9 (worst straight flush) - fixed!
+    try std.testing.expect(rank == 9); // Wheel straight flush
 }

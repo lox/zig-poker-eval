@@ -136,7 +136,7 @@ pub const SIMDEvaluator = struct {
                             // This is a straight flush - rank 0-9
                             if (straight_mask == 0x1F00) { // Royal flush (AKQJT)
                                 results[lane] = 0;
-                            } else if (straight_mask == 0x000F) { // Wheel (A2345, 5-high)
+                            } else if (straight_mask == 0x100F) { // Wheel (A2345, 5-high) - fixed pattern
                                 results[lane] = 9;
                             } else {
                                 // Other straight flushes: K-high=1, Q-high=2, ..., 6-high=8
@@ -248,7 +248,7 @@ fn chd_hash(rpc: u32) struct { bucket: u32, base_index: u32 } {
     const h = mix64(@as(u64, rpc));
     return .{
         .bucket = @intCast(h >> 51), // Top 13 bits -> bucket (0..8191)
-        .base_index = @intCast(h & 0x3FFFF), // Low 18 bits -> base index
+        .base_index = @intCast(h & 0x1FFFF), // Low 17 bits -> base index (0..131071)
     };
 }
 
@@ -503,7 +503,7 @@ fn read_u16_le(bytes: []const u8) u16 {
 fn get_straight_mask(ranks: u16) u16 {
     // Check for wheel (A-2-3-4-5)
     if ((ranks & 0x100F) == 0x100F) { // A,2,3,4,5
-        return 0x000F; // Return 2,3,4,5 (wheel straight uses 5 as high card)
+        return 0x100F; // Return full wheel pattern including Ace for straight flush detection
     }
 
     // Check for regular straights

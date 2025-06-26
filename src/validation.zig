@@ -68,6 +68,10 @@ fn test_known_hand_types() !void {
         // Royal flush clubs
         .{ .hand = 0x1F00 | (1 << 13) | (1 << 26), .name = "Royal Flush", .expected_rank_min = 0, .expected_rank_max = 9 },
 
+        // Wheel straight flush (A-2-3-4-5) clubs + 2 off-suit cards  
+        // Fixed: Now correctly detects as straight flush (rank 9)
+        .{ .hand = (1 << 12) | (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << (13 + 10)) | (1 << (26 + 8)), .name = "Wheel Straight Flush", .expected_rank_min = 9, .expected_rank_max = 9 },
+
         // Four aces
         .{ .hand = (1 << 12) | (1 << (13 + 12)) | (1 << (26 + 12)) | (1 << (39 + 12)) | (1 << 11) | (1 << (13 + 10)) | (1 << (26 + 9)), .name = "Four Aces", .expected_rank_min = 10, .expected_rank_max = 165 },
 

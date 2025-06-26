@@ -40,7 +40,7 @@ pub fn main() !void {
     validate_table_sizes();
 
     // Generate output file
-    print("Writing src/claude/tables.zig...\n", .{});
+    print("Writing src/tables.zig...\n", .{});
     try write_tables_file();
 
     print("Table generation complete!\n", .{});
@@ -116,23 +116,79 @@ fn chd_hash(rpc: u32) struct { bucket: u32, base_index: u32 } {
     const h = mix64(@as(u64, rpc));
     return .{
         .bucket = @intCast(h >> 51), // Top 13 bits -> bucket (0..8191)
-        .base_index = @intCast(h & 0x3FFFF), // Low 18 bits -> base index (0..262143)
+        .base_index = @intCast(h & 0x1FFFF), // Low 17 bits -> base index (0..131071)
     };
 }
 
-fn enumerate_non_flush_hands(patterns: *std.ArrayList(RPCEntry), allocator: std.mem.Allocator) !void {
-    print("    Generating all 7-card hands...\n", .{});
-    const all_hands = try generate_all_hands(allocator);
-    defer all_hands.deinit();
+// Streaming iterator for 7-card combinations (avoids OOM)
+const HandIterator = struct {
+    combination: [7]u8,
+    finished: bool,
     
-    print("    Generated {} total hands, filtering non-flush...\n", .{all_hands.items.len});
+    fn init() HandIterator {
+        return HandIterator{
+            .combination = [_]u8{ 0, 1, 2, 3, 4, 5, 6 }, // Start with first combination
+            .finished = false,
+        };
+    }
+    
+    fn next(self: *HandIterator) ?evaluator.Hand {
+        if (self.finished) return null;
+        
+        // Convert current combination to hand mask
+        var hand: evaluator.Hand = 0;
+        for (self.combination) |card_idx| {
+            const suit = card_idx / 13;
+            const rank = card_idx % 13;
+            hand |= evaluator.makeCard(suit, rank);
+        }
+        
+        // Generate next combination using lexicographic ordering
+        if (!self.nextCombination()) {
+            self.finished = true;
+        }
+        
+        return hand;
+    }
+    
+    fn nextCombination(self: *HandIterator) bool {
+        // Find rightmost element that can be incremented
+        var i: i8 = 6; // Start from rightmost position
+        while (i >= 0) : (i -= 1) {
+            if (self.combination[@intCast(i)] < 52 - (7 - @as(u8, @intCast(i)))) {
+                // Increment this position
+                self.combination[@intCast(i)] += 1;
+                
+                // Reset all positions to the right
+                var j: u8 = @intCast(i + 1);
+                while (j < 7) : (j += 1) {
+                    self.combination[j] = self.combination[j - 1] + 1;
+                }
+                return true;
+            }
+        }
+        return false; // No more combinations
+    }
+};
+
+fn enumerate_non_flush_hands(patterns: *std.ArrayList(RPCEntry), allocator: std.mem.Allocator) !void {
+    print("    Streaming 7-card hand enumeration (no memory explosion)...\n", .{});
     
     // Use HashMap to deduplicate by RPC
     var seen_rpcs = std.AutoHashMap(u32, u16).init(allocator);
     defer seen_rpcs.deinit();
     
     var non_flush_count: usize = 0;
-    for (all_hands.items) |hand| {
+    var total_hands: usize = 0;
+    
+    // Streaming enumeration: generate one hand at a time
+    var iterator = HandIterator.init();
+    while (iterator.next()) |hand| {
+        total_hands += 1;
+        if (total_hands % 10_000_000 == 0) {
+            print("    Processed {} million hands...\n", .{total_hands / 1_000_000});
+        }
+        
         if (!evaluator.hasFlush(hand)) {
             const rpc = compute_rpc(hand);
             
@@ -150,20 +206,26 @@ fn enumerate_non_flush_hands(patterns: *std.ArrayList(RPCEntry), allocator: std.
         }
     }
     
-    print("    Found {} non-flush hands ({} unique RPCs)\n", .{ non_flush_count, patterns.items.len });
+    print("    Found {} non-flush hands ({} unique RPCs) from {} total\n", .{ non_flush_count, patterns.items.len, total_hands });
 }
 
 fn enumerate_flush_hands(patterns: *std.ArrayList(FlushEntry), allocator: std.mem.Allocator) !void {
-    print("    Generating all 7-card hands...\n", .{});
-    const all_hands = try generate_all_hands(allocator);
-    defer all_hands.deinit();
-    
-    print("    Filtering flush hands...\n", .{});
+    print("    Streaming flush hand enumeration...\n", .{});
     
     var seen_patterns = std.AutoHashMap(u16, u16).init(allocator);
     defer seen_patterns.deinit();
     
-    for (all_hands.items) |hand| {
+    var flush_count: usize = 0;
+    var total_hands: usize = 0;
+    
+    // Streaming enumeration: generate one hand at a time
+    var iterator = HandIterator.init();
+    while (iterator.next()) |hand| {
+        total_hands += 1;
+        if (total_hands % 10_000_000 == 0) {
+            print("    Processed {} million hands, found {} patterns...\n", .{total_hands / 1_000_000, patterns.items.len});
+        }
+        
         if (evaluator.hasFlush(hand)) {
             const suits = evaluator.getSuitMasks(hand);
             
@@ -177,20 +239,19 @@ fn enumerate_flush_hands(patterns: *std.ArrayList(FlushEntry), allocator: std.me
                         const rank = slow_evaluate_flush(flush_pattern);
                         try seen_patterns.put(flush_pattern, rank);
                         
-                        
-                        
                         try patterns.append(FlushEntry{
                             .pattern = @truncate(flush_pattern),
                             .rank = rank,
                         });
                     }
+                    flush_count += 1;
                     break; // Only need first qualifying suit
                 }
             }
         }
     }
     
-    print("    Found {} unique flush patterns\n", .{patterns.items.len});
+    print("    Found {} flush hands ({} unique patterns) from {} total\n", .{ flush_count, patterns.items.len, total_hands });
 }
 
 fn get_top5_ranks(suit_mask: u16) u16 {
@@ -582,8 +643,7 @@ fn slow_evaluate_hand(hand: evaluator.Hand) u16 {
 }
 
 fn slow_evaluate_flush(pattern: u16) u16 {
-    // Build a 7-card hand with 5 flush cards + 2 very low off-suit cards
-    // Use the lowest possible ranks (2,3) in different suits to avoid interference
+    // Build a 7-card hand with exactly 5 flush cards + 2 non-conflicting off-suit cards
     var hand: evaluator.Hand = 0;
     
     // Add the flush pattern cards (clubs suit = suit 0)
@@ -593,48 +653,38 @@ fn slow_evaluate_flush(pattern: u16) u16 {
         }
     }
     
-    // Add exactly 2 off-suit cards: 2 of diamonds, 3 of diamonds
-    // Use ranks that are guaranteed not to interfere with any flush patterns
-    hand |= evaluator.makeCard(1, 0); // 2 of diamonds  
-    hand |= evaluator.makeCard(1, 1); // 3 of diamonds
+    // Find 2 ranks NOT in the flush pattern to use as off-suit fillers
+    var filler_ranks: [2]u8 = undefined;
+    var filler_count: u8 = 0;
     
-    const rank = evaluator.evaluateHand(hand);
+    for (0..13) |r| {
+        const rank_bit = @as(u16, 1) << @intCast(r);
+        if ((pattern & rank_bit) == 0 and filler_count < 2) {
+            filler_ranks[filler_count] = @intCast(r);
+            filler_count += 1;
+        }
+    }
     
+    // Add the two non-conflicting off-suit cards (use diamonds = suit 1)
+    if (filler_count >= 2) {
+        hand |= evaluator.makeCard(1, filler_ranks[0]); // diamonds
+        hand |= evaluator.makeCard(1, filler_ranks[1]); // diamonds
+    } else {
+        // Fallback: use spades if not enough diamonds ranks available
+        hand |= evaluator.makeCard(3, filler_ranks[0]); // spades
+        if (filler_count >= 1) {
+            hand |= evaluator.makeCard(1, filler_ranks[0]); // diamonds (same rank, different suit)
+        } else {
+            // Ultimate fallback - use lowest rank not in pattern
+            hand |= evaluator.makeCard(1, 0); // 2 of diamonds
+        }
+    }
     
-    return rank;
+    return evaluator.evaluateHand(hand);
 }
 
 // Generate all C(52,7) combinations of 7 cards
-fn generate_all_hands(allocator: std.mem.Allocator) !std.ArrayList(evaluator.Hand) {
-    var hands = std.ArrayList(evaluator.Hand).init(allocator);
-    
-    // Generate all combinations of 7 cards from 52
-    var combination = [_]u8{0} ** 7;
-    try generate_combinations(0, 0, 52, 7, &combination, &hands);
-    
-    return hands;
-}
-
-fn generate_combinations(start: u8, depth: u8, total: u8, choose: u8, 
-                        combination: *[7]u8, hands: *std.ArrayList(evaluator.Hand)) !void {
-    if (depth == choose) {
-        // Convert card indices to hand mask
-        var hand: evaluator.Hand = 0;
-        for (combination[0..choose]) |card_idx| {
-            const suit = card_idx / 13;
-            const rank = card_idx % 13;
-            hand |= evaluator.makeCard(suit, rank);
-        }
-        try hands.append(hand);
-        return;
-    }
-    
-    var i: u8 = start;
-    while (i <= total - (choose - depth)) : (i += 1) {
-        combination[depth] = i;
-        try generate_combinations(i + 1, depth + 1, total, choose, combination, hands);
-    }
-}
+// Old memory-intensive functions removed - now using streaming HandIterator
 
 fn validate_table_sizes() void {
     // Validate table sizes
@@ -666,7 +716,7 @@ fn validate_table_sizes() void {
 }
 
 fn write_tables_file() !void {
-    const file = try std.fs.cwd().createFile("src/claude/tables.zig", .{});
+    const file = try std.fs.cwd().createFile("src/tables.zig", .{});
     defer file.close();
     
     const writer = file.writer();

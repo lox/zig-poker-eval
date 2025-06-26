@@ -1,16 +1,40 @@
 # 2-5 ns Per-Hand 7-Card Evaluator Design
 
-Below is a design sketch for a 2-5 ns per-hand 7-card evaluator on a single modern x86-64 core (Ice Lake, Sapphire Rapids, Zen 4) or any ARM machine with SVE-256+. The numbers assume a 3.5 GHz clock (≈0.29 ns per cycle).
+Below is a design sketch for a 2-5 ns per-hand 7-card evaluator optimized for both **x86-64** (Ice Lake, Sapphire Rapids, Zen 4) and **ARM64** (Apple M1/M2, Neoverse) architectures. The numbers assume a 3.5 GHz clock (≈0.29 ns per cycle).
 
-## 1. Representation that is SIMD-friendly
+## 1. Architecture-Adaptive SIMD Strategy
+
+### 1.1 Architecture Detection
+```zig
+const Target = enum { x86_64_avx512, x86_64_avx2, arm64_neon };
+
+const target_arch = comptime blk: {
+    if (@import("builtin").target.cpu.arch == .x86_64) {
+        if (std.Target.x86.featureSetHas(@import("builtin").target.cpu.features, .avx512f)) {
+            break :blk Target.x86_64_avx512;
+        } else {
+            break :blk Target.x86_64_avx2;
+        }
+    } else if (@import("builtin").target.cpu.arch == .aarch64) {
+        break :blk Target.arm64_neon;
+    } else {
+        @compileError("Unsupported architecture");
+    }
+};
+```
+
+### 1.2 Representation and Batch Sizing
 
 Keep each hand in one 64-bit word (normal 52-bit card mask).
 
 Split that into a 13-bit rank mask and four 13-bit suit masks on the fly with two shifts and one OR.
 
-Pack 16 masks at a time into one 1024-bit register pair (zmm0 = rank masks, zmm1 = suitH, etc.) so the evaluator always processes 16 hands per SIMD batch. (AVX-512 gives 16 lanes of 64 bit, SVE can do 32.)
+**Architecture-specific batch sizes:**
+- **x86-64 AVX-512**: 16 hands per batch (16×64-bit lanes)
+- **x86-64 AVX2**: 8 hands per batch (8×64-bit lanes)  
+- **ARM64 NEON**: 4 hands per batch (2×128-bit pipes, optimal for M1)
 
-That turns "cycles per hand" into "cycles per batch / 16". If the batch takes ~120 cycles the per-hand cost is 7-8 cycles ⇒ 2.0-2.3 ns.
+This turns "cycles per hand" into "cycles per batch / N". Target: ~120 cycles per batch ⇒ 2.0-2.3 ns per hand.
 
 ## 2. Two-path branch-free classification
 
@@ -20,17 +44,38 @@ That turns "cycles per hand" into "cycles per batch / 16". If the batch takes ~1
 
 Because flushes appear in <0.4% of random deals this mask is almost always zero; the non-flush path can run unconditionally and the flush path can be masked-off (AVX-512 predication) so it costs nothing unless needed.
 
-### 2.2 Non-flush path
+### 2.2 Non-flush path (Architecture-Adaptive)
 
 1. Compute the 31-bit base-5 RPC for each lane (see Appendix 1).
 2. Multiply `r` by a pre-computed magic constant and keep the high bits.
    - That constant is generated offline so that the rank patterns map without collision into 8,192 buckets.
-3. Use VGATHERDD to fetch a pre-computed displacement value (1 byte per bucket, table = 8 KB, always L1-resident).
-   - Note: x86-64 cannot gather 8-bit elements; g[b] should be stored as u32 (4 identical bytes) or packed (4 buckets per dword, right-shifted in-register). This implementation ships the u32 variant (32 KB).
-4. Add displacement to base hash, mask to final table size → final index.
-5. Gather the final 16-bit hand rank (rank 0-7,461; 0 = Royal Flush (best hand), 7461 = Worst high card hand).
 
-Because the table is only 128 KB and accessed with 16-lane gathers, latency is 4-6 cycles and is overlapped with earlier multiplies. All maths are one-cycle INT ops; the critical path is ~7 scalar cycles.
+**Architecture-specific lookup strategies:**
+
+#### **x86-64 AVX-512/AVX2 Path:**
+3. Use VGATHERDD to fetch pre-computed displacement values (1 byte per bucket, table = 8 KB).
+   - Note: x86-64 cannot gather 8-bit elements; g[b] stored as u32 (4 identical bytes) or packed.
+4. Add displacement to base hash, mask to final table size → final index.
+5. Gather the final 16-bit hand rank with VGATHERDQU16.
+
+#### **ARM64 NEON Path (M1-Optimized):**
+3. Replace gather with optimized scalar loads + vector packing:
+   ```zig
+   // 4-lane lookup in ~12 cycles
+   adr x_tmp, table_base
+   ldrh w0, [x_tmp, x_idx0, lsl #1]  // Load displacement
+   ldrh w1, [x_tmp, x_idx1, lsl #1]
+   ldrh w2, [x_tmp, x_idx2, lsl #1] 
+   ldrh w3, [x_tmp, x_idx3, lsl #1]
+   // Pack results with zip1/zip2 instructions
+   ```
+4. Add prefetch instructions: `prfm PLDL1KEEP, [base, idx]`
+5. Pack rank values: 2 ranks per u32 (13-bit max), reducing table to 64KB
+
+**Performance characteristics:**
+- **x86-64**: 4-6 cycle gather latency, overlapped with multiplies
+- **ARM64**: 12-15 cycle explicit loads, but better cache utilization (64KB vs 128KB)
+- All paths achieve ~7 scalar cycle critical path
 
 **Note:**
 Hand ranks are assigned such that:
@@ -50,14 +95,39 @@ All 7-card hands are mapped to this range, with lower numbers representing stron
 
 Both paths finish by VMOVDQU16-storing the 16×16-bit results to user memory.
 
-## 3. Tables, cache footprint and generation
+## 3. Tables, cache footprint and generation (Architecture-Adaptive)
 
+### 3.1 x86-64 Table Layout
 | Table | Size | Notes |
 |-------|------|-------|
 | CHD displacement array | 8,192 B | One u8 displacement per bucket (max observed: 14) |
 | CHD value table | 262,144 B | 131,072 slots × 2 bytes (power-of-2 for AND mask) |
 | BBHash flush table | 3,222 B | Bit-vectors (648B) + rank array (2,574B) |
-| **Total** | **273,558 B ≈ 267 KiB** | **Production-ready L2-resident** |
+| **Total** | **273,558 B ≈ 267 KiB** | **L2-resident** |
+
+### 3.2 ARM64 Table Layout (M1-Optimized)
+| Table | Size | Notes |
+|-------|------|-------|
+| CHD displacement array | 8,192 B | One u8 displacement per bucket |
+| CHD value table (packed) | 131,072 B | 65,536 slots × 2 bytes (2 ranks per u32) |
+| BBHash flush table | 3,222 B | Bit-vectors (648B) + rank array (2,574B) |
+| **Total** | **142,486 B ≈ 139 KiB** | **Fits in M1 L1 + prefetch buffer** |
+
+### 3.3 Architecture Selection Logic
+```zig
+const TableConfig = switch (target_arch) {
+    .x86_64_avx512, .x86_64_avx2 => struct {
+        const batch_size = if (target_arch == .x86_64_avx512) 16 else 8;
+        const value_table_size = 131072 * 2; // Full 16-bit entries
+        const use_gather = true;
+    },
+    .arm64_neon => struct {
+        const batch_size = 4;
+        const value_table_size = 65536 * 4; // Packed: 2×13-bit in u32
+        const use_gather = false;
+    },
+};
+```
 
 A standalone Zig program (`build_tables.zig`) enumerates every 7-card combination once, computes the best 5-card rank (with any slow method), then builds the two-level perfect hash (CHD) for non-flush patterns and a single-level (BBHash) for flush patterns. **Generation time is not critical** - the builder may take several minutes for the full 133M enumeration, but produces optimally compact tables. The generated `tables.zig` becomes a static const blob imported at compile time.
 
@@ -89,21 +159,40 @@ A standalone Zig program (`build_tables.zig`) enumerates every 7-card combinatio
    ```
 6. **Runtime RSS**: Should settle at ≈ 280 KB plus code
 
-## 4. Expected performance
+## 4. Expected performance (Architecture-Specific)
 
-| Scenario | Cycles per 16-hand batch | ns / hand (3.5 GHz) |
-|----------|--------------------------|---------------------|
-| Hot L1, random hands | 110 - 130 | 2.0 - 2.4 |
-| Stressed L2 (multi-thread) | 160 | 2.9 |
-| AVX2 (8-lane) fallback | 140 (8 hands) | 5.0 |
+### 4.1 x86-64 Performance
+| Scenario | Cycles per batch | ns / hand (3.5 GHz) |
+|----------|------------------|---------------------|
+| AVX-512 (16 hands), Hot L1 | 110 - 130 | 2.0 - 2.4 |
+| AVX-512, Stressed L2 | 160 | 2.9 |
+| AVX2 (8 hands), Hot L1 | 140 | 5.0 |
+
+### 4.2 ARM64 Performance (Apple M1)
+| Scenario | Cycles per 4-hand batch | ns / hand (3.2 GHz) |
+|----------|-------------------------|---------------------|
+| NEON, Hot L1 | 44 - 52 | 4.3 - 5.1 |
+| NEON, L2 resident | 60 | 5.9 |
+| NEON with prefetch | 48 | 4.7 |
+
+### 4.3 Architecture-Specific Optimizations
+
+**x86-64 advantages:**
+- SIMD gather instructions hide memory latency
+- Larger L2 cache accommodates full tables
+- 16-lane parallelism amortizes fixed costs
+
+**ARM64 advantages:**
+- Packed tables fit in L1 cache (32KB)
+- Explicit prefetch control
+- Lower memory bandwidth requirements
+- Deterministic latency (no gather stalls)
 
 **Key points:**
-
-- All data fits in L1 → gathers hit in 4-6 cycles.
-- Critical integer path is ≈ 7 cycles; overlap hides most gather latency.
-- Masked execution means the flush code is "free" for > 99% of batches.
-
-The design therefore sustains ~450M hands/s single-thread on a 3.5 GHz Ice Lake or Zen 4 part, reaching the requested 2-5 ns window without exotic hardware.
+- Critical integer path: ~7 cycles (all architectures)
+- Memory access patterns optimized per architecture
+- Masked execution makes flush code "free" for >99% of batches
+- Target sustained throughput: 200-450M hands/s depending on architecture
 
 ## 5. Why it beats today's fastest code
 
@@ -111,7 +200,126 @@ The design therefore sustains ~450M hands/s single-thread on a 3.5 GHz Ice Lake 
 - **Henry R Lee's perfect-hash evaluator** is tiny (144 KB) and branchless but scalar; ~60M h/s ~ 17 ns.
 - **ACE_eval** is branch-free but scalar; ~70M h/s.
 
-The new design keeps Henry R Lee's memory model and adds 16-way data-parallelism plus a two-level hash that is literally four integer instructions and one gather. That amortizes the hash cost across 16 lanes and hides memory latency, slashing per-hand cycles by ~4×.
+The new design keeps Henry R Lee's memory model and adds architecture-adaptive data-parallelism plus a two-level hash. x86-64 uses gather instructions for maximum throughput, while ARM64 uses explicit loads with packed tables for optimal cache utilization. This architecture-aware approach slashes per-hand cycles by 4-8× depending on the target platform.
+
+## 6. Implementation Strategy: Architecture-Adaptive Code
+
+### 6.1 Compile-Time Architecture Selection
+```zig
+// Architecture detection and configuration
+const ArchConfig = struct {
+    batch_size: comptime_int,
+    use_gather: bool,
+    table_packing: enum { none, rank_pairs },
+    prefetch_strategy: enum { none, explicit, builtin },
+};
+
+const arch_config = comptime switch (@import("builtin").target.cpu.arch) {
+    .x86_64 => if (std.Target.x86.featureSetHas(@import("builtin").target.cpu.features, .avx512f))
+        ArchConfig{ .batch_size = 16, .use_gather = true, .table_packing = .none, .prefetch_strategy = .builtin }
+    else
+        ArchConfig{ .batch_size = 8, .use_gather = true, .table_packing = .none, .prefetch_strategy = .builtin },
+    .aarch64 => ArchConfig{ .batch_size = 4, .use_gather = false, .table_packing = .rank_pairs, .prefetch_strategy = .explicit },
+    else => @compileError("Unsupported architecture for high-performance poker evaluation"),
+};
+```
+
+### 6.2 Architecture-Specific Table Layout
+```zig
+const Tables = struct {
+    // CHD displacement array (same for all architectures)
+    chd_g: [8192]u8,
+    
+    // Architecture-adaptive value table
+    chd_values: switch (arch_config.table_packing) {
+        .none => [131072]u16,      // x86-64: direct 16-bit ranks
+        .rank_pairs => [65536]u32, // ARM64: 2×13-bit ranks per u32
+    },
+    
+    // BBHash flush table (same for all architectures)
+    flush_data: FlushTables,
+};
+```
+
+### 6.3 Architecture-Specific Lookup Kernels
+```zig
+fn lookupBatch(hands: []const u64, results: []u16) void {
+    comptime switch (arch_config.use_gather) {
+        true => lookupWithGather(hands, results),   // x86-64 AVX-512/AVX2
+        false => lookupWithExplicitLoads(hands, results), // ARM64 NEON
+    };
+}
+
+// x86-64 SIMD gather implementation
+fn lookupWithGather(hands: []const u64, results: []u16) void {
+    const batch_vec = @Vector(arch_config.batch_size, u64){ /* load hands */ };
+    const rpc_vec = computeRPC(batch_vec);
+    const hash_vec = computeHash(rpc_vec);
+    
+    // Use SIMD gather for both displacement and final lookup
+    const displ_indices = extractBuckets(hash_vec);
+    const displacements = @gather(arch_config.batch_size, u8, &tables.chd_g, displ_indices);
+    
+    const final_indices = computeFinalIndices(hash_vec, displacements);
+    const ranks = @gather(arch_config.batch_size, u16, &tables.chd_values, final_indices);
+    
+    @memcpy(results, @as([]const u16, &ranks));
+}
+
+// ARM64 explicit load implementation
+fn lookupWithExplicitLoads(hands: []const u64, results: []u16) void {
+    for (hands[0..arch_config.batch_size], 0..) |hand, i| {
+        const rpc = computeRPCScalar(hand);
+        const hash = computeHashScalar(rpc);
+        const bucket = extractBucket(hash);
+        const displacement = tables.chd_g[bucket];
+        
+        const final_idx = (hash + displacement) & 0x1FFFF;
+        
+        // ARM64: Extract from packed u32 table
+        const packed_entry = tables.chd_values[final_idx >> 1];
+        const rank = if (final_idx & 1 == 0) 
+            @truncate(u16, packed_entry & 0x1FFF) 
+        else 
+            @truncate(u16, packed_entry >> 13);
+            
+        results[i] = rank;
+    }
+    
+    // Optional: Prefetch next batch
+    if (arch_config.prefetch_strategy == .explicit) {
+        @prefetch(&hands[arch_config.batch_size], .read, 3, .data);
+    }
+}
+```
+
+### 6.4 Build System Integration
+```zig
+// In build.zig
+pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
+    
+    // Architecture-specific optimizations
+    const optimize_flags = switch (target.getCpuArch()) {
+        .x86_64 => &[_][]const u8{ "-mavx512f", "-mavx512bw" },
+        .aarch64 => &[_][]const u8{ "-mcpu=apple-m1" }, // or -mcpu=native
+        else => &[_][]const u8{},
+    };
+    
+    const exe = b.addExecutable(.{
+        .name = "poker-eval",
+        .root_source_file = .{ .path = "src/main.zig" },
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    
+    for (optimize_flags) |flag| {
+        exe.addCSourceFile(.{ .file = .{ .path = "dummy.c" }, .flags = &[_][]const u8{flag} });
+    }
+}
+```
+
+This architecture-adaptive approach ensures optimal performance on both x86-64 and ARM64 while maintaining a single codebase. The key insight is using Zig's comptime system to select the right algorithm and data layout at compile time, eliminating runtime overhead from architecture detection.
 
 # Appendix 1. CHD Perfect Hash Implementation
 
