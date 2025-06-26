@@ -66,7 +66,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     exe_unit_tests.test_runner = .{
-        .path = b.path("test_runner.zig"),
+        .path = b.path("src/test_runner.zig"),
         .mode = .simple
     };
 

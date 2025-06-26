@@ -13,10 +13,8 @@ bin/zig build bench -Doptimize=ReleaseFast
 To run tests:
 
 ```sh
-bin/zig build test --summary all
+bin/zig build test
 ```
-
-See [BENCHMARKING.md](./BENCHMARKING.md) for detailed benchmarking methodology and validation steps.
 
 ## Documentation
 
