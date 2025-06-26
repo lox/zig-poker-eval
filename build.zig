@@ -77,23 +77,20 @@ pub fn build(b: *std.Build) void {
     });
     simd_tests.root_module.addImport("slow_evaluator", slow_evaluator);
 
-    const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
-    const run_simd_tests = b.addRunArtifact(simd_tests);
-    
-    // Validation tool
-    const validation = b.addExecutable(.{
-        .name = "validation",
+    // Validation tests
+    const validation_tests = b.addTest(.{
         .root_source_file = b.path("src/validation.zig"),
         .target = target,
         .optimize = optimize,
     });
-    validation.root_module.addImport("slow_evaluator", slow_evaluator);
-    
-    const run_validation = b.addRunArtifact(validation);
-    const validation_step = b.step("validate", "Run comprehensive correctness validation");
-    validation_step.dependOn(&run_validation.step);
+    validation_tests.root_module.addImport("slow_evaluator", slow_evaluator);
+
+    const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
+    const run_simd_tests = b.addRunArtifact(simd_tests);
+    const run_validation_tests = b.addRunArtifact(validation_tests);
 
     const test_step = b.step("test", "Run all unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
     test_step.dependOn(&run_simd_tests.step);
+    test_step.dependOn(&run_validation_tests.step);
 }

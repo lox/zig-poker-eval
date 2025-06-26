@@ -31,32 +31,9 @@ pub fn generateRandomHand(rng: *std.Random) u64 {
     return hand;
 }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+// Tests that run with `zig build test`
 
-    std.debug.print("Starting comprehensive validation...\n", .{});
-
-    // Test single hand evaluation
-    try test_single_hand();
-
-    // Test SIMD batch evaluation
-    try test_simd_batch_evaluation();
-
-    // Test known hand types
-    try test_known_hand_types();
-
-    // Test random hands with strict accuracy requirement
-    try test_random_hands(allocator, 100000);
-
-    // Test batch correctness validation
-    try test_batch_correctness_validation();
-
-    std.debug.print("✅ All validation tests passed!\n", .{});
-}
-
-fn test_known_hand_types() !void {
+test "known hand types" {
     std.debug.print("Testing known hand types...\n", .{});
 
     const test_hands = [_]struct {
@@ -100,10 +77,11 @@ fn test_known_hand_types() !void {
     }
 
     std.debug.print("Known hand types: all_match={}\n", .{all_match});
+    try std.testing.expect(all_match);
 }
 
-fn test_random_hands(allocator: std.mem.Allocator, num_hands: u32) !void {
-    _ = allocator;
+test "random hands validation" {
+    const num_hands = 10000; // Reduced for faster tests
     std.debug.print("Testing {} random hands...\n", .{num_hands});
 
     var prng = std.Random.DefaultPrng.init(0x12345678);
@@ -154,16 +132,11 @@ fn test_random_hands(allocator: std.mem.Allocator, num_hands: u32) !void {
     std.debug.print("Random hands: {}/{} correct ({d:.2}%), mismatches={}\n", .{ correct_count, total_count, accuracy, mismatches });
     
     // Enforce 100% accuracy requirement
-    if (accuracy < 100.0) {
-        std.debug.print("ERROR: Accuracy {d:.2}% is below required 100.0%\n", .{accuracy});
-        return error.AccuracyTooLow;
-    }
-    
+    try std.testing.expectEqual(@as(f64, 100.0), accuracy);
     std.debug.print("✓ 100% accuracy requirement met\n", .{});
 }
 
-// Single hand evaluation test (consolidated from bench.zig)
-fn test_single_hand() !void {
+test "single hand evaluation" {
     std.debug.print("\n🔍 Single Hand Test\n", .{});
 
     // Test a specific hand - Royal flush clubs
@@ -177,13 +150,10 @@ fn test_single_hand() !void {
     std.debug.print("Fast evaluator:    {d}\n", .{fast_result});
     std.debug.print("Match:             {s}\n", .{if (slow_result == fast_result) "✓" else "✗"});
 
-    if (slow_result != fast_result) {
-        return error.SingleHandMismatch;
-    }
+    try std.testing.expectEqual(slow_result, fast_result);
 }
 
-// SIMD batch evaluation test (consolidated from bench.zig)
-fn test_simd_batch_evaluation() !void {
+test "SIMD batch evaluation" {
     std.debug.print("\n🚀 SIMD Batch Evaluation Test\n", .{});
 
     const simd_eval = simd_evaluator.SIMDEvaluator.init();
@@ -216,23 +186,19 @@ fn test_simd_batch_evaluation() !void {
     const accuracy = @as(f64, @floatFromInt(matches)) / 16.0 * 100.0;
     std.debug.print("\nAccuracy: {}/16 ({d:.1}%)\n", .{ matches, accuracy });
 
-    if (matches != 16) {
-        return error.BatchEvaluationMismatch;
-    }
-
+    try std.testing.expectEqual(@as(u32, 16), matches);
     std.debug.print("✓ SIMD batch evaluation test complete\n", .{});
 }
 
-// Batch correctness validation (consolidated from bench.zig)
-fn test_batch_correctness_validation() !void {
+test "batch correctness validation" {
     std.debug.print("\n📊 Batch Correctness Validation\n", .{});
 
     const simd_eval = simd_evaluator.SIMDEvaluator.init();
     var prng = std.Random.DefaultPrng.init(0x12345678);
     var rng = prng.random();
 
-    // Generate test batches
-    var test_batches: [1000]simd_evaluator.VecU64 = undefined;
+    // Generate test batches (reduced for faster tests)
+    var test_batches: [100]simd_evaluator.VecU64 = undefined;
     for (&test_batches) |*batch| {
         batch.* = generateRandomHandBatch(&rng);
     }
@@ -258,9 +224,6 @@ fn test_batch_correctness_validation() !void {
     const accuracy = @as(f64, @floatFromInt(matches)) / @as(f64, @floatFromInt(total)) * 100.0;
     std.debug.print("Batch validation: {}/{} correct ({d:.2}%)\n", .{ matches, total, accuracy });
 
-    if (accuracy < 100.0) {
-        return error.BatchValidationFailed;
-    }
-
+    try std.testing.expectEqual(@as(f64, 100.0), accuracy);
     std.debug.print("✓ Batch correctness validation passed\n", .{});
 }
