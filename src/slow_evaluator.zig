@@ -119,13 +119,18 @@ pub fn evaluateHand(hand: Hand) HandRank {
     if (flush_suit != null and has_straight) {
         const straight_in_flush = getStraightMask(suits[flush_suit.?]);
         if (straight_in_flush != 0) {
-            // Royal flush
+            // Royal flush (AKQJT of same suit)
             if (straight_in_flush == 0x1F00) { // 10,J,Q,K,A
-                return 7461; // Royal flush
+                return 0; // Royal flush (rank 0 = best possible hand)
             }
-            // Straight flush
-            const high_card = @clz(straight_in_flush);
-            return 7454 + @as(HandRank, high_card); // Straight flush range
+            // Straight flush - rank 1-9 based on high card
+            if (straight_in_flush == 0x000F) { // A-2-3-4-5 wheel (5-high)
+                return 9; // Worst straight flush
+            }
+            // Other straight flushes: K-high=1, Q-high=2, ..., 6-high=8
+            const high_card_bit = @clz(straight_in_flush);
+            const high_card_rank = 15 - high_card_bit; // Convert clz to rank (12=A, 11=K, etc.)
+            return @as(HandRank, 12 - high_card_rank); // Map K-high=1, Q-high=2, etc.
         }
     }
 
@@ -160,43 +165,107 @@ pub fn evaluateHand(hand: Hand) HandRank {
         _ = rank;
     }
 
-    // Four of a kind
+    // Four of a kind (ranks 10-165: best quads are lower numbers)
     if (quads > 0) {
-        return 7000; // Simplified four of a kind range
+        // Find the quad rank and best kicker
+        var quad_rank: u8 = 0;
+        var kicker_rank: u8 = 0;
+        
+        for (rank_counts, 0..) |count, rank| {
+            if (count == 4) {
+                quad_rank = @intCast(rank);
+            } else if (count >= 1 and rank != quad_rank and rank > kicker_rank) {
+                kicker_rank = @intCast(rank);
+            }
+        }
+        
+        // Higher quad rank = better hand = lower rank number
+        // Aces quad = rank 10, 2s quad = rank ~165
+        return 10 + @as(HandRank, (12 - quad_rank)) * 12 + @as(HandRank, (12 - kicker_rank));
     }
 
-    // Full house
+    // Full house (ranks 166-321: best boats are lower numbers)
     if (trips > 0 and pairs > 0) {
-        return 6000; // Simplified full house range
+        var trip_rank: u8 = 0;
+        var pair_rank: u8 = 0;
+        
+        for (rank_counts, 0..) |count, rank| {
+            if (count == 3) {
+                trip_rank = @intCast(rank);
+            } else if (count == 2) {
+                pair_rank = @intCast(rank);
+            }
+        }
+        
+        // Higher trip rank = better hand = lower rank number
+        return 166 + @as(HandRank, (12 - trip_rank)) * 12 + @as(HandRank, (12 - pair_rank));
     }
 
-    // Flush (not straight)
+    // Flush (not straight) (ranks 322-1598: best flushes are lower numbers)
     if (flush_suit != null) {
-        return 5000; // Simplified flush range
+        // Simple flush ranking - A-high flush is rank 322, 7-high flush is ~1598
+        const high_card_bit = @clz(flush_ranks);
+        const high_card_rank = 15 - high_card_bit;
+        return 322 + @as(HandRank, (12 - high_card_rank)) * 100; // Approximate flush range
     }
 
-    // Straight (not flush)
+    // Straight (not flush) (ranks 1599-1608: A-high=1599, 5-high=1608)
     if (has_straight) {
-        return 4000; // Simplified straight range
+        if (straight_mask == 0x100F) { // A-2-3-4-5 wheel (5-high)
+            return 1608; // Worst straight
+        }
+        const high_card_bit = @clz(straight_mask);
+        const high_card_rank = 15 - high_card_bit;
+        return 1599 + @as(HandRank, (12 - high_card_rank)); // A-high=1599, K-high=1600, etc.
     }
 
-    // Three of a kind
+    // Three of a kind (ranks 1609-2466: AAA is better than 222)
     if (trips > 0) {
-        return 3000; // Simplified trips range
+        var trip_rank: u8 = 0;
+        for (rank_counts, 0..) |count, rank| {
+            if (count == 3) {
+                trip_rank = @intCast(rank);
+                break;
+            }
+        }
+        return 1609 + @as(HandRank, (12 - trip_rank)) * 65; // Approximate trips range
     }
 
-    // Two pair
+    // Two pair (ranks 2467-3324: AA22 is better than 3322)
     if (pairs >= 2) {
-        return 2000; // Simplified two pair range
+        var high_pair: u8 = 0;
+        var low_pair: u8 = 0;
+        
+        for (rank_counts, 0..) |count, rank| {
+            if (count == 2) {
+                if (rank > high_pair) {
+                    low_pair = high_pair;
+                    high_pair = @intCast(rank);
+                } else if (rank > low_pair) {
+                    low_pair = @intCast(rank);
+                }
+            }
+        }
+        
+        return 2467 + @as(HandRank, (12 - high_pair)) * 65 + @as(HandRank, (12 - low_pair));
     }
 
-    // One pair
+    // One pair (ranks 3325-6184: AA is better than 22)
     if (pairs == 1) {
-        return 1000; // Simplified one pair range
+        var pair_rank: u8 = 0;
+        for (rank_counts, 0..) |count, rank| {
+            if (count == 2) {
+                pair_rank = @intCast(rank);
+                break;
+            }
+        }
+        return 3325 + @as(HandRank, (12 - pair_rank)) * 220; // Approximate pair range
     }
 
-    // High card
-    return 0;
+    // High card (ranks 6185-7461: AKQJ9 is better than 75432)
+    const high_card_bit = @clz(ranks);
+    const high_card_rank = 15 - high_card_bit;
+    return 6185 + @as(HandRank, (12 - high_card_rank)) * 100; // Approximate high card range
 }
 
 // Get the hand category (0-8) for correctness verification
@@ -210,15 +279,23 @@ test "royal flush" {
         makeCard(0, 0) | makeCard(1, 1); // Add two random cards
     
     const rank = evaluateHand(royal_flush);
-    try std.testing.expect(rank == 7461); // Royal flush value
+    std.debug.print("Royal flush rank: {}\n", .{rank});
+    try std.testing.expect(rank == 0); // Royal flush = rank 0 (best possible)
+}
+
+test "royal flush clubs 0x1F00" {
+    const royal_clubs: u64 = 0x1F00; // A-K-Q-J-T clubs only (5 cards)
+    const rank = evaluateHand(royal_clubs);
+    std.debug.print("Royal flush clubs 0x1F00 rank: {}\n", .{rank});
+    try std.testing.expect(rank == 0); // Royal flush = rank 0 (best possible)
 }
 
 test "straight flush" {
     const straight_flush = makeCard(2, 8) | makeCard(2, 7) | makeCard(2, 6) | makeCard(2, 5) | makeCard(2, 4) |
-        makeCard(0, 0) | makeCard(1, 1); // Add two random cards
+        makeCard(0, 0) | makeCard(1, 1); // Add two random cards (9-high straight flush)
     
     const rank = evaluateHand(straight_flush);
-    try std.testing.expect(rank >= 7454 and rank <= 7461); // Straight flush range
+    try std.testing.expect(rank >= 1 and rank <= 9); // Straight flush range 1-9
 }
 
 test "four of a kind" {
@@ -226,7 +303,7 @@ test "four of a kind" {
         makeCard(0, 11) | makeCard(1, 10) | makeCard(2, 9);
     
     const rank = evaluateHand(four_aces);
-    try std.testing.expect(rank == 7000); // Four of a kind value
+    try std.testing.expect(rank >= 10 and rank <= 165); // Four of a kind range
 }
 
 test "full house" {
@@ -234,7 +311,7 @@ test "full house" {
         makeCard(0, 9) | makeCard(1, 9) | makeCard(2, 8) | makeCard(3, 7);
     
     const rank = evaluateHand(full_house);
-    try std.testing.expect(rank == 6000); // Full house value
+    try std.testing.expect(rank >= 166 and rank <= 321); // Full house range
 }
 
 test "flush" {
@@ -242,15 +319,15 @@ test "flush" {
         makeCard(0, 11) | makeCard(1, 9); // Add two random cards
     
     const rank = evaluateHand(flush);
-    try std.testing.expect(rank == 5000); // Flush value
+    try std.testing.expect(rank >= 322 and rank <= 1598); // Flush range
 }
 
 test "straight" {
     const straight = makeCard(0, 8) | makeCard(1, 7) | makeCard(2, 6) | makeCard(3, 5) | makeCard(0, 4) |
-        makeCard(1, 2) | makeCard(2, 0); // Add two random cards
+        makeCard(1, 2) | makeCard(2, 0); // Add two random cards (9-high straight)
     
     const rank = evaluateHand(straight);
-    try std.testing.expect(rank == 4000); // Straight value
+    try std.testing.expect(rank >= 1599 and rank <= 1608); // Straight range
 }
 
 test "wheel straight (A-2-3-4-5)" {
@@ -258,7 +335,7 @@ test "wheel straight (A-2-3-4-5)" {
         makeCard(1, 11) | makeCard(2, 10); // Add two random cards
     
     const rank = evaluateHand(wheel);
-    try std.testing.expect(rank == 4000); // Straight value
+    try std.testing.expect(rank == 1608); // Wheel is worst straight
 }
 
 test "three of a kind" {
@@ -266,7 +343,7 @@ test "three of a kind" {
         makeCard(0, 9) | makeCard(1, 7) | makeCard(2, 5) | makeCard(3, 2);
     
     const rank = evaluateHand(three_kings);
-    try std.testing.expect(rank == 3000); // Three of a kind value
+    try std.testing.expect(rank >= 1609 and rank <= 2466); // Three of a kind range
 }
 
 test "two pair" {
@@ -274,7 +351,7 @@ test "two pair" {
         makeCard(0, 6) | makeCard(1, 4) | makeCard(2, 2);
     
     const rank = evaluateHand(two_pair);
-    try std.testing.expect(rank == 2000); // Two pair value
+    try std.testing.expect(rank >= 2467 and rank <= 3324); // Two pair range
 }
 
 test "one pair" {
@@ -282,7 +359,7 @@ test "one pair" {
         makeCard(0, 4) | makeCard(1, 2) | makeCard(2, 0);
     
     const rank = evaluateHand(one_pair);
-    try std.testing.expect(rank == 1000); // One pair value
+    try std.testing.expect(rank >= 3325 and rank <= 6184); // One pair range
 }
 
 test "high card" {
@@ -290,7 +367,7 @@ test "high card" {
         makeCard(0, 4) | makeCard(1, 2) | makeCard(2, 0);
     
     const rank = evaluateHand(high_card);
-    try std.testing.expect(rank == 0); // High card value
+    try std.testing.expect(rank >= 6185 and rank <= 7461); // High card range (worst hands)
 }
 
 test "card utilities" {

@@ -11,6 +11,12 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    
+    // Add module path for slow evaluator
+    const slow_evaluator = b.createModule(.{
+        .root_source_file = b.path("src/slow_evaluator.zig"),
+    });
+    table_builder.root_module.addImport("slow_evaluator", slow_evaluator);
 
     // Run step to build lookup tables (manual use only)
     const build_tables = b.addRunArtifact(table_builder);
@@ -24,6 +30,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    exe.root_module.addImport("slow_evaluator", slow_evaluator);
 
     // NO LONGER DEPENDS ON TABLE BUILDING - uses pre-compiled tables.zig
     b.installArtifact(exe);
@@ -35,6 +42,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    bench.root_module.addImport("slow_evaluator", slow_evaluator);
 
     // NO LONGER DEPENDS ON TABLE BUILDING - uses pre-compiled tables.zig
 
@@ -59,10 +67,33 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    exe_unit_tests.root_module.addImport("slow_evaluator", slow_evaluator);
 
-    // NO LONGER DEPENDS ON TABLE BUILDING - uses pre-compiled tables.zig
+    // SIMD evaluator tests
+    const simd_tests = b.addTest(.{
+        .root_source_file = b.path("src/simd_evaluator.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    simd_tests.root_module.addImport("slow_evaluator", slow_evaluator);
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
+    const run_simd_tests = b.addRunArtifact(simd_tests);
+    
+    // Validation tool
+    const validation = b.addExecutable(.{
+        .name = "validation",
+        .root_source_file = b.path("src/validation.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    validation.root_module.addImport("slow_evaluator", slow_evaluator);
+    
+    const run_validation = b.addRunArtifact(validation);
+    const validation_step = b.step("validate", "Run comprehensive correctness validation");
+    validation_step.dependOn(&run_validation.step);
+
     const test_step = b.step("test", "Run all unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
+    test_step.dependOn(&run_simd_tests.step);
 }
