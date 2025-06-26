@@ -11,7 +11,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    
+
     // Add module path for slow evaluator (needed by table builder)
     const slow_evaluator = b.createModule(.{
         .root_source_file = b.path("src/slow_evaluator.zig"),
@@ -31,7 +31,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // NO LONGER DEPENDS ON TABLE BUILDING - uses pre-compiled tables.zig
     b.installArtifact(exe);
 
     // Benchmark executable (uses pre-compiled tables)
@@ -41,8 +40,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-
-    // NO LONGER DEPENDS ON TABLE BUILDING - uses pre-compiled tables.zig
 
     // Run benchmark
     const run_bench = b.addRunArtifact(bench);
@@ -65,10 +62,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    exe_unit_tests.test_runner = .{
-        .path = b.path("src/test_runner.zig"),
-        .mode = .simple
-    };
+    exe_unit_tests.test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple };
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
 
