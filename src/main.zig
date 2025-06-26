@@ -27,7 +27,8 @@ pub fn main() !void {
     print("Four aces - Slow: {}, Fast: {}, Match: {}\n", .{ slow_aces, fast_aces, slow_aces == fast_aces });
 }
 
-// Import tests from current modules
+// Import tests from all modules
 test {
     _ = @import("simd_evaluator.zig");
+    _ = @import("validation.zig");
 }

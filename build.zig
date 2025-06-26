@@ -66,26 +66,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // SIMD evaluator tests
-    const simd_tests = b.addTest(.{
-        .root_source_file = b.path("src/simd_evaluator.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    // Validation tests
-    const validation_tests = b.addTest(.{
-        .root_source_file = b.path("src/validation.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
-    const run_simd_tests = b.addRunArtifact(simd_tests);
-    const run_validation_tests = b.addRunArtifact(validation_tests);
 
     const test_step = b.step("test", "Run all unit tests");
     test_step.dependOn(&run_exe_unit_tests.step);
-    test_step.dependOn(&run_simd_tests.step);
-    test_step.dependOn(&run_validation_tests.step);
 }
