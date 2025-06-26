@@ -7,7 +7,13 @@ This repository implements a high-performance, cache-efficient 7-card poker hand
 To build and run the benchmarks (requires Zig 0.14.0 or later):
 
 ```sh
-bin/zig build bench -Doptimize=ReleaseFast -Dcpu=native
+bin/zig build bench -Doptimize=ReleaseFast
+```
+
+To run tests:
+
+```sh
+bin/zig build test --summary all
 ```
 
 See [BENCHMARKING.md](./BENCHMARKING.md) for detailed benchmarking methodology and validation steps.

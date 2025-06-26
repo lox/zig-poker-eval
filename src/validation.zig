@@ -13,7 +13,7 @@ pub fn generateRandomHandBatch(rng: *std.Random) simd_evaluator.VecU64 {
     return simd_evaluator.VecU64{ hands[0], hands[1], hands[2], hands[3], hands[4], hands[5], hands[6], hands[7], hands[8], hands[9], hands[10], hands[11], hands[12], hands[13], hands[14], hands[15] };
 }
 
-fn generateRandomHand(rng: *std.Random) u64 {
+pub fn generateRandomHand(rng: *std.Random) u64 {
     var hand: u64 = 0;
     var cards_dealt: u8 = 0;
 
