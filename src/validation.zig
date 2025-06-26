@@ -1,6 +1,6 @@
 const std = @import("std");
 const simd_evaluator = @import("simd_evaluator.zig");
-const slow_evaluator = @import("slow_evaluator");
+const slow_evaluator = @import("slow_evaluator.zig");
 
 // Generate random hands for testing (consolidated from bench.zig)
 pub fn generateRandomHandBatch(rng: *std.Random) simd_evaluator.VecU64 {

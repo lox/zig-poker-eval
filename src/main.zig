@@ -1,6 +1,6 @@
 const std = @import("std");
 const simd_evaluator = @import("simd_evaluator.zig");
-const slow_evaluator = @import("slow_evaluator");
+const slow_evaluator = @import("slow_evaluator.zig");
 
 pub fn main() !void {
     const print = std.debug.print;

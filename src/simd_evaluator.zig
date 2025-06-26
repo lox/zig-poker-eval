@@ -1,6 +1,6 @@
 const std = @import("std");
 const tables = @import("tables.zig");
-const slow_evaluator = @import("slow_evaluator");
+const slow_evaluator = @import("slow_evaluator.zig");
 
 // SIMD vector types - only expose what's actually used externally
 pub const VecU64 = @Vector(16, u64);

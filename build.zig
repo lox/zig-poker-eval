@@ -12,7 +12,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     
-    // Add module path for slow evaluator
+    // Add module path for slow evaluator (needed by table builder)
     const slow_evaluator = b.createModule(.{
         .root_source_file = b.path("src/slow_evaluator.zig"),
     });
@@ -30,7 +30,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    exe.root_module.addImport("slow_evaluator", slow_evaluator);
 
     // NO LONGER DEPENDS ON TABLE BUILDING - uses pre-compiled tables.zig
     b.installArtifact(exe);
@@ -42,7 +41,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    bench.root_module.addImport("slow_evaluator", slow_evaluator);
 
     // NO LONGER DEPENDS ON TABLE BUILDING - uses pre-compiled tables.zig
 
@@ -67,7 +65,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    exe_unit_tests.root_module.addImport("slow_evaluator", slow_evaluator);
 
     // SIMD evaluator tests
     const simd_tests = b.addTest(.{
@@ -75,7 +72,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    simd_tests.root_module.addImport("slow_evaluator", slow_evaluator);
 
     // Validation tests
     const validation_tests = b.addTest(.{
@@ -83,7 +79,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    validation_tests.root_module.addImport("slow_evaluator", slow_evaluator);
 
     const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
     const run_simd_tests = b.addRunArtifact(simd_tests);
