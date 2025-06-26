@@ -34,7 +34,6 @@ pub fn generateRandomHand(rng: *std.Random) u64 {
 // Tests that run with `zig build test`
 
 test "known hand types" {
-    std.debug.print("Testing known hand types...\n", .{});
 
     const test_hands = [_]struct {
         hand: u64,
@@ -69,20 +68,24 @@ test "known hand types" {
         const fast_rank = simd_evaluator.evaluate_single_hand(test_case.hand);
 
         const match = slow_rank == fast_rank;
-        const in_range = fast_rank >= test_case.expected_rank_min and fast_rank <= test_case.expected_rank_max;
 
-        std.debug.print("  {s}: slow={}, fast={}, match={}, in_range={}\n", .{ test_case.name, slow_rank, fast_rank, match, in_range });
+        // Only print on failure
+        if (!match) {
+            std.debug.print("FAIL {s}: slow={}, fast={}\n", .{ test_case.name, slow_rank, fast_rank });
+        }
 
         if (!match) all_match = false;
     }
 
-    std.debug.print("Known hand types: all_match={}\n", .{all_match});
+    // Only print summary on failure
+    if (!all_match) {
+        std.debug.print("Known hand types: some tests failed\n", .{});
+    }
     try std.testing.expect(all_match);
 }
 
 test "random hands validation" {
     const num_hands = 10000; // Reduced for faster tests
-    std.debug.print("Testing {} random hands...\n", .{num_hands});
 
     var prng = std.Random.DefaultPrng.init(0x12345678);
     var rand = prng.random();
@@ -121,23 +124,25 @@ test "random hands validation" {
                 correct_count += 1;
             } else {
                 mismatches += 1;
-                if (mismatches <= 10) { // Show first 10 mismatches for debugging
-                    std.debug.print("  MISMATCH #{}: hand=0x{X}, slow={}, fast={}\n", .{ mismatches, hand, slow_rank, fast_rank });
+                if (mismatches <= 3) { // Show first 3 mismatches for debugging
+                    std.debug.print("MISMATCH #{}: hand=0x{X}, slow={}, fast={}\n", .{ mismatches, hand, slow_rank, fast_rank });
                 }
             }
         }
     }
 
     const accuracy = @as(f64, @floatFromInt(correct_count)) / @as(f64, @floatFromInt(total_count)) * 100.0;
-    std.debug.print("Random hands: {}/{} correct ({d:.2}%), mismatches={}\n", .{ correct_count, total_count, accuracy, mismatches });
+    
+    // Only print on failure or low accuracy
+    if (accuracy < 100.0) {
+        std.debug.print("Random hands: {}/{} correct ({d:.2}%), mismatches={}\n", .{ correct_count, total_count, accuracy, mismatches });
+    }
     
     // Enforce 100% accuracy requirement
     try std.testing.expectEqual(@as(f64, 100.0), accuracy);
-    std.debug.print("✓ 100% accuracy requirement met\n", .{});
 }
 
 test "single hand evaluation" {
-    std.debug.print("\n🔍 Single Hand Test\n", .{});
 
     // Test a specific hand - Royal flush clubs
     const test_hand: u64 = 0x1F00; // A-K-Q-J-T of clubs
@@ -145,16 +150,15 @@ test "single hand evaluation" {
     const slow_result = slow_evaluator.evaluateHand(test_hand);
     const fast_result = simd_evaluator.evaluate_single_hand(test_hand);
 
-    std.debug.print("Test hand:         0x{X}\n", .{test_hand});
-    std.debug.print("Slow evaluator:    {d}\n", .{slow_result});
-    std.debug.print("Fast evaluator:    {d}\n", .{fast_result});
-    std.debug.print("Match:             {s}\n", .{if (slow_result == fast_result) "✓" else "✗"});
+    // Only print on failure
+    if (slow_result != fast_result) {
+        std.debug.print("Single hand FAIL: hand=0x{X}, slow={}, fast={}\n", .{ test_hand, slow_result, fast_result });
+    }
 
     try std.testing.expectEqual(slow_result, fast_result);
 }
 
 test "SIMD batch evaluation" {
-    std.debug.print("\n🚀 SIMD Batch Evaluation Test\n", .{});
 
     const simd_eval = simd_evaluator.SIMDEvaluator.init();
 
@@ -178,20 +182,22 @@ test "SIMD batch evaluation" {
             matches += 1;
         }
 
-        if (i < 5) { // Show first 5 for debugging
-            std.debug.print("Hand {d}: batch={d}, single={d}, match={s}\n", .{ i, batch_result, single_result, if (batch_result == single_result) "✓" else "✗" });
+        // Only print failures
+        if (batch_result != single_result) {
+            std.debug.print("Batch FAIL hand {}: batch={}, single={}\n", .{ i, batch_result, single_result });
         }
     }
 
-    const accuracy = @as(f64, @floatFromInt(matches)) / 16.0 * 100.0;
-    std.debug.print("\nAccuracy: {}/16 ({d:.1}%)\n", .{ matches, accuracy });
-
+    // Only print on failure
+    if (matches != 16) {
+        const accuracy = @as(f64, @floatFromInt(matches)) / 16.0 * 100.0;
+        std.debug.print("Batch accuracy: {}/16 ({d:.1}%)\n", .{ matches, accuracy });
+    }
+    
     try std.testing.expectEqual(@as(u32, 16), matches);
-    std.debug.print("✓ SIMD batch evaluation test complete\n", .{});
 }
 
 test "batch correctness validation" {
-    std.debug.print("\n📊 Batch Correctness Validation\n", .{});
 
     const simd_eval = simd_evaluator.SIMDEvaluator.init();
     var prng = std.Random.DefaultPrng.init(0x12345678);
@@ -222,8 +228,11 @@ test "batch correctness validation" {
     }
 
     const accuracy = @as(f64, @floatFromInt(matches)) / @as(f64, @floatFromInt(total)) * 100.0;
-    std.debug.print("Batch validation: {}/{} correct ({d:.2}%)\n", .{ matches, total, accuracy });
+    
+    // Only print on failure
+    if (accuracy < 100.0) {
+        std.debug.print("Batch validation: {}/{} correct ({d:.2}%)\n", .{ matches, total, accuracy });
+    }
 
     try std.testing.expectEqual(@as(f64, 100.0), accuracy);
-    std.debug.print("✓ Batch correctness validation passed\n", .{});
 }

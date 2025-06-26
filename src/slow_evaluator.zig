@@ -279,14 +279,12 @@ test "royal flush" {
         makeCard(0, 0) | makeCard(1, 1); // Add two random cards
     
     const rank = evaluateHand(royal_flush);
-    std.debug.print("Royal flush rank: {}\n", .{rank});
     try std.testing.expect(rank == 0); // Royal flush = rank 0 (best possible)
 }
 
 test "royal flush clubs 0x1F00" {
     const royal_clubs: u64 = 0x1F00; // A-K-Q-J-T clubs only (5 cards)
     const rank = evaluateHand(royal_clubs);
-    std.debug.print("Royal flush clubs 0x1F00 rank: {}\n", .{rank});
     try std.testing.expect(rank == 0); // Royal flush = rank 0 (best possible)
 }
 
@@ -396,15 +394,6 @@ test "wheel straight flush (A-5-4-3-2)" {
         makeCard(1, 10) | makeCard(2, 8); // Add two off-suit cards
     
     const rank = evaluateHand(wheel_sf);
-    std.debug.print("Wheel straight flush rank: {} (expected: 9 for worst straight flush)\n", .{rank});
-    
-    // Check if it's being detected as straight flush vs regular flush
-    const suits = getSuitMasks(wheel_sf);
-    const club_mask = suits[0]; // clubs = suit 0
-    const straight_in_flush = getStraightMask(club_mask);
-    
-    std.debug.print("Club mask: 0x{X}, getStraightMask result: 0x{X}\n", .{club_mask, straight_in_flush});
-    std.debug.print("Expected wheel pattern in flush: 0x100F (A,5,4,3,2)\n", .{});
     
     // Should be rank 9 (worst straight flush) - fixed!
     try std.testing.expect(rank == 9); // Wheel straight flush
