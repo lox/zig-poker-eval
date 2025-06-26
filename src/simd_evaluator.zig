@@ -2,15 +2,67 @@ const std = @import("std");
 const tables = @import("tables.zig");
 const slow_evaluator = @import("slow_evaluator.zig");
 
-// SIMD vector types - only expose what's actually used externally
-pub const VecU64 = @Vector(16, u64);
+// Architecture-adaptive configuration
+const ArchConfig = struct {
+    batch_size: comptime_int,
+    use_gather: bool,
+    instruction_set: enum { scalar, avx2, avx512, neon },
+    vector_u64: type,
+    vector_u32: type,
+    vector_u16: type,
+};
 
-// Internal vector types
-const VecU32 = @Vector(16, u32);
-const VecU16 = @Vector(16, u16);
+const arch_config = blk: {
+    const target = @import("builtin").target;
+    if (target.cpu.arch == .x86_64) {
+        if (std.Target.x86.featureSetHas(target.cpu.features, .avx512f)) {
+            break :blk ArchConfig{ 
+                .batch_size = 16, 
+                .use_gather = true, 
+                .instruction_set = .avx512,
+                .vector_u64 = @Vector(16, u64),
+                .vector_u32 = @Vector(16, u32),
+                .vector_u16 = @Vector(16, u16),
+            };
+        } else if (std.Target.x86.featureSetHas(target.cpu.features, .avx2)) {
+            break :blk ArchConfig{ 
+                .batch_size = 8, 
+                .use_gather = true, 
+                .instruction_set = .avx2,
+                .vector_u64 = @Vector(8, u64),
+                .vector_u32 = @Vector(8, u32),
+                .vector_u16 = @Vector(8, u16),
+            };
+        }
+    } else if (target.cpu.arch == .aarch64) {
+        break :blk ArchConfig{ 
+            .batch_size = 4, 
+            .use_gather = false, 
+            .instruction_set = .neon,
+            .vector_u64 = @Vector(4, u64),
+            .vector_u32 = @Vector(4, u32),
+            .vector_u16 = @Vector(4, u16),
+        };
+    }
+    // Fallback to scalar for unsupported architectures
+    break :blk ArchConfig{ 
+        .batch_size = 1, 
+        .use_gather = false, 
+        .instruction_set = .scalar,
+        .vector_u64 = @Vector(1, u64),
+        .vector_u32 = @Vector(1, u32),
+        .vector_u16 = @Vector(1, u16),
+    };
+};
 
-// Evaluator configuration
-const BATCH_SIZE = 16;
+// Export the configured vector types
+pub const VecU64 = arch_config.vector_u64;
+pub const VecU32 = arch_config.vector_u32;
+pub const VecU16 = arch_config.vector_u16;
+
+// Evaluator configuration constants
+const BATCH_SIZE = arch_config.batch_size;
+pub const CURRENT_BATCH_SIZE = BATCH_SIZE; // Export for benchmarking
 const RANK_MASK = 0x1FFF; // 13 bits for ranks A-K-Q-...-2
 const SUIT_SHIFT = [4]u6{ 0, 13, 26, 39 }; // Club, Diamond, Heart, Spade bit positions
 
@@ -21,7 +73,7 @@ pub const SIMDEvaluator = struct {
         return Self{};
     }
 
-    /// Evaluate a batch of 16 hands simultaneously
+    /// Evaluate a batch of hands simultaneously (architecture-adaptive)
     pub fn evaluate_batch(self: *const Self, hands: VecU64) VecU16 {
         // Split card masks into rank and suit components
         const masks = self.split_card_masks(hands);
@@ -29,25 +81,19 @@ pub const SIMDEvaluator = struct {
         // Detect flush lanes
         const flush_info = self.detect_flush_lanes(masks.suits);
 
-        // Evaluate non-flush hands (majority case)
-        const non_flush_ranks = self.evaluate_non_flush_path(hands);
+        // Evaluate non-flush hands (majority case) - architecture adaptive
+        const non_flush_ranks = if (arch_config.instruction_set == .neon)
+            self.evaluate_non_flush_neon(hands)
+        else
+            self.evaluate_non_flush_scalar(hands);
 
         // Evaluate flush hands for lanes that have flushes
         const flush_ranks = self.evaluate_flush_path(masks.suits, flush_info.predicate);
 
-        // Select results based on flush predicate (branch-free)
+        // Select results based on flush predicate (original logic)
         var results: VecU16 = non_flush_ranks;
-        var predicate: VecU16 = @splat(0);
-
-        for (0..16) |i| {
+        for (0..BATCH_SIZE) |i| {
             if (flush_info.predicate[i] != 0) {
-                predicate[i] = 0xFFFF;
-            }
-        }
-
-        // Blend flush and non-flush results
-        for (0..16) |i| {
-            if (predicate[i] != 0) {
                 results[i] = flush_ranks[i];
             }
         }
@@ -74,7 +120,7 @@ pub const SIMDEvaluator = struct {
         _ = self;
         var predicate: VecU16 = @splat(0);
 
-        for (0..16) |i| {
+        for (0..BATCH_SIZE) |i| {
             for (suits) |suit| {
                 if (@popCount(suit[i]) >= 5) {
                     predicate[i] = 0xFFFF;
@@ -86,14 +132,94 @@ pub const SIMDEvaluator = struct {
         return .{ .predicate = predicate };
     }
 
-    fn evaluate_non_flush_path(self: *const Self, hands: VecU64) VecU16 {
+    // ARM64 NEON optimized non-flush evaluation
+    inline fn evaluate_non_flush_neon(self: *const Self, hands: VecU64) VecU16 {
+        _ = self;
+        var results: VecU16 = @splat(0);
+        
+        // For now, fall back to scalar RPC computation but keep unrolled lookups
+        // TODO: Implement proper vectorized RPC when Zig vector intrinsics are stable
+        comptime var i = 0;
+        inline while (i < BATCH_SIZE) : (i += 1) {
+            const rpc = compute_rpc_from_hand(hands[i]);
+            const h = mix64(@as(u64, rpc));
+            const bucket = @as(u32, @intCast(h >> 51));
+            const base_index = @as(u32, @intCast(h & 0x1FFFF));
+            const displacement = tables.chd_g_array[bucket];
+            const final_index = (base_index + displacement) & (tables.CHD_TABLE_SIZE - 1);
+            results[i] = tables.chd_value_table[final_index];
+        }
+        
+        return results;
+    }
+
+
+    // Scalar fallback for other architectures
+    inline fn evaluate_non_flush_scalar(self: *const Self, hands: VecU64) VecU16 {
+        _ = self;
+        var results: VecU16 = @splat(0);
+        
+        for (0..BATCH_SIZE) |i| {
+            const rpc = compute_rpc_from_hand(hands[i]);
+            results[i] = chd_lookup_scalar(rpc);
+        }
+        
+        return results;
+    }
+
+    // x86-64 gather-based path (AVX2/AVX512)
+    inline fn evaluate_non_flush_path_gather(self: *const Self, hands: VecU64) VecU16 {
+        const rpcs = self.compute_rpc_batch(hands);
+        return self.chd_lookup_gather(rpcs);
+    }
+
+    // ARM64 explicit load path (NEON) and scalar fallback
+    inline fn evaluate_non_flush_path_explicit(self: *const Self, hands: VecU64) VecU16 {
+        const rpcs = self.compute_rpc_batch(hands);
+        return self.chd_lookup_explicit(rpcs);
+    }
+
+    // CHD lookup using SIMD gather (x86-64)
+    inline fn chd_lookup_gather(self: *const Self, rpcs: VecU32) VecU16 {
+        // For now, fall back to explicit for all architectures
+        // TODO: Implement actual gather instructions
+        return self.chd_lookup_explicit(rpcs);
+    }
+
+    // CHD lookup using explicit loads (ARM64/fallback)
+    inline fn chd_lookup_explicit(self: *const Self, rpcs: VecU32) VecU16 {
         _ = self;
         var results: VecU16 = @splat(0);
 
-        // For now, use scalar fallback for each hand
-        for (0..16) |i| {
-            const rpc = compute_rpc_from_hand(hands[i]);
-            results[i] = chd_lookup_scalar(rpc);
+        for (0..BATCH_SIZE) |i| {
+            const rpc = rpcs[i];
+            const h = mix64(@as(u64, rpc));
+            const bucket = @as(u32, @intCast(h >> 51));
+            const base_index = @as(u32, @intCast(h & 0x1FFFF));
+            
+            // Add prefetching for ARM64
+            if (arch_config.instruction_set == .neon and i < BATCH_SIZE - 1) {
+                const next_rpc = rpcs[i + 1];
+                const next_h = mix64(@as(u64, next_rpc));
+                const next_bucket = @as(u32, @intCast(next_h >> 51));
+                @prefetch(&tables.chd_g_array[next_bucket], .{});
+            }
+            
+            const displacement = tables.chd_g_array[bucket];
+            const final_index = (base_index + displacement) & (tables.CHD_TABLE_SIZE - 1);
+            results[i] = tables.chd_value_table[final_index];
+        }
+
+        return results;
+    }
+
+    // Vectorized result blending
+    inline fn blend_results(self: *const Self, non_flush: VecU16, flush: VecU16, predicate: VecU16) VecU16 {
+        _ = self;
+        var results: VecU16 = @splat(0);
+
+        for (0..BATCH_SIZE) |i| {
+            results[i] = if (predicate[i] != 0) flush[i] else non_flush[i];
         }
 
         return results;
@@ -104,7 +230,7 @@ pub const SIMDEvaluator = struct {
         var results: VecU16 = @splat(0);
 
         // For each lane that has a flush, evaluate it
-        for (0..16) |i| {
+        for (0..BATCH_SIZE) |i| {
             if (predicate[i] != 0) {
                 results[i] = evaluate_flush_single(suits, i);
             }
@@ -119,7 +245,7 @@ pub fn evaluate_single_hand(hand: u64) u16 {
     return slow_evaluator.evaluateHand(hand);
 }
 
-// Helper functions that were used internally
+// Helper functions that were used internally  
 fn compute_rpc_from_hand(hand: u64) u32 {
     // Extract rank counts for each of the 13 ranks
     var rank_counts = [_]u8{0} ** 13;

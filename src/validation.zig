@@ -2,15 +2,18 @@ const std = @import("std");
 const simd_evaluator = @import("simd_evaluator.zig");
 const slow_evaluator = @import("slow_evaluator.zig");
 
-// Generate random hands for testing (consolidated from bench.zig)
+// Generate random hands for testing (architecture-adaptive batch size)
 pub fn generateRandomHandBatch(rng: *std.Random) simd_evaluator.VecU64 {
-    var hands: [16]u64 = undefined;
+    // Get batch size from simd_evaluator's compile-time configuration
+    const batch_size = simd_evaluator.CURRENT_BATCH_SIZE;
+    var hands: [batch_size]u64 = undefined;
 
     for (&hands) |*hand| {
         hand.* = generateRandomHand(rng);
     }
 
-    return simd_evaluator.VecU64{ hands[0], hands[1], hands[2], hands[3], hands[4], hands[5], hands[6], hands[7], hands[8], hands[9], hands[10], hands[11], hands[12], hands[13], hands[14], hands[15] };
+    // Create vector from array - this works for any batch size
+    return @as(simd_evaluator.VecU64, hands);
 }
 
 pub fn generateRandomHand(rng: *std.Random) u64 {
@@ -173,7 +176,8 @@ test "SIMD batch evaluation" {
     // Validate against single-hand evaluation
     var matches: u32 = 0;
 
-    for (0..16) |i| {
+    const batch_size = simd_evaluator.CURRENT_BATCH_SIZE;
+    for (0..batch_size) |i| {
         const hand = batch[i];
         const batch_result = batch_results[i];
         const single_result = slow_evaluator.evaluateHand(hand);
@@ -189,12 +193,12 @@ test "SIMD batch evaluation" {
     }
 
     // Only print on failure
-    if (matches != 16) {
-        const accuracy = @as(f64, @floatFromInt(matches)) / 16.0 * 100.0;
-        std.debug.print("Batch accuracy: {}/16 ({d:.1}%)\n", .{ matches, accuracy });
+    if (matches != batch_size) {
+        const accuracy = @as(f64, @floatFromInt(matches)) / @as(f64, @floatFromInt(batch_size)) * 100.0;
+        std.debug.print("Batch accuracy: {}/{} ({d:.1}%)\n", .{ matches, batch_size, accuracy });
     }
     
-    try std.testing.expectEqual(@as(u32, 16), matches);
+    try std.testing.expectEqual(@as(u32, @intCast(batch_size)), matches);
 }
 
 test "batch correctness validation" {
@@ -212,11 +216,12 @@ test "batch correctness validation" {
     var matches: u32 = 0;
     var total: u32 = 0;
 
-    // Validate batches (16K hands)
+    // Validate batches
+    const batch_size = simd_evaluator.CURRENT_BATCH_SIZE;
     for (test_batches) |batch| {
         const fast_results = simd_eval.evaluate_batch(batch);
 
-        for (0..16) |j| {
+        for (0..batch_size) |j| {
             const slow_result = slow_evaluator.evaluateHand(batch[j]);
             const fast_result = fast_results[j];
 

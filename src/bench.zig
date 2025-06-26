@@ -4,7 +4,16 @@ const slow_evaluator = @import("slow_evaluator.zig");
 const validation = @import("validation.zig");
 
 // Helper functions for rigorous benchmarking
-const BATCH_SIZE = 16; // Fixed batch size for current implementation
+const BATCH_SIZE = simd_evaluator.CURRENT_BATCH_SIZE;
+
+// Helper to create batches from hand arrays
+fn createBatch(hands: []const u64, start_idx: usize) simd_evaluator.VecU64 {
+    var batch_hands: [BATCH_SIZE]u64 = undefined;
+    for (0..BATCH_SIZE) |i| {
+        batch_hands[i] = hands[(start_idx + i) % hands.len];
+    }
+    return @as(simd_evaluator.VecU64, batch_hands);
+}
 
 fn warmupCaches(test_hands: []const u64, simd_eval: *const simd_evaluator.SIMDEvaluator) void {
     // Touch lookup tables (if available)
@@ -20,12 +29,7 @@ fn warmupCaches(test_hands: []const u64, simd_eval: *const simd_evaluator.SIMDEv
     const warmup_hands = @min(65536, test_hands.len); // 64K hands max
     var i: usize = 0;
     while (i + BATCH_SIZE <= warmup_hands) {
-        const batch = simd_evaluator.VecU64{
-            test_hands[i], test_hands[i+1], test_hands[i+2], test_hands[i+3],
-            test_hands[i+4], test_hands[i+5], test_hands[i+6], test_hands[i+7],
-            test_hands[i+8], test_hands[i+9], test_hands[i+10], test_hands[i+11],
-            test_hands[i+12], test_hands[i+13], test_hands[i+14], test_hands[i+15]
-        };
+        const batch = createBatch(test_hands, i);
         _ = simd_eval.evaluate_batch(batch);
         i += BATCH_SIZE;
     }
@@ -64,16 +68,7 @@ fn runSingleBenchmark(iterations: u32, test_hands: []const u64, simd_eval: *cons
     var hand_idx: usize = 0;
     for (0..iterations) |_| {
         // Create batch from consecutive hands
-        const batch = simd_evaluator.VecU64{
-            test_hands[hand_idx % test_hands.len], test_hands[(hand_idx+1) % test_hands.len],
-            test_hands[(hand_idx+2) % test_hands.len], test_hands[(hand_idx+3) % test_hands.len],
-            test_hands[(hand_idx+4) % test_hands.len], test_hands[(hand_idx+5) % test_hands.len],
-            test_hands[(hand_idx+6) % test_hands.len], test_hands[(hand_idx+7) % test_hands.len],
-            test_hands[(hand_idx+8) % test_hands.len], test_hands[(hand_idx+9) % test_hands.len],
-            test_hands[(hand_idx+10) % test_hands.len], test_hands[(hand_idx+11) % test_hands.len],
-            test_hands[(hand_idx+12) % test_hands.len], test_hands[(hand_idx+13) % test_hands.len],
-            test_hands[(hand_idx+14) % test_hands.len], test_hands[(hand_idx+15) % test_hands.len]
-        };
+        const batch = createBatch(test_hands, hand_idx);
         
         const results = simd_eval.evaluate_batch(batch);
         for (0..BATCH_SIZE) |j| {
@@ -118,12 +113,7 @@ fn validateCorrectness(test_hands: []const u64) !bool {
     const validation_hands = @min(16000, test_hands.len);
     var i: usize = 0;
     while (i + BATCH_SIZE <= validation_hands) {
-        const batch = simd_evaluator.VecU64{
-            test_hands[i], test_hands[i+1], test_hands[i+2], test_hands[i+3],
-            test_hands[i+4], test_hands[i+5], test_hands[i+6], test_hands[i+7],
-            test_hands[i+8], test_hands[i+9], test_hands[i+10], test_hands[i+11],
-            test_hands[i+12], test_hands[i+13], test_hands[i+14], test_hands[i+15]
-        };
+        const batch = createBatch(test_hands, i);
         
         const fast_results = simd_eval.evaluate_batch(batch);
 
