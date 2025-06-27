@@ -1,19 +1,16 @@
 const std = @import("std");
-const simd_evaluator = @import("simd_evaluator.zig");
+const evaluator = @import("evaluator.zig");
 const slow_evaluator = @import("slow_evaluator.zig");
 
-// Generate random hands for testing (architecture-adaptive batch size)
-pub fn generateRandomHandBatch(rng: *std.Random) simd_evaluator.VecU64 {
-    // Get batch size from simd_evaluator's compile-time configuration
-    const batch_size = simd_evaluator.CURRENT_BATCH_SIZE;
-    var hands: [batch_size]u64 = undefined;
+// Generate random hands for testing (4-hand batches)
+pub fn generateRandomHandBatch(rng: *std.Random) @Vector(4, u64) {
+    var hands: [4]u64 = undefined;
 
     for (&hands) |*hand| {
         hand.* = generateRandomHand(rng);
     }
 
-    // Create vector from array - this works for any batch size
-    return @as(simd_evaluator.VecU64, hands);
+    return @as(@Vector(4, u64), hands);
 }
 
 pub fn generateRandomHand(rng: *std.Random) u64 {
@@ -68,7 +65,7 @@ test "known hand types" {
 
     for (test_hands) |test_case| {
         const slow_rank = slow_evaluator.evaluateHand(test_case.hand);
-        const fast_rank = simd_evaluator.evaluate_single_hand(test_case.hand);
+        const fast_rank = evaluator.evaluate_hand(test_case.hand);
 
         const match = slow_rank == fast_rank;
 
@@ -119,7 +116,7 @@ test "random hands validation" {
 
         if (cards_selected == 7) {
             const slow_rank = slow_evaluator.evaluateHand(hand);
-            const fast_rank = simd_evaluator.evaluate_single_hand(hand);
+            const fast_rank = evaluator.evaluate_hand(hand);
 
             total_count += 1;
 
@@ -151,7 +148,7 @@ test "single hand evaluation" {
     const test_hand: u64 = 0x1F00; // A-K-Q-J-T of clubs
 
     const slow_result = slow_evaluator.evaluateHand(test_hand);
-    const fast_result = simd_evaluator.evaluate_single_hand(test_hand);
+    const fast_result = evaluator.evaluate_hand(test_hand);
 
     // Only print on failure
     if (slow_result != fast_result) {
@@ -161,22 +158,19 @@ test "single hand evaluation" {
     try std.testing.expectEqual(slow_result, fast_result);
 }
 
-test "SIMD batch evaluation" {
-
-    const simd_eval = simd_evaluator.SIMDEvaluator.init();
-
+test "batch evaluation" {
     // Generate test batch
     var prng = std.Random.DefaultPrng.init(42);
     var rng = prng.random();
     const batch = generateRandomHandBatch(&rng);
 
     // Evaluate batch
-    const batch_results = simd_eval.evaluate_batch(batch);
+    const batch_results = evaluator.evaluate_batch_4(batch);
 
     // Validate against single-hand evaluation
     var matches: u32 = 0;
 
-    const batch_size = simd_evaluator.CURRENT_BATCH_SIZE;
+    const batch_size = 4;
     for (0..batch_size) |i| {
         const hand = batch[i];
         const batch_result = batch_results[i];
@@ -202,13 +196,11 @@ test "SIMD batch evaluation" {
 }
 
 test "batch correctness validation" {
-
-    const simd_eval = simd_evaluator.SIMDEvaluator.init();
     var prng = std.Random.DefaultPrng.init(0x12345678);
     var rng = prng.random();
 
     // Generate test batches (reduced for faster tests)
-    var test_batches: [100]simd_evaluator.VecU64 = undefined;
+    var test_batches: [100]@Vector(4, u64) = undefined;
     for (&test_batches) |*batch| {
         batch.* = generateRandomHandBatch(&rng);
     }
@@ -217,9 +209,9 @@ test "batch correctness validation" {
     var total: u32 = 0;
 
     // Validate batches
-    const batch_size = simd_evaluator.CURRENT_BATCH_SIZE;
+    const batch_size = 4;
     for (test_batches) |batch| {
-        const fast_results = simd_eval.evaluate_batch(batch);
+        const fast_results = evaluator.evaluate_batch_4(batch);
 
         for (0..batch_size) |j| {
             const slow_result = slow_evaluator.evaluateHand(batch[j]);
@@ -250,7 +242,7 @@ test "single hand evaluation benchmark correctness" {
     for (0..1000) |_| {
         const test_hand = generateRandomHand(&rng);
         const slow_result = slow_evaluator.evaluateHand(test_hand);
-        const fast_result = simd_evaluator.evaluate_single_hand(test_hand);
+        const fast_result = evaluator.evaluate_hand(test_hand);
         
         try std.testing.expectEqual(slow_result, fast_result);
     }
@@ -258,16 +250,15 @@ test "single hand evaluation benchmark correctness" {
 
 test "hybrid evaluator batch accuracy" {
     // Test the hybrid approach with focus on flush vs non-flush accuracy
-    const simd_eval = simd_evaluator.SIMDEvaluator.init();
     var prng = std.Random.DefaultPrng.init(42);
     var rng = prng.random();
     
     // Generate batches and validate
     for (0..50) |_| {
         const batch = generateRandomHandBatch(&rng);
-        const batch_results = simd_eval.evaluate_batch(batch);
+        const batch_results = evaluator.evaluate_batch_4(batch);
         
-        const batch_size = simd_evaluator.CURRENT_BATCH_SIZE;
+        const batch_size = 4;
         for (0..batch_size) |i| {
             const expected = slow_evaluator.evaluateHand(batch[i]);
             const actual = batch_results[i];

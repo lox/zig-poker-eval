@@ -1,5 +1,5 @@
 const std = @import("std");
-const simd_evaluator = @import("simd_evaluator.zig");
+const evaluator = @import("evaluator.zig");
 const slow_evaluator = @import("slow_evaluator.zig");
 const validation = @import("validation.zig");
 
@@ -115,7 +115,7 @@ fn benchmarkSingleHands(hands: []const u64) !f64 {
         const start = std.time.nanoTimestamp();
         
         for (hands) |hand| {
-            checksum +%= simd_evaluator.evaluate_single_hand(hand);
+            checksum +%= evaluator.evaluate_hand(hand);
         }
         
         const end = std.time.nanoTimestamp();
@@ -129,8 +129,7 @@ fn benchmarkSingleHands(hands: []const u64) !f64 {
 }
 
 fn benchmarkSIMDHands(hands: []const u64) !f64 {
-    const simd_eval = simd_evaluator.SIMDEvaluator.init();
-    const batch_size = simd_evaluator.CURRENT_BATCH_SIZE;
+    const batch_size = 4;
     
     // Pad hands to batch boundary
     const padded_count = (hands.len / batch_size) * batch_size;
@@ -145,13 +144,13 @@ fn benchmarkSIMDHands(hands: []const u64) !f64 {
         var i: usize = 0;
         while (i < padded_count) {
             // Create batch
-            var batch_hands: [simd_evaluator.CURRENT_BATCH_SIZE]u64 = undefined;
+            var batch_hands: [4]u64 = undefined;
             for (0..batch_size) |j| {
                 batch_hands[j] = hands[i + j];
             }
-            const batch = @as(simd_evaluator.VecU64, batch_hands);
+            const batch = @as(@Vector(4, u64), batch_hands);
             
-            const results = simd_eval.evaluate_batch(batch);
+            const results = evaluator.evaluate_batch_4(batch);
             for (0..batch_size) |j| {
                 checksum +%= results[j];
             }

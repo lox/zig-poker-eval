@@ -1,36 +1,37 @@
 const std = @import("std");
-const simd_evaluator = @import("simd_evaluator.zig");
+const evaluator = @import("evaluator.zig");
 const slow_evaluator = @import("slow_evaluator.zig");
 const validation = @import("validation.zig");
 
 // Helper functions for rigorous benchmarking
-const BATCH_SIZE = simd_evaluator.CURRENT_BATCH_SIZE;
+const BATCH_SIZE = 4; // Our clean evaluator uses 4-hand batches
 
 // Helper to create batches from hand arrays
-fn createBatch(hands: []const u64, start_idx: usize) simd_evaluator.VecU64 {
+fn createBatch(hands: []const u64, start_idx: usize) @Vector(BATCH_SIZE, u64) {
     var batch_hands: [BATCH_SIZE]u64 = undefined;
     for (0..BATCH_SIZE) |i| {
         batch_hands[i] = hands[(start_idx + i) % hands.len];
     }
-    return @as(simd_evaluator.VecU64, batch_hands);
+    return @as(@Vector(BATCH_SIZE, u64), batch_hands);
 }
 
-fn warmupCaches(test_hands: []const u64, simd_eval: *const simd_evaluator.SIMDEvaluator) void {
-    // Touch lookup tables (if available)
-    // Note: @import will fail at compile time if tables.zig doesn't exist
-    // const tables = @import("tables.zig");
-    // if (@hasDecl(tables, "rank_patterns")) {
-    //     for (tables.rank_patterns[0..@min(16384, tables.rank_patterns.len)]) |pattern| {
-    //         std.mem.doNotOptimizeAway(pattern);
-    //     }
-    // }
+fn warmupCaches(test_hands: []const u64) void {
+    // Touch lookup tables
+    const tables = @import("tables.zig");
+    // Touch the CHD tables to warm cache
+    for (tables.chd_g_array[0..@min(1024, tables.chd_g_array.len)]) |displacement| {
+        std.mem.doNotOptimizeAway(displacement);
+    }
+    for (tables.chd_value_table[0..@min(16384, tables.chd_value_table.len)]) |value| {
+        std.mem.doNotOptimizeAway(value);
+    }
 
     // Touch first portion of hands by evaluating them in batches
     const warmup_hands = @min(65536, test_hands.len); // 64K hands max
     var i: usize = 0;
     while (i + BATCH_SIZE <= warmup_hands) {
         const batch = createBatch(test_hands, i);
-        _ = simd_eval.evaluate_batch(batch);
+        _ = evaluator.evaluate_batch_4(batch);
         i += BATCH_SIZE;
     }
 }
@@ -60,7 +61,7 @@ fn calculateCV(times: []const f64) f64 {
     return std_dev / mean;
 }
 
-fn runSingleBenchmark(iterations: u32, test_hands: []const u64, simd_eval: *const simd_evaluator.SIMDEvaluator) f64 {
+fn runSingleBenchmark(iterations: u32, test_hands: []const u64) f64 {
     var checksum: u64 = 0;
     const start = std.time.nanoTimestamp();
     const total_hands = iterations * BATCH_SIZE;
@@ -70,7 +71,7 @@ fn runSingleBenchmark(iterations: u32, test_hands: []const u64, simd_eval: *cons
         // Create batch from consecutive hands
         const batch = createBatch(test_hands, hand_idx);
         
-        const results = simd_eval.evaluate_batch(batch);
+        const results = evaluator.evaluate_batch_4(batch);
         for (0..BATCH_SIZE) |j| {
             checksum +%= results[j];
         }
@@ -105,7 +106,6 @@ fn benchmarkDummyEvaluator(iterations: u32, test_hands: []const u64) f64 {
 }
 
 fn validateCorrectness(test_hands: []const u64) !bool {
-    const simd_eval = simd_evaluator.SIMDEvaluator.init();
     var matches: u32 = 0;
     var total: u32 = 0;
 
@@ -115,7 +115,7 @@ fn validateCorrectness(test_hands: []const u64) !bool {
     while (i + BATCH_SIZE <= validation_hands) {
         const batch = createBatch(test_hands, i);
         
-        const fast_results = simd_eval.evaluate_batch(batch);
+        const fast_results = evaluator.evaluate_batch_4(batch);
 
         for (0..BATCH_SIZE) |j| {
             const slow_result = slow_evaluator.evaluateHand(test_hands[i + j]);
@@ -142,14 +142,11 @@ fn validateCorrectness(test_hands: []const u64) !bool {
     return true;
 }
 
-// Test the SIMD evaluator
-pub fn testSimdEvaluator() !void {
-    _ = std.mem.Allocator;
+// Test the evaluator
+pub fn testEvaluator() !void {
     const print = std.debug.print;
 
-    print("\x1b[1mSIMD Evaluator Test\x1b[0m\n", .{});
-
-    const simd_eval = simd_evaluator.SIMDEvaluator.init();
+    print("\x1b[1mEvaluator Test\x1b[0m\n", .{});
 
     // Generate test batch
     var prng = std.Random.DefaultPrng.init(42);
@@ -157,7 +154,7 @@ pub fn testSimdEvaluator() !void {
     const batch = validation.generateRandomHandBatch(&rng);
 
     // Evaluate batch
-    const batch_results = simd_eval.evaluate_batch(batch);
+    const batch_results = evaluator.evaluate_batch_4(batch);
 
     // Validate against single-hand evaluation
     var matches: u32 = 0;
@@ -177,16 +174,14 @@ pub fn testSimdEvaluator() !void {
     }
 
     print("\nAccuracy: {}/{} ({d:.1}%)\n", .{ matches, BATCH_SIZE, @as(f64, @floatFromInt(matches)) * 100.0 / @as(f64, @floatFromInt(BATCH_SIZE)) });
-    print("{s} SIMD evaluator test complete\n\n", .{if (matches == BATCH_SIZE) "✓" else "✗"});
+    print("{s} Evaluator test complete\n\n", .{if (matches == BATCH_SIZE) "✓" else "✗"});
 }
 
-// Benchmark the SIMD evaluator with rigorous methodology
-pub fn benchmarkSimdEvaluator(iterations: u32) !void {
+// Benchmark the evaluator with rigorous methodology
+pub fn benchmarkEvaluator(iterations: u32) !void {
     const print = std.debug.print;
 
-    print("\x1b[1mSIMD Evaluator Benchmark\x1b[0m\n", .{});
-
-    const simd_eval = simd_evaluator.SIMDEvaluator.init();
+    print("\x1b[1mEvaluator Benchmark\x1b[0m\n", .{});
 
     // Generate test hands (instead of batches)
     var prng = std.Random.DefaultPrng.init(42);
@@ -200,7 +195,7 @@ pub fn benchmarkSimdEvaluator(iterations: u32) !void {
 
     // Cache warmup
     print("  Warming up caches...\n", .{});
-    warmupCaches(&test_hands, &simd_eval);
+    warmupCaches(&test_hands);
 
     // Measure overhead
     print("  Measuring framework overhead...\n", .{});
@@ -220,7 +215,7 @@ pub fn benchmarkSimdEvaluator(iterations: u32) !void {
             }
         }
 
-        times[run] = runSingleBenchmark(iterations, &test_hands, &simd_eval);
+        times[run] = runSingleBenchmark(iterations, &test_hands);
         print("    Run {d}: {d:.2} ns/hand\n", .{ run + 1, times[run] });
     }
 
@@ -260,7 +255,7 @@ pub fn testSingleHand() !void {
     const test_hand: u64 = 0x1F00; // Royal flush clubs (A-K-Q-J-T of clubs)
 
     const slow_result = slow_evaluator.evaluateHand(test_hand);
-    const fast_result = simd_evaluator.evaluate_single_hand(test_hand);
+    const fast_result = evaluator.evaluate_hand(test_hand);
 
     print("Test hand:         0x{X}\n", .{test_hand});
     print("Slow evaluator:    {d}\n", .{slow_result});
@@ -270,5 +265,5 @@ pub fn testSingleHand() !void {
 }
 
 pub fn main() !void {
-    try benchmarkSimdEvaluator(100000); // Pure performance benchmark
+    try benchmarkEvaluator(100000); // Pure performance benchmark
 }
