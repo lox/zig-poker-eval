@@ -51,6 +51,9 @@ pub fn build(b: *std.Build) void {
 
     // Run benchmark
     const run_bench = b.addRunArtifact(bench);
+    if (b.args) |args| {
+        run_bench.addArgs(args);
+    }
     const bench_step = b.step("bench", "Run performance benchmark");
     bench_step.dependOn(&run_bench.step);
     
@@ -58,6 +61,19 @@ pub fn build(b: *std.Build) void {
     const run_flush_analysis = b.addRunArtifact(flush_analysis);
     const flush_step = b.step("flush", "Analyze flush vs non-flush performance");
     flush_step.dependOn(&run_flush_analysis.step);
+    
+    // Profiling benchmark executable
+    const profile_bench = b.addExecutable(.{
+        .name = "profile_bench",
+        .root_source_file = b.path("src/profile_bench.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    
+    // Run profiling benchmark
+    const run_profile_bench = b.addRunArtifact(profile_bench);
+    const profile_step = b.step("profile", "Run extended benchmark for profiling");
+    profile_step.dependOn(&run_profile_bench.step);
 
     // Run main executable
     const run_cmd = b.addRunArtifact(exe);

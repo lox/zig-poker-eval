@@ -46,5 +46,7 @@ Key functions to analyze:
 - **[DESIGN.md](./DESIGN.md)** — Detailed design, algorithms, and implementation notes for the evaluator, including table generation, hashing, and SIMD strategies.
 - **[BENCHMARKING.md](./BENCHMARKING.md)** — Methodology and validation procedures for benchmarking and correctness, including hardware setup, measurement, and validation techniques.
 - **[EXPERIMENTS.md](./EXPERIMENTS.md)** — Performance optimization experiments and results, documenting what optimizations were tried and why they failed.
+- **[PLAN.md](./PLAN.md)** — Current optimization plan based on profiling analysis and expert recommendations for achieving sub-10ns performance.
+- **[PROFILING.md](./PROFILING.md)** — Profiling methodology and scripts for performance analysis and bottleneck identification.
 
 Refer to these documents for in-depth technical details, validation requirements, and reproducible benchmarking instructions.

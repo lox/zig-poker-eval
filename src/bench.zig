@@ -265,5 +265,22 @@ pub fn testSingleHand() !void {
 }
 
 pub fn main() !void {
-    try benchmarkEvaluator(100000); // Pure performance benchmark
+    var args = std.process.args();
+    _ = args.skip(); // Skip program name
+    
+    var iterations: u32 = 100000; // Default
+    
+    // Parse --iterations argument
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--iterations")) {
+            if (args.next()) |iter_str| {
+                iterations = std.fmt.parseInt(u32, iter_str, 10) catch {
+                    std.debug.print("Error: Invalid iterations value\n", .{});
+                    std.process.exit(1);
+                };
+            }
+        }
+    }
+    
+    try benchmarkEvaluator(iterations);
 }
