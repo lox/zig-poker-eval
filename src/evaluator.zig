@@ -66,9 +66,10 @@ pub fn evaluate_hand(hand: u64) u16 {
         return slow_evaluator.evaluateHand(hand); // Handle flushes properly
     }
     
-    const rpc = compute_rpc_from_hand(hand);
+    const rpc = compute_rpc_from_hand(hand); // Revert to original
     return chd_lookup_scalar(rpc);
 }
+
 
 // Batch evaluation - let the compiler vectorize
 pub fn evaluate_batch_4(hands: @Vector(4, u64)) @Vector(4, u16) {

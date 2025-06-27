@@ -76,6 +76,38 @@ inline for (0..13) |rank| {
 
 **Why it failed**: Zig's compiler already optimizes the nested loops effectively. Manual unrolling added code complexity and register pressure without improving the generated assembly. The simple nested loops have better instruction cache locality.
 
+## Experiment 5: LUT-Based RPC Computation
+**Performance Impact**: +10.2% slower (14.10→12.79 ns/hand)  
+**Complexity**: High  
+**Status**: ❌ Failed  
+
+**Approach**: Replace 52-iteration rank counting loop with O(1) lookup tables, based on o3-pro analysis and comprehensive profiling that identified RPC computation as consuming 98% of runtime.
+
+**Implementation**:
+```zig
+// Original: 52-iteration nested loops
+for (0..4) |suit| {
+    for (0..13) |rank| {
+        if ((suit_mask & (1 << rank)) != 0) rank_counts[rank] += 1;
+    }
+}
+
+// LUT approach: O(1) bit manipulation
+inline for (0..13) |rank| {
+    const rank_bit = 1 << rank;
+    const count = @popCount(
+        (if (clubs & rank_bit != 0) 1 else 0) |
+        (if (diamonds & rank_bit != 0) 1 else 0) << 1 |
+        // ... for all suits
+    );
+    rpc = rpc * 5 + count;
+}
+```
+
+**Research phase**: Generated 768-byte rank delta lookup tables, implemented comprehensive validation (100K hands), and used high-frequency profiling (3,886 samples) to confirm RPC computation bottleneck.
+
+**Why it failed**: Despite being "O(1)" in theory, the bit manipulation approach had higher per-operation overhead than the simple nested loops. Zig's compiler already optimizes the original loops with excellent auto-vectorization and instruction scheduling. The complex bit operations caused register pressure and defeated compiler optimizations. This reinforced the core lesson: **simple code + compiler optimization often beats manual micro-optimizations**.
+
 ## Key Learnings
 
 1. **Memory optimizations fail**: Working set (267KB) is cache-resident, not memory-bound

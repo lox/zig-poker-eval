@@ -74,6 +74,7 @@ pub fn build(b: *std.Build) void {
     const run_profile_bench = b.addRunArtifact(profile_bench);
     const profile_step = b.step("profile", "Run extended benchmark for profiling");
     profile_step.dependOn(&run_profile_bench.step);
+    
 
     // Run main executable
     const run_cmd = b.addRunArtifact(exe);
