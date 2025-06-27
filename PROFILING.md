@@ -4,31 +4,34 @@ Scripts for performance analysis and profiling of the poker hand evaluator.
 
 ## Scripts
 
-### `simple_profile.sh`
-**Primary profiling script** - High-frequency sampling with extended benchmark runs.
+### `profile.sh`
+**Unified profiling script** - High-frequency sampling with configurable parameters.
 
 ```bash
-./scripts/simple_profile.sh
+./scripts/profile.sh [iterations] [duration] [output_file]
 ```
 
+**Examples**:
+```bash
+# Quick profile (default: 20M iterations, 15s sampling)
+./scripts/profile.sh
+
+# Custom parameters
+./scripts/profile.sh 5000000 10 quick_profile.txt
+
+# Long detailed profile
+./scripts/profile.sh 50000000 30 detailed_profile.txt
+```
+
+**Features**:
 - Builds benchmark with ReleaseFast + debug symbols
-- Runs 20M iterations (takes ~20 seconds)  
-- Samples every 1ms for 15 seconds
+- Configurable iteration count (default: 20M)
+- Configurable sampling duration (default: 15s) 
+- Samples every 1ms for high resolution
 - Outputs detailed function-level breakdown
-- Generates `detailed_profile.txt`
+- Error handling for failed sampling
 
 **Use this for identifying performance bottlenecks.**
-
-### `profile_bench.sh` 
-Alternative profiling approach using zig build command directly.
-
-```bash
-./scripts/profile_bench.sh
-```
-
-- Uses `zig build bench` with custom iterations
-- Samples for 20 seconds
-- Good for quick profiling runs
 
 
 ## Requirements
