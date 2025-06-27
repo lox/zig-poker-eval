@@ -41,10 +41,23 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // Flush analysis executable
+    const flush_analysis = b.addExecutable(.{
+        .name = "flush_analysis",
+        .root_source_file = b.path("src/flush_analysis.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // Run benchmark
     const run_bench = b.addRunArtifact(bench);
     const bench_step = b.step("bench", "Run performance benchmark");
     bench_step.dependOn(&run_bench.step);
+    
+    // Run flush analysis
+    const run_flush_analysis = b.addRunArtifact(flush_analysis);
+    const flush_step = b.step("flush", "Analyze flush vs non-flush performance");
+    flush_step.dependOn(&run_flush_analysis.step);
 
     // Run main executable
     const run_cmd = b.addRunArtifact(exe);

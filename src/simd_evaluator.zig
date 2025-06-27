@@ -73,32 +73,57 @@ pub const SIMDEvaluator = struct {
         return Self{};
     }
 
-    /// Evaluate a batch of hands simultaneously (architecture-adaptive)
+    /// Evaluate a batch of hands simultaneously (optimized hybrid approach)
     pub fn evaluate_batch(self: *const Self, hands: VecU64) VecU16 {
-        // Split card masks into rank and suit components
-        const masks = self.split_card_masks(hands);
-
-        // Detect flush lanes
-        const flush_info = self.detect_flush_lanes(masks.suits);
-
-        // Evaluate non-flush hands (majority case) - architecture adaptive
-        const non_flush_ranks = if (arch_config.instruction_set == .neon)
-            self.evaluate_non_flush_neon(hands)
-        else
-            self.evaluate_non_flush_scalar(hands);
-
-        // Evaluate flush hands for lanes that have flushes
-        const flush_ranks = self.evaluate_flush_path(masks.suits, flush_info.predicate);
-
-        // Select results based on flush predicate (original logic)
-        var results: VecU16 = non_flush_ranks;
+        // Simplified hybrid: detect flushes but minimize overhead
+        var results: VecU16 = @splat(0);
+        var has_flush = false;
+        
+        // Quick scan for any flushes in the batch
         for (0..BATCH_SIZE) |i| {
-            if (flush_info.predicate[i] != 0) {
-                results[i] = flush_ranks[i];
+            if (self.is_flush_hand_fast(hands[i])) {
+                has_flush = true;
+                break;
             }
         }
-
+        
+        if (!has_flush) {
+            // Fast path: pure SIMD for all-non-flush batches (96%+ of cases)
+            return if (arch_config.instruction_set == .neon)
+                self.evaluate_non_flush_neon(hands)
+            else
+                self.evaluate_non_flush_scalar(hands);
+        } else {
+            // Mixed batch: handle flush hands individually, others with SIMD
+            for (0..BATCH_SIZE) |i| {
+                if (self.is_flush_hand_fast(hands[i])) {
+                    results[i] = evaluate_single_hand(hands[i]);
+                } else {
+                    results[i] = chd_lookup_scalar(compute_rpc_from_hand(hands[i]));
+                }
+            }
+        }
+        
         return results;
+    }
+
+    // Fast flush detection for single hand (used in hybrid approach)
+    fn is_flush_hand_fast(self: *const Self, hand: u64) bool {
+        _ = self;
+        // Extract suit masks and check for 5+ cards in any suit
+        const suits = [4]u16{
+            @as(u16, @truncate(hand >> 0)) & RANK_MASK,   // clubs
+            @as(u16, @truncate(hand >> 13)) & RANK_MASK,  // diamonds
+            @as(u16, @truncate(hand >> 26)) & RANK_MASK,  // hearts
+            @as(u16, @truncate(hand >> 39)) & RANK_MASK,  // spades
+        };
+        
+        for (suits) |suit_mask| {
+            if (@popCount(suit_mask) >= 5) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // Internal helper functions

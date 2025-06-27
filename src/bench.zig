@@ -198,16 +198,6 @@ pub fn benchmarkSimdEvaluator(iterations: u32) !void {
         hand.* = validation.generateRandomHand(&rng);
     }
 
-    // Validate correctness
-    print("\n  Validating correctness...\n", .{});
-    const is_correct = validateCorrectness(&test_hands) catch |err| {
-        print("  \u{274C} ERROR: Correctness validation failed: {}\n\n", .{err});
-        return;
-    };
-    if (is_correct) {
-        print("  ✓ Correctness validation passed\n", .{});
-    }
-
     // Cache warmup
     print("  Warming up caches...\n", .{});
     warmupCaches(&test_hands, &simd_eval);
@@ -280,7 +270,5 @@ pub fn testSingleHand() !void {
 }
 
 pub fn main() !void {
-    try testSingleHand();
-    try testSimdEvaluator();
-    try benchmarkSimdEvaluator(100000); // Reduced for 5-run methodology
+    try benchmarkSimdEvaluator(100000); // Pure performance benchmark
 }

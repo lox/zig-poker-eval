@@ -241,3 +241,41 @@ test "batch correctness validation" {
 
     try std.testing.expectEqual(@as(f64, 100.0), accuracy);
 }
+
+test "single hand evaluation benchmark correctness" {
+    // Test that our single hand evaluation matches slow evaluator
+    var prng = std.Random.DefaultPrng.init(42);
+    var rng = prng.random();
+    
+    for (0..1000) |_| {
+        const test_hand = generateRandomHand(&rng);
+        const slow_result = slow_evaluator.evaluateHand(test_hand);
+        const fast_result = simd_evaluator.evaluate_single_hand(test_hand);
+        
+        try std.testing.expectEqual(slow_result, fast_result);
+    }
+}
+
+test "hybrid evaluator batch accuracy" {
+    // Test the hybrid approach with focus on flush vs non-flush accuracy
+    const simd_eval = simd_evaluator.SIMDEvaluator.init();
+    var prng = std.Random.DefaultPrng.init(42);
+    var rng = prng.random();
+    
+    // Generate batches and validate
+    for (0..50) |_| {
+        const batch = generateRandomHandBatch(&rng);
+        const batch_results = simd_eval.evaluate_batch(batch);
+        
+        const batch_size = simd_evaluator.CURRENT_BATCH_SIZE;
+        for (0..batch_size) |i| {
+            const expected = slow_evaluator.evaluateHand(batch[i]);
+            const actual = batch_results[i];
+            
+            if (expected != actual) {
+                std.debug.print("Hybrid evaluation mismatch: hand=0x{X}, expected={}, actual={}\n", .{batch[i], expected, actual});
+            }
+            try std.testing.expectEqual(expected, actual);
+        }
+    }
+}
