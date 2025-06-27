@@ -61,6 +61,65 @@ test "RPC computation" {
     // In base-5: this should produce a specific pattern
 }
 
+test "flush pattern extraction - overlapping straights" {
+    // Test hand 1: spades 2,3,4,5,6,7 (mask 0x3F)
+    const spades_mask: u16 = 0x3F; // 2,3,4,5,6,7
+    const pattern1 = getTop5Ranks(spades_mask);
+    std.debug.print("Spades 2,3,4,5,6,7 -> pattern: 0x{X}\n", .{pattern1});
+    
+    // Should be 7-6-5-4-3 (0x003E), not 6-5-4-3-2 (0x001F)
+    try std.testing.expectEqual(@as(u16, 0x003E), pattern1);
+    
+    // Test the evaluation of this pattern
+    const rank1 = evaluateFlushPattern(pattern1);
+    std.debug.print("Pattern 0x{X} evaluates to rank: {}\n", .{pattern1, rank1});
+    
+    // Test hand 2: hearts 8,9,T,J,Q,K (mask 0xFC0)
+    const hearts_mask: u16 = 0xFC0; // 8,9,T,J,Q,K
+    const pattern2 = getTop5Ranks(hearts_mask);
+    std.debug.print("Hearts 8,9,T,J,Q,K -> pattern: 0x{X}\n", .{pattern2});
+    
+    // Should be K-Q-J-T-9 (0x0F80)
+    try std.testing.expectEqual(@as(u16, 0x0F80), pattern2);
+    
+    // Test the evaluation of this pattern
+    const rank2 = evaluateFlushPattern(pattern2);
+    std.debug.print("Pattern 0x{X} evaluates to rank: {}\n", .{pattern2, rank2});
+}
+
+test "slow evaluator vs table patterns" {
+    // Test the two failing hands directly
+    const hand1: evaluator.Hand = 0x1F8000000008;
+    const hand2: evaluator.Hand = 0x3F00001000;
+    
+    // Get slow evaluator results
+    const slow_rank1 = evaluator.evaluateHand(hand1);
+    const slow_rank2 = evaluator.evaluateHand(hand2);
+    
+    std.debug.print("Hand 1 (0x{X}) slow rank: {}\n", .{hand1, slow_rank1});
+    std.debug.print("Hand 2 (0x{X}) slow rank: {}\n", .{hand2, slow_rank2});
+    
+    // Get our pattern extraction results
+    const suits1 = evaluator.getSuitMasks(hand1);
+    const suits2 = evaluator.getSuitMasks(hand2);
+    
+    for (suits1, 0..) |suit, i| {
+        if (@popCount(suit) >= 5) {
+            const pattern = getTop5Ranks(suit);
+            const table_rank = evaluateFlushPattern(pattern);
+            std.debug.print("Hand 1 suit {}: mask=0x{X}, pattern=0x{X}, table_rank={}\n", .{i, suit, pattern, table_rank});
+        }
+    }
+    
+    for (suits2, 0..) |suit, i| {
+        if (@popCount(suit) >= 5) {
+            const pattern = getTop5Ranks(suit);
+            const table_rank = evaluateFlushPattern(pattern);
+            std.debug.print("Hand 2 suit {}: mask=0x{X}, pattern=0x{X}, table_rank={}\n", .{i, suit, pattern, table_rank});
+        }
+    }
+}
+
 fn buildTables(allocator: std.mem.Allocator) !void {
     // Enumerate all 7-card hands once
     var non_flush_patterns = std.ArrayList(Pattern).init(allocator);
@@ -244,17 +303,23 @@ fn chdHash(key: u32) struct { bucket: u32, base_index: u32 } {
 fn getTop5Ranks(suit_mask: u16) u16 {
     if (@popCount(suit_mask) == 5) return suit_mask;
 
-    // Check for straights first
-    const straights = [_]u16{
-        0x1F00, 0x0F80, 0x07C0, 0x03E0, 0x01F0,
-        0x00F8, 0x007C, 0x003E, 0x001F, 0x100F,
-    };
-
-    for (straights) |pattern| {
-        if ((suit_mask & pattern) == pattern) return pattern;
+    // Check for straights starting from highest (A-K-Q-J-T down to 6-5-4-3-2)
+    // This ensures we find the HIGHEST straight when there are overlapping ones
+    var straight_mask: u16 = 0x1F00; // Start with A-K-Q-J-T
+    var i: u8 = 0;
+    while (i <= 8) : (i += 1) {
+        if ((suit_mask & straight_mask) == straight_mask) {
+            return straight_mask;
+        }
+        straight_mask >>= 1; // Shift right to check next lower straight
     }
 
-    // Take highest 5 ranks
+    // Check for wheel (A-2-3-4-5) last since it's the lowest straight
+    if ((suit_mask & 0x100F) == 0x100F) { // A,2,3,4,5
+        return 0x100F; // Return full wheel pattern
+    }
+
+    // No straight found, take highest 5 ranks
     var result: u16 = 0;
     var count: u8 = 0;
     var rank: i8 = 12;
@@ -271,26 +336,42 @@ fn getTop5Ranks(suit_mask: u16) u16 {
 }
 
 fn evaluateFlushPattern(pattern: u16) u16 {
-    // Build minimal hand with this flush pattern
-    var hand: evaluator.Hand = 0;
-
-    // Add flush cards in clubs
-    for (0..13) |r| {
-        if ((pattern & (@as(u16, 1) << @intCast(r))) != 0) {
-            hand |= evaluator.makeCard(0, @intCast(r));
+    // Check if this pattern is a straight flush first
+    const straight_patterns = [_]u16{
+        0x1F00, // A-K-Q-J-T (royal flush)
+        0x0F80, // K-Q-J-T-9  
+        0x07C0, // Q-J-T-9-8
+        0x03E0, // J-T-9-8-7
+        0x01F0, // T-9-8-7-6
+        0x00F8, // 9-8-7-6-5
+        0x007C, // 8-7-6-5-4
+        0x003E, // 7-6-5-4-3
+        0x001F, // 6-5-4-3-2
+        0x100F, // A-5-4-3-2 (wheel)
+    };
+    
+    for (straight_patterns, 0..) |straight_pattern, i| {
+        if (pattern == straight_pattern) {
+            // This is a straight flush
+            if (straight_pattern == 0x1F00) {
+                return 0; // Royal flush (best possible hand)
+            } else if (straight_pattern == 0x100F) {
+                return 9; // Wheel straight flush (worst straight flush)
+            } else {
+                // Other straight flushes: K-high=1, Q-high=2, ..., 6-high=8
+                return @as(u16, @intCast(i));
+            }
         }
     }
-
-    // Add 2 non-conflicting cards from other suits
-    var added: u8 = 0;
-    for (0..13) |r| {
-        if ((pattern & (@as(u16, 1) << @intCast(r))) == 0 and added < 2) {
-            hand |= evaluator.makeCard(1 + added, @intCast(r));
-            added += 1;
-        }
-    }
-
-    return evaluator.evaluateHand(hand);
+    
+    // Not a straight flush, so it's a regular flush
+    // Find the highest card in the pattern
+    const high_card_bit = @clz(pattern);
+    const high_card_rank = 15 - high_card_bit;
+    
+    // Use the same formula as slow_evaluator for flush ranking:
+    // Flush ranks are 322-1598, with A-high=322, K-high=422, etc.
+    return 322 + @as(u16, (12 - high_card_rank)) * 100;
 }
 
 fn writeTablesFile() !void {

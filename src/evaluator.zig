@@ -1,6 +1,5 @@
 const std = @import("std");
 const tables = @import("tables.zig");
-const slow_evaluator = @import("slow_evaluator.zig");
 
 // High-performance evaluator with SIMD batching
 const RANK_MASK = 0x1FFF; // 13 bits for ranks
@@ -93,7 +92,7 @@ fn chd_lookup_scalar(rpc: u32) u16 {
     return tables.chd_value_table[final_index];
 }
 
-fn is_flush_hand(hand: u64) bool {
+pub fn is_flush_hand(hand: u64) bool {
     const suits = [4]u16{
         @as(u16, @truncate(hand >> 0)) & RANK_MASK,   // clubs
         @as(u16, @truncate(hand >> 13)) & RANK_MASK,  // diamonds
@@ -107,14 +106,60 @@ fn is_flush_hand(hand: u64) bool {
     return false;
 }
 
+pub fn get_flush_pattern(hand: u64) u16 {
+    const suits = [4]u16{
+        @as(u16, @truncate(hand >> 0)) & RANK_MASK,   // clubs
+        @as(u16, @truncate(hand >> 13)) & RANK_MASK,  // diamonds
+        @as(u16, @truncate(hand >> 26)) & RANK_MASK,  // hearts
+        @as(u16, @truncate(hand >> 39)) & RANK_MASK,  // spades
+    };
+    
+    for (suits) |suit_mask| {
+        if (@popCount(suit_mask) >= 5) {
+            return get_top5_ranks(suit_mask);
+        }
+    }
+    return 0; // Should never happen for flush hands
+}
+
+fn get_top5_ranks(suit_mask: u16) u16 {
+    if (@popCount(suit_mask) == 5) return suit_mask;
+
+    // Check for straights first
+    const straights = [_]u16{
+        0x1F00, 0x0F80, 0x07C0, 0x03E0, 0x01F0,
+        0x00F8, 0x007C, 0x003E, 0x001F, 0x100F,
+    };
+
+    for (straights) |pattern| {
+        if ((suit_mask & pattern) == pattern) return pattern;
+    }
+
+    // Take highest 5 ranks
+    var result: u16 = 0;
+    var count: u8 = 0;
+    var rank: i8 = 12;
+
+    while (count < 5 and rank >= 0) : (rank -= 1) {
+        const bit = @as(u16, 1) << @intCast(rank);
+        if ((suit_mask & bit) != 0) {
+            result |= bit;
+            count += 1;
+        }
+    }
+
+    return result;
+}
+
 // === Public API ===
 
 pub fn evaluate_hand(hand: u64) u16 {
     if (is_flush_hand(hand)) {
-        return slow_evaluator.evaluateHand(hand); // Handle flushes properly
+        const pattern = get_flush_pattern(hand);
+        return tables.flush_lookup_table[pattern];
     }
     
-    const rpc = compute_rpc_from_hand(hand); // Revert to original
+    const rpc = compute_rpc_from_hand(hand);
     return chd_lookup_scalar(rpc);
 }
 
@@ -169,6 +214,30 @@ pub fn evaluate_batch_dynamic(hands: []const u64, results: []u16) void {
 }
 
 // === Testing/Benchmarking ===
+
+test "flush pattern extraction" {
+    // Test royal flush in spades: As Ks Qs Js Ts + 2 non-spade cards
+    const royal_flush: u64 = 
+        (@as(u64, 0x1F00) << 39) | // spades: A K Q J T (bits 12,11,10,9,8)
+        (@as(u64, 0x0040) << 26) | // hearts: 7 (bit 6) 
+        (@as(u64, 0x0020) << 13);  // diamonds: 6 (bit 5)
+    
+    try std.testing.expect(is_flush_hand(royal_flush));
+    const pattern = get_flush_pattern(royal_flush);
+    try std.testing.expectEqual(@as(u16, 0x1F00), pattern); // A K Q J T pattern
+}
+
+test "straight flush pattern" {
+    // Test straight flush 9-5 in clubs: 9c 8c 7c 6c 5c + 2 non-club cards
+    const straight_flush: u64 = 
+        (@as(u64, 0x03E0) << 0) |  // clubs: 9 8 7 6 5 (bits 8,7,6,5,4)
+        (@as(u64, 0x1000) << 13) | // diamonds: A (bit 12)
+        (@as(u64, 0x0800) << 26);  // hearts: K (bit 11)
+    
+    try std.testing.expect(is_flush_hand(straight_flush));
+    const pattern = get_flush_pattern(straight_flush);
+    try std.testing.expectEqual(@as(u16, 0x03E0), pattern); // 9 8 7 6 5 pattern
+}
 
 pub fn benchmark_single(iterations: u32) u64 {
     var sum: u64 = 0;

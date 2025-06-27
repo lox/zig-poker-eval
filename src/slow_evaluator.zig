@@ -77,19 +77,20 @@ fn getHighestRanks(ranks: u16, count: u8) u16 {
 
 // Check for straight in rank mask
 fn getStraightMask(ranks: u16) u16 {
-    // Check for wheel (A-2-3-4-5)
-    if ((ranks & 0x100F) == 0x100F) { // A,2,3,4,5
-        return 0x100F; // Return full wheel pattern including Ace for straight flush detection
-    }
-
-    // Check for regular straights
-    var straight_mask: u16 = 0x1F; // 5 consecutive bits
+    // Check for regular straights starting from highest (A-K-Q-J-T down to 6-5-4-3-2)
+    // This ensures we find the HIGHEST straight when there are overlapping ones
+    var straight_mask: u16 = 0x1F00; // Start with A-K-Q-J-T
     var i: u8 = 0;
     while (i <= 8) : (i += 1) {
         if ((ranks & straight_mask) == straight_mask) {
             return straight_mask;
         }
-        straight_mask <<= 1;
+        straight_mask >>= 1; // Shift right to check next lower straight
+    }
+
+    // Check for wheel (A-2-3-4-5) last since it's the lowest straight
+    if ((ranks & 0x100F) == 0x100F) { // A,2,3,4,5
+        return 0x100F; // Return full wheel pattern including Ace for straight flush detection
     }
 
     return 0;
@@ -397,4 +398,53 @@ test "wheel straight flush (A-5-4-3-2)" {
     
     // Should be rank 9 (worst straight flush) - fixed!
     try std.testing.expect(rank == 9); // Wheel straight flush
+}
+
+test "overlapping straights edge case - hand 1" {
+    // Hand 1: 0x1F8000000008 = spades 2,3,4,5,6,7 + clubs 5
+    // This contains TWO straights: 7-6-5-4-3 AND 6-5-4-3-2
+    // Should return the HIGHER straight: 7-6-5-4-3
+    const hand1: Hand = 0x1F8000000008;
+    const rank = evaluateHand(hand1);
+    
+    std.debug.print("Hand 1 rank: {}\n", .{rank});
+    
+    // Verify it's a flush
+    try std.testing.expect(hasFlush(hand1));
+    
+    // Check what suit has the flush
+    const suits = getSuitMasks(hand1);
+    for (suits, 0..) |suit, i| {
+        if (@popCount(suit) >= 5) {
+            std.debug.print("Flush suit {}: 0x{X} (popcount: {})\n", .{i, suit, @popCount(suit)});
+            
+            // Check which straights are present
+            const straight_7_high = getStraightMask(suit);
+            std.debug.print("Straight in flush suit: 0x{X}\n", .{straight_7_high});
+        }
+    }
+}
+
+test "overlapping straights edge case - hand 2" {
+    // Hand 2: 0x3F00001000 = hearts 8,9,T,J,Q,K + clubs A
+    // This is a K-high straight flush
+    const hand2: Hand = 0x3F00001000;
+    const rank = evaluateHand(hand2);
+    
+    std.debug.print("Hand 2 rank: {}\n", .{rank});
+    
+    // Verify it's a flush
+    try std.testing.expect(hasFlush(hand2));
+    
+    // Check what suit has the flush
+    const suits = getSuitMasks(hand2);
+    for (suits, 0..) |suit, i| {
+        if (@popCount(suit) >= 5) {
+            std.debug.print("Flush suit {}: 0x{X} (popcount: {})\n", .{i, suit, @popCount(suit)});
+            
+            // Check which straights are present
+            const straight_mask = getStraightMask(suit);
+            std.debug.print("Straight in flush suit: 0x{X}\n", .{straight_mask});
+        }
+    }
 }
