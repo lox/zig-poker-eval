@@ -16,6 +16,10 @@ var chd_g_array: [CHD_NUM_BUCKETS]u8 = undefined; // Displacement per bucket
 var chd_value_table: [CHD_TABLE_SIZE]u16 = undefined; // Hand ranks
 var bbhash_blob: std.ArrayList(u8) = undefined; // BBHash serialized data
 
+// Rank delta LUT tables for O(1) RPC computation
+var rank_delta_low: [128]u32 = undefined; // Base-5 deltas for ranks 0-6 (7 bits)
+var rank_delta_high: [64]u32 = undefined; // Base-5 deltas for ranks 7-12 (6 bits)
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -35,6 +39,10 @@ pub fn main() !void {
     // Build BBHash table for flush hands  
     print("Building BBHash table for flush patterns...\n", .{});
     try build_bbhash_tables(allocator);
+
+    // Build rank delta LUT tables for O(1) RPC computation
+    print("Building rank delta LUT tables...\n", .{});
+    build_rank_delta_tables();
 
     // Validate table sizes
     validate_table_sizes();
@@ -686,11 +694,43 @@ fn slow_evaluate_flush(pattern: u16) u16 {
 // Generate all C(52,7) combinations of 7 cards
 // Old memory-intensive functions removed - now using streaming HandIterator
 
+fn build_rank_delta_tables() void {
+    print("  Generating low rank delta table (ranks 0-6)...\n", .{});
+    
+    // Generate rank_delta_low for 7-bit masks (ranks 0-6)
+    for (0..128) |mask| {
+        var delta: u32 = 0;
+        for (0..7) |rank| {
+            if (mask & (@as(u32, 1) << @intCast(rank)) != 0) {
+                delta += std.math.pow(u32, 5, @intCast(rank));
+            }
+        }
+        rank_delta_low[mask] = delta;
+    }
+    
+    print("  Generating high rank delta table (ranks 7-12)...\n", .{});
+    
+    // Generate rank_delta_high for 6-bit masks (ranks 7-12)  
+    for (0..64) |mask| {
+        var delta: u32 = 0;
+        for (0..6) |rank| {
+            if (mask & (@as(u32, 1) << @intCast(rank)) != 0) {
+                delta += std.math.pow(u32, 5, @intCast(rank + 7));
+            }
+        }
+        rank_delta_high[mask] = delta;
+    }
+    
+    print("  Rank delta tables generated: {} + {} entries\n", .{ rank_delta_low.len, rank_delta_high.len });
+}
+
 fn validate_table_sizes() void {
     // Validate table sizes
     comptime {
         std.debug.assert(@sizeOf(@TypeOf(chd_g_array)) == 8192);
         std.debug.assert(@sizeOf(@TypeOf(chd_value_table)) == 262144); // 2^17 * 2 bytes
+        std.debug.assert(@sizeOf(@TypeOf(rank_delta_low)) == 512); // 128 * 4 bytes
+        std.debug.assert(@sizeOf(@TypeOf(rank_delta_high)) == 256); // 64 * 4 bytes
     }
     
     // Validate CHD displacement bounds
@@ -707,6 +747,8 @@ fn validate_table_sizes() void {
     
     const total_size = @sizeOf(@TypeOf(chd_g_array)) + 
                       @sizeOf(@TypeOf(chd_value_table)) + 
+                      @sizeOf(@TypeOf(rank_delta_low)) +
+                      @sizeOf(@TypeOf(rank_delta_high)) +
                       bbhash_blob.items.len;
     print("  Total table size: {} bytes ({} KB)\n", .{ total_size, total_size / 1024 });
     
@@ -724,7 +766,9 @@ fn write_tables_file() !void {
     // Write file header
     try writer.print("// Generated lookup tables for SIMD poker evaluator\n", .{});
     try writer.print("// Total size: {} KB\n\n", .{
-        (@sizeOf(@TypeOf(chd_g_array)) + @sizeOf(@TypeOf(chd_value_table)) + bbhash_blob.items.len) / 1024
+        (@sizeOf(@TypeOf(chd_g_array)) + @sizeOf(@TypeOf(chd_value_table)) + 
+         @sizeOf(@TypeOf(rank_delta_low)) + @sizeOf(@TypeOf(rank_delta_high)) + 
+         bbhash_blob.items.len) / 1024
     });
     
     // Write CHD tables
@@ -743,6 +787,26 @@ fn write_tables_file() !void {
         if (i % 16 == 0) try writer.print("    ", .{});
         try writer.print("{}, ", .{rank});
         if (i % 16 == 15) try writer.print("\n", .{});
+    }
+    try writer.print("}};\n\n", .{});
+    
+    // Write rank delta LUT tables
+    try writer.print("// Rank delta LUT for O(1) RPC computation\n", .{});
+    try writer.print("// Low table: ranks 0-6 (7 bits = 128 entries, {} bytes)\n", .{@sizeOf(@TypeOf(rank_delta_low))});
+    try writer.print("pub const rank_delta_low = [_]u32{{\n", .{});
+    for (rank_delta_low, 0..) |delta, i| {
+        if (i % 8 == 0) try writer.print("    ", .{});
+        try writer.print("{}, ", .{delta});
+        if (i % 8 == 7) try writer.print("\n", .{});
+    }
+    try writer.print("}};\n\n", .{});
+    
+    try writer.print("// High table: ranks 7-12 (6 bits = 64 entries, {} bytes)\n", .{@sizeOf(@TypeOf(rank_delta_high))});
+    try writer.print("pub const rank_delta_high = [_]u32{{\n", .{});
+    for (rank_delta_high, 0..) |delta, i| {
+        if (i % 8 == 0) try writer.print("    ", .{});
+        try writer.print("{}, ", .{delta});
+        if (i % 8 == 7) try writer.print("\n", .{});
     }
     try writer.print("}};\n\n", .{});
     

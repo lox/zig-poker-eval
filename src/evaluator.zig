@@ -2,10 +2,10 @@ const std = @import("std");
 const tables = @import("tables.zig");
 const slow_evaluator = @import("slow_evaluator.zig");
 
-// Simple, clean evaluator - no premature optimization
+// High-performance evaluator with SIMD batching
 const RANK_MASK = 0x1FFF; // 13 bits for ranks
 
-// === Core Algorithm (from your DESIGN.md) ===
+// === Scalar RPC Computation (for single hands and flushes) ===
 
 fn compute_rpc_from_hand(hand: u64) u32 {
     var rank_counts = [_]u8{0} ** 13;
@@ -25,6 +25,54 @@ fn compute_rpc_from_hand(hand: u64) u32 {
         rpc = rpc * 5 + count;
     }
     return rpc;
+}
+
+// === SIMD RPC Computation (for 4-hand batches) ===
+
+fn compute_rpc_simd4(hands: [4]u64) [4]u32 {
+    // Extract suits for all 4 hands (structure-of-arrays)
+    var clubs: [4]u16 = undefined;
+    var diamonds: [4]u16 = undefined; 
+    var hearts: [4]u16 = undefined;
+    var spades: [4]u16 = undefined;
+    
+    for (hands, 0..) |hand, i| {
+        clubs[i] = @as(u16, @truncate((hand >> 0) & RANK_MASK));
+        diamonds[i] = @as(u16, @truncate((hand >> 13) & RANK_MASK));
+        hearts[i] = @as(u16, @truncate((hand >> 26) & RANK_MASK));
+        spades[i] = @as(u16, @truncate((hand >> 39) & RANK_MASK));
+    }
+    
+    const clubs_v: @Vector(4, u16) = clubs;
+    const diamonds_v: @Vector(4, u16) = diamonds;
+    const hearts_v: @Vector(4, u16) = hearts;
+    const spades_v: @Vector(4, u16) = spades;
+    
+    var rpc_vec: @Vector(4, u32) = @splat(0);
+    
+    // Vectorized rank counting for all 13 ranks
+    inline for (0..13) |rank| {
+        const rank_bit: @Vector(4, u16) = @splat(@as(u16, 1) << @intCast(rank));
+        const zero_vec: @Vector(4, u16) = @splat(0);
+        
+        // Count rank occurrences across all suits (vectorized)
+        const one_vec: @Vector(4, u8) = @splat(1);
+        const zero_u8_vec: @Vector(4, u8) = @splat(0);
+        
+        const clubs_has = @select(u8, (clubs_v & rank_bit) != zero_vec, one_vec, zero_u8_vec);
+        const diamonds_has = @select(u8, (diamonds_v & rank_bit) != zero_vec, one_vec, zero_u8_vec);
+        const hearts_has = @select(u8, (hearts_v & rank_bit) != zero_vec, one_vec, zero_u8_vec);
+        const spades_has = @select(u8, (spades_v & rank_bit) != zero_vec, one_vec, zero_u8_vec);
+        
+        // Sum to get rank count for each hand
+        const rank_count_vec = clubs_has + diamonds_has + hearts_has + spades_has;
+        
+        // Vectorized base-5 encoding: rpc = rpc * 5 + count
+        const five_vec: @Vector(4, u32) = @splat(5);
+        rpc_vec = rpc_vec * five_vec + @as(@Vector(4, u32), rank_count_vec);
+    }
+    
+    return @as([4]u32, rpc_vec);
 }
 
 
@@ -71,22 +119,38 @@ pub fn evaluate_hand(hand: u64) u16 {
 }
 
 
-// Batch evaluation - let the compiler vectorize
+// High-performance SIMD batch evaluation
 pub fn evaluate_batch_4(hands: @Vector(4, u64)) @Vector(4, u16) {
+    const hands_array = [4]u64{ hands[0], hands[1], hands[2], hands[3] };
+    
+    // Check for flush hands - if any found, fall back to scalar
+    for (hands_array) |hand| {
+        if (is_flush_hand(hand)) {
+            // Mixed batch - use scalar path for correctness
+            var results: @Vector(4, u16) = @splat(0);
+            inline for (0..4) |i| {
+                results[i] = evaluate_hand(hands[i]);
+            }
+            return results;
+        }
+    }
+    
+    // All non-flush - use optimized SIMD path
+    const rpc_results = compute_rpc_simd4(hands_array);
     var results: @Vector(4, u16) = @splat(0);
     
     inline for (0..4) |i| {
-        results[i] = evaluate_hand(hands[i]);
+        results[i] = chd_lookup_scalar(rpc_results[i]);
     }
     
     return results;
 }
 
-// Architecture-adaptive batch sizes (simple approach)
+// Architecture-adaptive batch processing with SIMD optimization
 pub fn evaluate_batch_dynamic(hands: []const u64, results: []u16) void {
     std.debug.assert(hands.len == results.len);
     
-    // Process in chunks of 4 (optimal for most architectures)
+    // Process in chunks of 4 (optimal for SIMD)
     var i: usize = 0;
     while (i + 4 <= hands.len) : (i += 4) {
         const batch_hands = @Vector(4, u64){ hands[i], hands[i+1], hands[i+2], hands[i+3] };

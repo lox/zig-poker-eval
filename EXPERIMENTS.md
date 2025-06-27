@@ -108,6 +108,58 @@ inline for (0..13) |rank| {
 
 **Why it failed**: Despite being "O(1)" in theory, the bit manipulation approach had higher per-operation overhead than the simple nested loops. Zig's compiler already optimizes the original loops with excellent auto-vectorization and instruction scheduling. The complex bit operations caused register pressure and defeated compiler optimizations. This reinforced the core lesson: **simple code + compiler optimization often beats manual micro-optimizations**.
 
+## Experiment 6: SIMD Batching (4-Hand Parallel)
+**Performance Impact**: +89% faster (7.22→3.82 ns/hand)  
+**Complexity**: High  
+**Status**: ✅ SUCCESS  
+
+**Approach**: Process 4 poker hands simultaneously using true SIMD parallelism with ARM64 NEON via Zig @Vector types, rather than optimizing single-hand computation.
+
+**Implementation**:
+```zig
+// Structure-of-arrays for SIMD processing
+const Hands4 = struct {
+    clubs: @Vector(4, u16),
+    diamonds: @Vector(4, u16), 
+    hearts: @Vector(4, u16),
+    spades: @Vector(4, u16),
+};
+
+// Vectorized rank counting
+fn compute_rpc_simd4(hands4: Hands4) @Vector(4, u32) {
+    var rpc_vec: @Vector(4, u32) = @splat(0);
+    
+    inline for (0..13) |rank| {
+        const rank_bit: @Vector(4, u16) = @splat(@as(u16, 1) << @intCast(rank));
+        const zero_vec: @Vector(4, u16) = @splat(0);
+        
+        // Count rank occurrences across all suits (vectorized)
+        const clubs_has = @select(u8, (hands4.clubs & rank_bit) != zero_vec, one_vec, zero_u8_vec);
+        const diamonds_has = @select(u8, (hands4.diamonds & rank_bit) != zero_vec, one_vec, zero_u8_vec);
+        const hearts_has = @select(u8, (hands4.hearts & rank_bit) != zero_vec, one_vec, zero_u8_vec);
+        const spades_has = @select(u8, (hands4.spades & rank_bit) != zero_vec, one_vec, zero_u8_vec);
+        
+        const rank_count_vec = clubs_has + diamonds_has + hearts_has + spades_has;
+        
+        // Vectorized base-5 encoding
+        const five_vec: @Vector(4, u32) = @splat(5);
+        rpc_vec = rpc_vec * five_vec + @as(@Vector(4, u32), rank_count_vec);
+    }
+    
+    return rpc_vec;
+}
+```
+
+**Benchmark Results**: 4M hands (1M batches of 4)
+- **Scalar**: 7.22 ns/hand (138.4 M hands/sec)
+- **SIMD**: 3.82 ns/hand (262.0 M hands/sec)  
+- **Speedup**: 1.89x
+- **Checksums**: Identical (correctness verified)
+
+**Why it succeeded**: Instead of fighting compiler optimizations with single-hand complexity, leveraged algorithmic parallelism. ARM64 NEON SIMD units can genuinely process 4 values simultaneously, providing true throughput multiplication. The structure-of-arrays layout enables efficient vectorization of the rank counting bottleneck.
+
+**Key insight**: All previous experiments failed because they added complexity to already-optimized single-hand code. This experiment succeeded by changing the **algorithm** from "optimize 1 hand" to "process 4 hands in parallel" - working with SIMD strengths rather than against compiler optimizations.
+
 ## Key Learnings
 
 1. **Memory optimizations fail**: Working set (267KB) is cache-resident, not memory-bound
@@ -115,6 +167,7 @@ inline for (0..13) |rank| {
 3. **Compiler knows best**: Auto-vectorization + simple code often beats manual optimization
 4. **Measure everything**: "Obvious" optimizations frequently backfire
 5. **Profile-guided is better**: All experiments were theory-driven; real profiling might reveal different bottlenecks
+6. **Algorithmic parallelism wins**: True SIMD batching succeeds where single-hand optimizations fail
 
 ---
 
