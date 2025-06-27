@@ -27,6 +27,7 @@ fn compute_rpc_from_hand(hand: u64) u32 {
     return rpc;
 }
 
+
 fn mix64(x: u64) u64 {
     var result = x;
     result ^= result >> 33;
