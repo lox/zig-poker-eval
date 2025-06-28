@@ -29,7 +29,7 @@ repos:
         entry: zig fmt --check
         language: system
         files: \.zig$
-      - id: zig-build
+      - id: zig-test
         name: zig build test
         entry: zig build test
         language: system

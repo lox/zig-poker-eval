@@ -377,3 +377,8 @@ test "card parsing" {
     try testing.expect(ace_spades == makeCardFromEnums(.spades, .ace));
     try testing.expect(two_clubs == makeCardFromEnums(.clubs, .two));
 }
+
+// Ensure all tests in this module are discovered
+test {
+    std.testing.refAllDecls(@This());
+}

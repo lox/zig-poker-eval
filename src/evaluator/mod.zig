@@ -87,3 +87,8 @@ test {
     _ = evaluator_impl;
     _ = card;
 }
+
+// Ensure all tests in this module are discovered
+test {
+    std.testing.refAllDecls(@This());
+}

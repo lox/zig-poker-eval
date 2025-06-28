@@ -103,3 +103,8 @@ test {
     _ = notation_impl;
     _ = simulation_impl;
 }
+
+// Ensure all tests in this module are discovered
+test {
+    std.testing.refAllDecls(@This());
+}
