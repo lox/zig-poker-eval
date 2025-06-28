@@ -72,7 +72,7 @@ pub fn build(b: *std.Build) void {
     
     // Evaluator module tests
     const all_tests = b.addTest(.{
-        .root_source_file = b.path("src/test_all.zig"),
+        .root_source_file = b.path("src/test.zig"),
         .target = target,
         .optimize = optimize,
     });
