@@ -4,17 +4,22 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Define evaluator module
+    const evaluator_mod = b.addModule("evaluator", .{
+        .root_source_file = b.path("src/evaluator/mod.zig"),
+    });
+
     // Table builder executable (for manual table regeneration)
     const table_builder = b.addExecutable(.{
         .name = "build_tables",
-        .root_source_file = b.path("src/build_tables.zig"),
+        .root_source_file = b.path("src/evaluator/build_tables.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     // Add module path for slow evaluator (needed by table builder)
     const slow_evaluator = b.createModule(.{
-        .root_source_file = b.path("src/slow_evaluator.zig"),
+        .root_source_file = b.path("src/evaluator/slow_evaluator.zig"),
     });
     table_builder.root_module.addImport("slow_evaluator", slow_evaluator);
 
@@ -23,31 +28,25 @@ pub fn build(b: *std.Build) void {
     const build_tables_step = b.step("build-tables", "Generate L1-optimized lookup tables");
     build_tables_step.dependOn(&build_tables.step);
 
-    // Main evaluator executable (uses pre-compiled tables)
+    // Main CLI executable
     const exe = b.addExecutable(.{
         .name = "poker-eval",
-        .root_source_file = b.path("src/main.zig"),
+        .root_source_file = b.path("src/cli/main.zig"),
         .target = target,
         .optimize = optimize,
     });
+    exe.root_module.addImport("evaluator", evaluator_mod);
 
     b.installArtifact(exe);
 
-    // Benchmark executable (uses pre-compiled tables)
+    // Benchmark executable - top-level benchmark suite
     const bench = b.addExecutable(.{
         .name = "bench",
         .root_source_file = b.path("src/bench.zig"),
         .target = target,
         .optimize = optimize,
     });
-
-    // Flush analysis executable
-    const flush_analysis = b.addExecutable(.{
-        .name = "flush_analysis",
-        .root_source_file = b.path("src/flush_analysis.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
+    bench.root_module.addImport("evaluator", evaluator_mod);
 
     // Run benchmark
     const run_bench = b.addRunArtifact(bench);
@@ -56,24 +55,6 @@ pub fn build(b: *std.Build) void {
     }
     const bench_step = b.step("bench", "Run performance benchmark");
     bench_step.dependOn(&run_bench.step);
-    
-    // Run flush analysis
-    const run_flush_analysis = b.addRunArtifact(flush_analysis);
-    const flush_step = b.step("flush", "Analyze flush vs non-flush performance");
-    flush_step.dependOn(&run_flush_analysis.step);
-    
-    // Profiling benchmark executable
-    const profile_bench = b.addExecutable(.{
-        .name = "profile_bench",
-        .root_source_file = b.path("src/profile_bench.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    
-    // Run profiling benchmark
-    const run_profile_bench = b.addRunArtifact(profile_bench);
-    const profile_step = b.step("profile", "Run extended benchmark for profiling");
-    profile_step.dependOn(&run_profile_bench.step);
     
 
     // Run main executable
@@ -86,16 +67,27 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the poker evaluator");
     run_step.dependOn(&run_cmd.step);
 
-    // Test step (uses pre-compiled tables)
-    const exe_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/main.zig"),
+    // Test step - run tests from all modules separately for full test discovery
+    const test_step = b.step("test", "Run all unit tests");
+    
+    // Evaluator module tests
+    const evaluator_tests = b.addTest(.{
+        .root_source_file = b.path("src/evaluator/evaluator.zig"),
         .target = target,
         .optimize = optimize,
     });
-    exe_unit_tests.test_runner = .{ .path = b.path("src/test_runner.zig"), .mode = .simple };
+    evaluator_tests.test_runner = .{ .path = b.path("src/tools/test_runner.zig"), .mode = .simple };
+    
+    const slow_evaluator_tests = b.addTest(.{
+        .root_source_file = b.path("src/evaluator/slow_evaluator.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    slow_evaluator_tests.test_runner = .{ .path = b.path("src/tools/test_runner.zig"), .mode = .simple };
+    
+    const run_evaluator_tests = b.addRunArtifact(evaluator_tests);
+    const run_slow_evaluator_tests = b.addRunArtifact(slow_evaluator_tests);
 
-    const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
-
-    const test_step = b.step("test", "Run all unit tests");
-    test_step.dependOn(&run_exe_unit_tests.step);
+    test_step.dependOn(&run_evaluator_tests.step);
+    test_step.dependOn(&run_slow_evaluator_tests.step);
 }

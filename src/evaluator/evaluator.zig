@@ -198,31 +198,7 @@ pub fn evaluateBatchDynamic(hands: []const u64, results: []u16) void {
     }
 }
 
-// === Testing/Benchmarking ===
-
-test "flush pattern extraction" {
-    // Test royal flush in spades: As Ks Qs Js Ts + 2 non-spade cards
-    const royal_flush: u64 = 
-        (@as(u64, 0x1F00) << 39) | // spades: A K Q J T (bits 12,11,10,9,8)
-        (@as(u64, 0x0040) << 26) | // hearts: 7 (bit 6) 
-        (@as(u64, 0x0020) << 13);  // diamonds: 6 (bit 5)
-    
-    try std.testing.expect(isFlushHand(royal_flush));
-    const pattern = getFlushPattern(royal_flush);
-    try std.testing.expectEqual(@as(u16, 0x1F00), pattern); // A K Q J T pattern
-}
-
-test "straight flush pattern" {
-    // Test straight flush 9-5 in clubs: 9c 8c 7c 6c 5c + 2 non-club cards
-    const straight_flush: u64 = 
-        (@as(u64, 0x03E0) << 0) |  // clubs: 9 8 7 6 5 (bits 8,7,6,5,4)
-        (@as(u64, 0x1000) << 13) | // diamonds: A (bit 12)
-        (@as(u64, 0x0800) << 26);  // hearts: K (bit 11)
-    
-    try std.testing.expect(isFlushHand(straight_flush));
-    const pattern = getFlushPattern(straight_flush);
-    try std.testing.expectEqual(@as(u16, 0x03E0), pattern); // 9 8 7 6 5 pattern
-}
+// === Benchmarking ===
 
 pub fn benchmarkSingle(iterations: u32) u64 {
     var sum: u64 = 0;
@@ -248,3 +224,115 @@ pub fn benchmarkBatch(iterations: u32) u64 {
     
     return sum;
 }
+
+// === Test Utilities ===
+
+const slow_evaluator = @import("slow_evaluator.zig");
+
+// Generate random hands for testing (4-hand batches)
+pub fn generateRandomHandBatch(rng: *std.Random) @Vector(4, u64) {
+    var hands: [4]u64 = undefined;
+
+    for (&hands) |*hand| {
+        hand.* = generateRandomHand(rng);
+    }
+
+    return @as(@Vector(4, u64), hands);
+}
+
+pub fn generateRandomHand(rng: *std.Random) u64 {
+    var hand: u64 = 0;
+    var cards_dealt: u8 = 0;
+
+    while (cards_dealt < 7) {
+        const suit = rng.intRangeAtMost(u8, 0, 3);
+        const rank = rng.intRangeAtMost(u8, 0, 12);
+        const card = slow_evaluator.makeCard(suit, rank);
+
+        if ((hand & card) == 0) {
+            hand |= card;
+            cards_dealt += 1;
+        }
+    }
+
+    return hand;
+}
+
+// === Tests ===
+
+test "flush pattern extraction" {
+    // Test royal flush in spades: As Ks Qs Js Ts + 2 non-spade cards
+    const royal_flush: u64 = 
+        (@as(u64, 0x1F00) << 39) | // spades: A K Q J T (bits 12,11,10,9,8)
+        (@as(u64, 0x0040) << 26) | // hearts: 7 (bit 6) 
+        (@as(u64, 0x0020) << 13);  // diamonds: 6 (bit 5)
+    
+    try std.testing.expect(isFlushHand(royal_flush));
+    const pattern = getFlushPattern(royal_flush);
+    try std.testing.expectEqual(@as(u16, 0x1F00), pattern); // A K Q J T pattern
+}
+
+test "straight flush pattern" {
+    // Test straight flush 9-5 in clubs: 9c 8c 7c 6c 5c + 2 non-club cards
+    const straight_flush: u64 = 
+        (@as(u64, 0x03E0) << 0) |  // clubs: 9 8 7 6 5 (bits 8,7,6,5,4)
+        (@as(u64, 0x1000) << 13) | // diamonds: A (bit 12)
+        (@as(u64, 0x0800) << 26);  // hearts: K (bit 11)
+    
+    try std.testing.expect(isFlushHand(straight_flush));
+    const pattern = getFlushPattern(straight_flush);
+    try std.testing.expectEqual(@as(u16, 0x03E0), pattern); // 9 8 7 6 5 pattern
+}
+
+test "single hand evaluation" {
+    // Test a specific hand - Royal flush clubs
+    const test_hand: u64 = 0x1F00; // A-K-Q-J-T of clubs
+
+    const slow_result = slow_evaluator.evaluateHand(test_hand);
+    const fast_result = evaluateHand(test_hand);
+
+    // Only print on failure
+    if (slow_result != fast_result) {
+        std.debug.print("Single hand FAIL: hand=0x{X}, slow={}, fast={}\n", .{ test_hand, slow_result, fast_result });
+    }
+
+    try std.testing.expectEqual(slow_result, fast_result);
+}
+
+test "batch evaluation" {
+    // Generate test batch
+    var prng = std.Random.DefaultPrng.init(42);
+    var rng = prng.random();
+    const batch = generateRandomHandBatch(&rng);
+
+    // Evaluate batch
+    const batch_results = evaluateBatch4(batch);
+
+    // Validate against single-hand evaluation
+    var matches: u32 = 0;
+
+    const batch_size = 4;
+    for (0..batch_size) |i| {
+        const hand = batch[i];
+        const batch_result = batch_results[i];
+        const single_result = slow_evaluator.evaluateHand(hand);
+
+        if (batch_result == single_result) {
+            matches += 1;
+        }
+
+        // Only print failures
+        if (batch_result != single_result) {
+            std.debug.print("Batch FAIL hand {}: batch={}, single={}\n", .{ i, batch_result, single_result });
+        }
+    }
+
+    // Only print on failure
+    if (matches != batch_size) {
+        const accuracy = @as(f64, @floatFromInt(matches)) / @as(f64, @floatFromInt(batch_size)) * 100.0;
+        std.debug.print("Batch accuracy: {}/{} ({d:.1}%)\n", .{ matches, batch_size, accuracy });
+    }
+    
+    try std.testing.expectEqual(@as(u32, @intCast(batch_size)), matches);
+}
+

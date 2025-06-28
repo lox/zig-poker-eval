@@ -3,9 +3,9 @@ const evaluator = @import("evaluator.zig");
 
 // Re-export the core functions for assembly analysis
 pub const evaluateHand = evaluator.evaluateHand;
-pub const evaluate_batch_4 = evaluator.evaluate_batch_4;
-pub const benchmark_single = evaluator.benchmark_single;
-pub const benchmark_batch = evaluator.benchmark_batch;
+pub const evaluateBatch4 = evaluator.evaluateBatch4;
+pub const benchmarkSingle = evaluator.benchmarkSingle;
+pub const benchmarkBatch = evaluator.benchmarkBatch;
 
 // Export functions for assembly analysis
 export fn bench_single_hand(hand: u64) u16 {
@@ -13,15 +13,15 @@ export fn bench_single_hand(hand: u64) u16 {
 }
 
 export fn bench_batch_hands(hands: @Vector(4, u64)) @Vector(4, u16) {
-    return evaluate_batch_4(hands);
+    return evaluateBatch4(hands);
 }
 
 export fn bench_performance_loop() u64 {
-    return benchmark_single(1000);
+    return benchmarkSingle(1000);
 }
 
 export fn bench_batch_performance() u64 {
-    return benchmark_batch(250); // 250 * 4 = 1000 hands
+    return benchmarkBatch(250); // 250 * 4 = 1000 hands
 }
 
 // Test with representative hands
