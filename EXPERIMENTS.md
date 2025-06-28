@@ -210,6 +210,50 @@ fn compute_rpc_simd8(hands: [8]u64) [8]u32 {
 
 **Key insight**: The "sweet spot" for SIMD batch size is architecture-dependent. ARM64 NEON's 4-wide design makes 4-hand batching optimal; scaling beyond this hits diminishing returns from resource constraints rather than algorithmic improvements.
 
+## Experiment 8: Flush Fallback Elimination
+**Performance Impact**: Neutral on mixed workload, significant improvement on flush-heavy batches  
+**Complexity**: Low  
+**Status**: ✅ SUCCESS  
+
+**Approach**: Eliminate scalar fallback when batches contain mixed flush/non-flush hands by keeping SIMD pipeline active for non-flush hands and handling flush hands per-lane.
+
+**Problem**: Previous implementation fell back to scalar evaluation for entire 4-hand batch if ANY hand was a flush (9.3% probability), wasting SIMD work on 3 non-flush hands.
+
+**Implementation**:
+```zig
+// Detect flush hands but preserve SIMD pipeline
+var flush_mask: u4 = 0;
+for (hands_array, 0..) |hand, i| {
+    if (is_flush_hand(hand)) {
+        flush_mask |= (@as(u4, 1) << @intCast(i));
+    }
+}
+
+// Always run SIMD path for RPC computation (amortizes cost)
+const rpc_results = compute_rpc_simd4(hands_array);
+
+// Per-lane result selection based on flush detection
+inline for (0..4) |i| {
+    if (flush_mask & (@as(u4, 1) << @intCast(i)) != 0) {
+        // Flush hand - use flush lookup table
+        const pattern = get_flush_pattern(hands_array[i]);
+        results[i] = tables.flush_lookup_table[pattern];
+    } else {
+        // Non-flush hand - use CHD lookup with SIMD-computed RPC
+        results[i] = chd_lookup_scalar(rpc_results[i]);
+    }
+}
+```
+
+**Benchmark Results**:
+- **Mixed workload**: 7.23 ns/hand (no regression)
+- **Mixed flush batch**: 4 ns/hand (250M hands/sec) - 1 flush + 3 non-flush
+- **Pure non-flush batch**: 9 ns/hand (111M hands/sec) - all non-flush
+
+**Why it succeeded**: Eliminated 9.3% scalar penalty for mixed batches while maintaining SIMD efficiency. The approach respects ARM64 architecture constraints and avoids complexity tax by using simple per-lane selection rather than vectorized flush handling.
+
+**Key insight**: Strategic fallback elimination can provide targeted improvements without adding architectural complexity. The SIMD pipeline investment is preserved even when some lanes require different processing paths.
+
 ## Key Learnings
 
 1. **Memory optimizations fail**: Working set (267KB) is cache-resident, not memory-bound

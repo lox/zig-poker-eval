@@ -164,28 +164,32 @@ pub fn evaluate_hand(hand: u64) u16 {
 }
 
 
-// High-performance SIMD batch evaluation
+// High-performance SIMD batch evaluation with per-lane flush handling
 pub fn evaluate_batch_4(hands: @Vector(4, u64)) @Vector(4, u16) {
     const hands_array = [4]u64{ hands[0], hands[1], hands[2], hands[3] };
     
-    // Check for flush hands - if any found, fall back to scalar
-    for (hands_array) |hand| {
+    // Detect flush hands but preserve SIMD pipeline
+    var flush_mask: u4 = 0;
+    for (hands_array, 0..) |hand, i| {
         if (is_flush_hand(hand)) {
-            // Mixed batch - use scalar path for correctness
-            var results: @Vector(4, u16) = @splat(0);
-            inline for (0..4) |i| {
-                results[i] = evaluate_hand(hands[i]);
-            }
-            return results;
+            flush_mask |= (@as(u4, 1) << @intCast(i));
         }
     }
     
-    // All non-flush - use optimized SIMD path
+    // Always run SIMD path for RPC computation (amortizes cost)
     const rpc_results = compute_rpc_simd4(hands_array);
     var results: @Vector(4, u16) = @splat(0);
     
+    // Per-lane result selection based on flush detection
     inline for (0..4) |i| {
-        results[i] = chd_lookup_scalar(rpc_results[i]);
+        if (flush_mask & (@as(u4, 1) << @intCast(i)) != 0) {
+            // Flush hand - use flush lookup table
+            const pattern = get_flush_pattern(hands_array[i]);
+            results[i] = tables.flush_lookup_table[pattern];
+        } else {
+            // Non-flush hand - use CHD lookup with SIMD-computed RPC
+            results[i] = chd_lookup_scalar(rpc_results[i]);
+        }
     }
     
     return results;
