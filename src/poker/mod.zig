@@ -42,7 +42,7 @@ pub const monteCarlo = equity_impl.monteCarlo;
 pub const detailedMonteCarlo = equity_impl.detailedMonteCarlo;
 pub const exact = equity_impl.exact;
 
-// PUBLIC API - Range analysis  
+// PUBLIC API - Range analysis
 pub const Range = ranges_impl.Range;
 pub const parseRange = ranges_impl.parseRange;
 
@@ -63,7 +63,7 @@ pub fn evaluateHand(hand: Hand) HandRank {
 pub fn compareHands(hand1: Hand, hand2: Hand) ShowdownResult {
     const rank1 = evaluateHand(hand1);
     const rank2 = evaluateHand(hand2);
-    
+
     if (@intFromEnum(rank1) > @intFromEnum(rank2)) {
         return .{ .winner = 0, .tie = false, .winning_rank = rank1 };
     } else if (@intFromEnum(rank2) > @intFromEnum(rank1)) {
@@ -73,7 +73,7 @@ pub fn compareHands(hand1: Hand, hand2: Hand) ShowdownResult {
     }
 }
 
-// Convenience functions for poker notation  
+// Convenience functions for poker notation
 pub fn createCard(suit: Suit, rank: Rank) Card {
     return makeCardFromEnums(suit, rank);
 }

@@ -26,7 +26,7 @@ Scripts for performance analysis and profiling of the poker hand evaluator.
 **Features**:
 - Builds benchmark with ReleaseFast + debug symbols
 - Configurable iteration count (default: 20M)
-- Configurable sampling duration (default: 15s) 
+- Configurable sampling duration (default: 15s)
 - Samples every 1ms for high resolution
 - Outputs detailed function-level breakdown
 - Error handling for failed sampling

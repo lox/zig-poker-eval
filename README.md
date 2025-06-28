@@ -43,7 +43,7 @@ const evaluator = @import("evaluator");
 const hand: u64 = 0x1F00000000000; // Royal flush pattern
 const rank = evaluator.evaluateHand(hand); // Lower rank = stronger hand
 
-// SIMD batch evaluation (4 hands simultaneously) 
+// SIMD batch evaluation (4 hands simultaneously)
 var rng = std.Random.DefaultPrng.init(42).random();
 const batch = evaluator.generateRandomHandBatch(&rng);
 const results = evaluator.evaluateBatch4(batch); // 1.5x speedup
@@ -56,7 +56,7 @@ const results = evaluator.evaluateBatch4(batch); // 1.5x speedup
 ```zig
 const poker = @import("poker");
 
-// Create a 7-card hand (hole cards + community cards)  
+// Create a 7-card hand (hole cards + community cards)
 const hand = poker.createHand(&.{
     .{ .hearts, .ace },   // Hole card 1
     .{ .spades, .ace },   // Hole card 2
@@ -161,7 +161,7 @@ zig build run -- range "AA-TT,AKs,AQs" --verbose
 # Hand evaluation (coming soon)
 zig build run -- eval "AhAsKhQsJhThTc"
 
-# Equity analysis (coming soon)  
+# Equity analysis (coming soon)
 zig build run -- equity "AhAs" "KdKc" --sims 100000
 
 # Advanced benchmarking (fully functional)
@@ -216,7 +216,7 @@ zig build run -- bench --test-hand 0x1F00 --single-run
 zig build run -- bench --test-hand 0x1F00      # Royal flush
 zig build run -- bench --test-hand 0x123456    # Random hand
 
-# Validate against reference implementation  
+# Validate against reference implementation
 zig build run -- bench --validate              # Tests 16K hands
 
 # Comprehensive testing
@@ -225,7 +225,7 @@ zig build run -- bench --test --validate       # Full evaluator test
 
 The benchmark framework provides:
 - **Statistical Analysis**: Multiple runs, median, coefficient of variation
-- **Cache Warmup**: Proper cache preparation for accurate measurements  
+- **Cache Warmup**: Proper cache preparation for accurate measurements
 - **Overhead Measurement**: Framework overhead calculation and subtraction
 - **SIMD Comparison**: Single vs batch performance analysis
 - **Correctness Validation**: 100% accuracy verification against reference

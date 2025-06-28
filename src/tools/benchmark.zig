@@ -36,7 +36,7 @@ fn warmupCaches(test_hands: []const u64) void {
     // Touch lookup tables by performing lookups - access through public evaluator API
     var prng = std.Random.DefaultPrng.init(123);
     var rng = prng.random();
-    
+
     // Warm up by evaluating some random hands
     for (0..1024) |_| {
         const hand = evaluator.generateRandomHand(&rng);
@@ -87,7 +87,7 @@ fn runSingleBenchmark(iterations: u32, test_hands: []const u64) f64 {
     for (0..iterations) |_| {
         // Create batch from consecutive hands
         const batch = createBatch(test_hands, hand_idx);
-        
+
         const results = evaluator.evaluateBatch4(batch);
         for (0..BATCH_SIZE) |j| {
             checksum +%= results[j];
@@ -125,14 +125,14 @@ fn benchmarkDummyEvaluator(iterations: u32, test_hands: []const u64) f64 {
 fn benchmarkSingleHand(test_hands: []const u64, count: u32) f64 {
     var checksum: u64 = 0;
     const start = std.time.nanoTimestamp();
-    
+
     for (0..count) |i| {
         checksum +%= evaluator.evaluateHand(test_hands[i % test_hands.len]);
     }
-    
+
     const end = std.time.nanoTimestamp();
     std.mem.doNotOptimizeAway(checksum);
-    
+
     const total_ns = @as(f64, @floatFromInt(end - start));
     return total_ns / @as(f64, @floatFromInt(count));
 }
@@ -145,7 +145,7 @@ pub fn runBenchmark(options: BenchmarkOptions, allocator: std.mem.Allocator) !Be
     const num_test_hands = 1_600_000; // Large pool for cache effects
     const test_hands = try allocator.alloc(u64, num_test_hands);
     defer allocator.free(test_hands);
-    
+
     for (test_hands) |*hand| {
         hand.* = evaluator.generateRandomHand(&rng);
     }
@@ -221,7 +221,7 @@ pub fn validateCorrectness(test_hands: []const u64) !bool {
     var i: usize = 0;
     while (i + BATCH_SIZE <= validation_hands) {
         const batch = createBatch(test_hands, i);
-        
+
         const fast_results = evaluator.evaluateBatch4(batch);
 
         for (0..BATCH_SIZE) |j| {
@@ -237,12 +237,12 @@ pub fn validateCorrectness(test_hands: []const u64) !bool {
     }
 
     const accuracy = @as(f64, @floatFromInt(matches)) / @as(f64, @floatFromInt(total));
-    
+
     // Require 100% accuracy
     if (accuracy < 1.0) {
         return error.AccuracyTooLow;
     }
-    
+
     return true;
 }
 
@@ -277,7 +277,7 @@ pub fn testEvaluator() !void {
 pub fn testSingleHand(hand: u64) struct { slow: u16, fast: u16, match: bool } {
     const slow_result = evaluator.slow.evaluateHand(hand);
     const fast_result = evaluator.evaluateHand(hand);
-    
+
     return .{
         .slow = slow_result,
         .fast = fast_result,

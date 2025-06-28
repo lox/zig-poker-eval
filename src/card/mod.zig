@@ -115,7 +115,7 @@ pub fn parseCards(card_string: []const u8, allocator: std.mem.Allocator) ![]Hand
 
     for (0..card_count) |i| {
         const start = i * 2;
-        cards[i] = try parseCard(card_string[start..start + 2]);
+        cards[i] = try parseCard(card_string[start .. start + 2]);
     }
 
     return cards;
@@ -171,7 +171,7 @@ pub fn makeHandFromHoleAndBoard(hole: [2]Hand, board: []const Hand) Hand {
     return hand;
 }
 
-/// Create hand from hole cards (as single Hand) and board cards 
+/// Create hand from hole cards (as single Hand) and board cards
 pub fn fromHoleAndBoard(hole: [2]Hand, board: []const Hand) Hand {
     return makeHandFromHoleAndBoard(hole, board);
 }
@@ -268,7 +268,7 @@ pub const Card = struct {
     pub fn getRank(self: Card) u8 {
         // Find which bit is set and convert back to poker rank (2-14)
         const card_bits = self.bits;
-        
+
         // Check each suit
         for (0..4) |suit| {
             const suit_mask = getSuitMask(card_bits, @enumFromInt(suit));
@@ -286,7 +286,7 @@ pub const Card = struct {
 
     pub fn getSuit(self: Card) u2 {
         const card_bits = self.bits;
-        
+
         // Check each suit to find which one has a card
         for (0..4) |suit| {
             const suit_mask = getSuitMask(card_bits, @enumFromInt(suit));
@@ -320,11 +320,8 @@ pub fn mustParseHoleCards(comptime card_string: []const u8) Hand {
     return cards[0] | cards[1];
 }
 
-/// Evaluate a hand using the fast evaluator
-pub fn evaluate(hand: Hand) u16 {
-    const evaluator = @import("../evaluator/mod.zig");
-    return evaluator.evaluateHand(hand);
-}
+// NOTE: Hand evaluation should be done via the evaluator or poker modules
+// to avoid circular dependencies. The card module is the base layer.
 
 /// Convert a single-card Hand to a Card (for backward compatibility)
 pub fn handToCard(hand: Hand) Card {
@@ -337,11 +334,11 @@ const testing = std.testing;
 test "card creation and format" {
     // Test basic card creation
     const ace_spades = makeCard(3, 12); // suit=3 (spades), rank=12 (ace)
-    const two_clubs = makeCard(0, 0);   // suit=0 (clubs), rank=0 (two)
-    
+    const two_clubs = makeCard(0, 0); // suit=0 (clubs), rank=0 (two)
+
     // Ace of spades should be bit 51 (39 + 12)
     try testing.expect(ace_spades == (@as(u64, 1) << 51));
-    
+
     // Two of clubs should be bit 0
     try testing.expect(two_clubs == (@as(u64, 1) << 0));
 }
@@ -349,7 +346,7 @@ test "card creation and format" {
 test "card creation with enums" {
     const ace_spades = makeCardFromEnums(.spades, .ace);
     const two_clubs = makeCardFromEnums(.clubs, .two);
-    
+
     try testing.expect(ace_spades == (@as(u64, 1) << 51));
     try testing.expect(two_clubs == (@as(u64, 1) << 0));
 }
@@ -357,7 +354,7 @@ test "card creation with enums" {
 test "poker module compatibility" {
     // Test old Card API for backward compatibility
     const ace_spades = Card.init(14, 1); // rank=14 (ace), suit=1 (spades)
-    
+
     try testing.expect(ace_spades.getRank() == 14);
     try testing.expect(ace_spades.getSuit() == 1);
 }
@@ -366,7 +363,7 @@ test "hand operations" {
     const ace_spades = makeCardFromEnums(.spades, .ace);
     const king_spades = makeCardFromEnums(.spades, .king);
     const hand = ace_spades | king_spades;
-    
+
     try testing.expect(hasCard(hand, .spades, .ace));
     try testing.expect(hasCard(hand, .spades, .king));
     try testing.expect(!hasCard(hand, .hearts, .ace));
@@ -376,7 +373,7 @@ test "hand operations" {
 test "card parsing" {
     const ace_spades = try parseCard("As");
     const two_clubs = try parseCard("2c");
-    
+
     try testing.expect(ace_spades == makeCardFromEnums(.spades, .ace));
     try testing.expect(two_clubs == makeCardFromEnums(.clubs, .two));
 }

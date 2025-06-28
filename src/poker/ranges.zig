@@ -1,5 +1,5 @@
 const std = @import("std");
-const card = @import("../card/mod.zig");
+const card = @import("card");
 const poker = @import("poker.zig");
 const notation_parser = @import("notation.zig");
 const simulation = @import("simulation.zig");
@@ -156,9 +156,9 @@ fn parseHandNotation(notation: []const u8) ![2]card.Hand {
     if (notation.len == 2) {
         if (rank1 == rank2) {
             // Pocket pair (e.g., "AA", "KK")
-            return [2]card.Hand{ 
+            return [2]card.Hand{
                 card.makeCard(0, rank1 - 2), // Convert poker rank to card rank
-                card.makeCard(1, rank2 - 2) 
+                card.makeCard(1, rank2 - 2),
             };
         } else {
             // Unpaired hand without modifier - this is ambiguous, so we need to handle it at range level
@@ -170,14 +170,8 @@ fn parseHandNotation(notation: []const u8) ![2]card.Hand {
         if (rank1 == rank2) return error.CannotBeSuited;
 
         switch (modifier) {
-            's' => return [2]card.Hand{ 
-                card.makeCard(0, rank1 - 2), 
-                card.makeCard(0, rank2 - 2) 
-            }, // Same suit
-            'o' => return [2]card.Hand{ 
-                card.makeCard(0, rank1 - 2), 
-                card.makeCard(1, rank2 - 2) 
-            }, // Different suits
+            's' => return [2]card.Hand{ card.makeCard(0, rank1 - 2), card.makeCard(0, rank2 - 2) }, // Same suit
+            'o' => return [2]card.Hand{ card.makeCard(0, rank1 - 2), card.makeCard(1, rank2 - 2) }, // Different suits
             else => return error.InvalidModifier,
         }
     }
@@ -396,9 +390,9 @@ test "range basic operations" {
     var range = Range.init(allocator);
     defer range.deinit();
 
-    const hand = [2]card.Hand{ 
+    const hand = [2]card.Hand{
         card.makeCard(0, 12), // Ace of clubs
-        card.makeCard(1, 12)  // Ace of diamonds
+        card.makeCard(1, 12), // Ace of diamonds
     };
     try range.addHand(hand, 1.0);
 
@@ -407,9 +401,9 @@ test "range basic operations" {
 }
 
 test "hand key conversion" {
-    const hand1 = [2]card.Hand{ 
+    const hand1 = [2]card.Hand{
         card.makeCard(2, 12), // Ace of hearts
-        card.makeCard(3, 12)  // Ace of spades
+        card.makeCard(3, 12), // Ace of spades
     };
 
     const hand_key = HandKey.init(hand1);
@@ -434,7 +428,7 @@ test "range notation parsing" {
     // Test suited hands
     const aks = try parseHandNotation("AKs");
     try std.testing.expect((aks[0] & aks[1]) == 0); // Different ranks
-    
+
     // Test offsuit hands
     const ako = try parseHandNotation("AKo");
     try std.testing.expect((ako[0] & ako[1]) == 0); // Different ranks

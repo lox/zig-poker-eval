@@ -56,7 +56,7 @@ pub fn hashKey(key: u32, magic_constant: u64) HashResult {
 pub fn buildChd(allocator: std.mem.Allocator, patterns: []const Pattern, num_buckets: u32, table_size: u32) !CHDResult {
     var g_array = try allocator.alloc(u8, num_buckets);
     var value_table = try allocator.alloc(u16, table_size);
-    
+
     // Try different seeds until one works
     for (0..10) |attempt| {
         const magic_constant = DEFAULT_MAGIC_CONSTANT +% (attempt * 0x123456789abcdef);
@@ -84,7 +84,7 @@ pub fn buildChd(allocator: std.mem.Allocator, patterns: []const Pattern, num_buc
         var occupied = try allocator.alloc(bool, table_size);
         defer allocator.free(occupied);
         @memset(occupied, false);
-        
+
         var success = true;
 
         // Process buckets in order of decreasing size

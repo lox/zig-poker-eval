@@ -1,9 +1,9 @@
 const std = @import("std");
-const card = @import("../card/mod.zig");
+const card = @import("card");
 const poker = @import("poker.zig");
 const simulation = @import("simulation.zig");
 const ranges = @import("ranges.zig");
-const evaluator = @import("../evaluator/mod.zig");
+const evaluator = @import("evaluator");
 
 pub const EquityResult = struct {
     wins: u32,

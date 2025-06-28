@@ -171,7 +171,7 @@ pub fn evaluateHand(hand: Hand) HandRank {
         // Find the quad rank and best kicker
         var quad_rank: u8 = 0;
         var kicker_rank: u8 = 0;
-        
+
         for (rank_counts, 0..) |count, rank| {
             if (count == 4) {
                 quad_rank = @intCast(rank);
@@ -179,7 +179,7 @@ pub fn evaluateHand(hand: Hand) HandRank {
                 kicker_rank = @intCast(rank);
             }
         }
-        
+
         // Higher quad rank = better hand = lower rank number
         // Aces quad = rank 10, 2s quad = rank ~165
         return 10 + @as(HandRank, (12 - quad_rank)) * 12 + @as(HandRank, (12 - kicker_rank));
@@ -189,7 +189,7 @@ pub fn evaluateHand(hand: Hand) HandRank {
     if (trips > 0 and pairs > 0) {
         var trip_rank: u8 = 0;
         var pair_rank: u8 = 0;
-        
+
         for (rank_counts, 0..) |count, rank| {
             if (count == 3) {
                 trip_rank = @intCast(rank);
@@ -197,7 +197,7 @@ pub fn evaluateHand(hand: Hand) HandRank {
                 pair_rank = @intCast(rank);
             }
         }
-        
+
         // Higher trip rank = better hand = lower rank number
         return 166 + @as(HandRank, (12 - trip_rank)) * 12 + @as(HandRank, (12 - pair_rank));
     }
@@ -236,7 +236,7 @@ pub fn evaluateHand(hand: Hand) HandRank {
     if (pairs >= 2) {
         var high_pair: u8 = 0;
         var low_pair: u8 = 0;
-        
+
         for (rank_counts, 0..) |count, rank| {
             if (count == 2) {
                 if (rank > high_pair) {
@@ -247,7 +247,7 @@ pub fn evaluateHand(hand: Hand) HandRank {
                 }
             }
         }
-        
+
         return 2467 + @as(HandRank, (12 - high_pair)) * 65 + @as(HandRank, (12 - low_pair));
     }
 
@@ -278,7 +278,7 @@ pub fn getHandCategory(hand: Hand) u16 {
 test "royal flush" {
     const royal_flush = makeCard(3, 12) | makeCard(3, 11) | makeCard(3, 10) | makeCard(3, 9) | makeCard(3, 8) |
         makeCard(0, 0) | makeCard(1, 1); // Add two random cards
-    
+
     const rank = evaluateHand(royal_flush);
     try std.testing.expect(rank == 0); // Royal flush = rank 0 (best possible)
 }
@@ -292,7 +292,7 @@ test "royal flush clubs 0x1F00" {
 test "straight flush" {
     const straight_flush = makeCard(2, 8) | makeCard(2, 7) | makeCard(2, 6) | makeCard(2, 5) | makeCard(2, 4) |
         makeCard(0, 0) | makeCard(1, 1); // Add two random cards (9-high straight flush)
-    
+
     const rank = evaluateHand(straight_flush);
     try std.testing.expect(rank >= 1 and rank <= 9); // Straight flush range 1-9
 }
@@ -300,7 +300,7 @@ test "straight flush" {
 test "four of a kind" {
     const four_aces = makeCard(0, 12) | makeCard(1, 12) | makeCard(2, 12) | makeCard(3, 12) |
         makeCard(0, 11) | makeCard(1, 10) | makeCard(2, 9);
-    
+
     const rank = evaluateHand(four_aces);
     try std.testing.expect(rank >= 10 and rank <= 165); // Four of a kind range
 }
@@ -308,7 +308,7 @@ test "four of a kind" {
 test "full house" {
     const full_house = makeCard(0, 10) | makeCard(1, 10) | makeCard(2, 10) |
         makeCard(0, 9) | makeCard(1, 9) | makeCard(2, 8) | makeCard(3, 7);
-    
+
     const rank = evaluateHand(full_house);
     try std.testing.expect(rank >= 166 and rank <= 321); // Full house range
 }
@@ -316,7 +316,7 @@ test "full house" {
 test "flush" {
     const flush = makeCard(2, 12) | makeCard(2, 10) | makeCard(2, 8) | makeCard(2, 6) | makeCard(2, 4) |
         makeCard(0, 11) | makeCard(1, 9); // Add two random cards
-    
+
     const rank = evaluateHand(flush);
     try std.testing.expect(rank >= 322 and rank <= 1598); // Flush range
 }
@@ -324,7 +324,7 @@ test "flush" {
 test "straight" {
     const straight = makeCard(0, 8) | makeCard(1, 7) | makeCard(2, 6) | makeCard(3, 5) | makeCard(0, 4) |
         makeCard(1, 2) | makeCard(2, 0); // Add two random cards (9-high straight)
-    
+
     const rank = evaluateHand(straight);
     try std.testing.expect(rank >= 1599 and rank <= 1608); // Straight range
 }
@@ -332,7 +332,7 @@ test "straight" {
 test "wheel straight (A-2-3-4-5)" {
     const wheel = makeCard(0, 12) | makeCard(1, 3) | makeCard(2, 2) | makeCard(3, 1) | makeCard(0, 0) |
         makeCard(1, 11) | makeCard(2, 10); // Add two random cards
-    
+
     const rank = evaluateHand(wheel);
     try std.testing.expect(rank == 1608); // Wheel is worst straight
 }
@@ -340,7 +340,7 @@ test "wheel straight (A-2-3-4-5)" {
 test "three of a kind" {
     const three_kings = makeCard(0, 11) | makeCard(1, 11) | makeCard(2, 11) |
         makeCard(0, 9) | makeCard(1, 7) | makeCard(2, 5) | makeCard(3, 2);
-    
+
     const rank = evaluateHand(three_kings);
     try std.testing.expect(rank >= 1609 and rank <= 2466); // Three of a kind range
 }
@@ -348,7 +348,7 @@ test "three of a kind" {
 test "two pair" {
     const two_pair = makeCard(0, 10) | makeCard(1, 10) | makeCard(2, 8) | makeCard(3, 8) |
         makeCard(0, 6) | makeCard(1, 4) | makeCard(2, 2);
-    
+
     const rank = evaluateHand(two_pair);
     try std.testing.expect(rank >= 2467 and rank <= 3324); // Two pair range
 }
@@ -356,7 +356,7 @@ test "two pair" {
 test "one pair" {
     const one_pair = makeCard(0, 10) | makeCard(1, 10) | makeCard(2, 8) | makeCard(3, 6) |
         makeCard(0, 4) | makeCard(1, 2) | makeCard(2, 0);
-    
+
     const rank = evaluateHand(one_pair);
     try std.testing.expect(rank >= 3325 and rank <= 6184); // One pair range
 }
@@ -364,7 +364,7 @@ test "one pair" {
 test "high card" {
     const high_card = makeCard(0, 12) | makeCard(1, 10) | makeCard(2, 8) | makeCard(3, 6) |
         makeCard(0, 4) | makeCard(1, 2) | makeCard(2, 0);
-    
+
     const rank = evaluateHand(high_card);
     try std.testing.expect(rank >= 6185 and rank <= 7461); // High card range (worst hands)
 }
@@ -372,30 +372,30 @@ test "high card" {
 test "card utilities" {
     const ace_spades = makeCard(3, 12);
     try std.testing.expect(ace_spades == (@as(Hand, 1) << (39 + 12)));
-    
+
     const hand = makeCard(0, 12) | makeCard(1, 10) | makeCard(2, 8);
     const rank_mask = getRankMask(hand);
     try std.testing.expect((rank_mask & (1 << 12)) != 0); // Has ace
     try std.testing.expect((rank_mask & (1 << 10)) != 0); // Has jack
-    try std.testing.expect((rank_mask & (1 << 8)) != 0);  // Has 9
+    try std.testing.expect((rank_mask & (1 << 8)) != 0); // Has 9
 }
 
 test "flush detection" {
     const flush_hand = makeCard(2, 12) | makeCard(2, 10) | makeCard(2, 8) | makeCard(2, 6) | makeCard(2, 4);
     try std.testing.expect(hasFlush(flush_hand));
-    
+
     const no_flush = makeCard(0, 12) | makeCard(1, 10) | makeCard(2, 8) | makeCard(3, 6);
     try std.testing.expect(!hasFlush(no_flush));
 }
 
 test "wheel straight flush (A-5-4-3-2)" {
-    // Wheel straight flush: A,2,3,4,5 all clubs + 2 off-suit cards  
+    // Wheel straight flush: A,2,3,4,5 all clubs + 2 off-suit cards
     // Ranks: A=12, 2=0, 3=1, 4=2, 5=3 → pattern 0x100F
     const wheel_sf = makeCard(0, 12) | makeCard(0, 0) | makeCard(0, 1) | makeCard(0, 2) | makeCard(0, 3) |
         makeCard(1, 10) | makeCard(2, 8); // Add two off-suit cards
-    
+
     const rank = evaluateHand(wheel_sf);
-    
+
     // Should be rank 9 (worst straight flush) - fixed!
     try std.testing.expect(rank == 9); // Wheel straight flush
 }
@@ -406,16 +406,15 @@ test "overlapping straights edge case - hand 1" {
     // Should return the HIGHER straight: 7-6-5-4-3
     const hand1: Hand = 0x1F8000000008;
     _ = evaluateHand(hand1);
-    
-    
+
     // Verify it's a flush
     try std.testing.expect(hasFlush(hand1));
-    
+
     // Check what suit has the flush
     const suits = getSuitMasks(hand1);
     for (suits) |suit| {
         if (@popCount(suit) >= 5) {
-            
+
             // Check which straights are present
             _ = getStraightMask(suit);
         }
@@ -427,16 +426,15 @@ test "overlapping straights edge case - hand 2" {
     // This is a K-high straight flush
     const hand2: Hand = 0x3F00001000;
     _ = evaluateHand(hand2);
-    
-    
+
     // Verify it's a flush
     try std.testing.expect(hasFlush(hand2));
-    
+
     // Check what suit has the flush
     const suits = getSuitMasks(hand2);
     for (suits) |suit| {
         if (@popCount(suit) >= 5) {
-            
+
             // Check which straights are present
             _ = getStraightMask(suit);
         }

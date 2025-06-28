@@ -52,7 +52,7 @@ pub fn main() !void {
     const total_end = std.time.nanoTimestamp();
     const total_time = total_end - total_start;
 
-    // Print table header  
+    // Print table header
     std.debug.print("\n{s:<50} {s:<8} {s:>10}\n", .{ "Test", "Status", "Time (ms)" });
     std.debug.print("{s}\n", .{"----------------------------------------------------------------------"});
     for (results.items) |res| {

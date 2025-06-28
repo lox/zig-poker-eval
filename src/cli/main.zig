@@ -154,14 +154,14 @@ fn handleEval(config: Config, allocator: std.mem.Allocator) !void {
     ansi.printBold("🃏 Hand Evaluation (Demo)\n", .{});
     print("Cards: {s}\n", .{config.args[0]});
     print("\nFull hand evaluation coming soon with poker module integration!\n", .{});
-    
+
     // Show basic evaluator functionality
     print("\nMeanwhile, here's our high-performance evaluator in action:\n", .{});
     var prng = std.Random.DefaultPrng.init(42);
     var rng = prng.random();
     const test_hand = evaluator.generateRandomHand(&rng);
     const result = evaluator.evaluateHand(test_hand);
-    print("Random hand: 0x{X} -> Rank: {}\n", .{test_hand, result});
+    print("Random hand: 0x{X} -> Rank: {}\n", .{ test_hand, result });
 }
 
 fn handleRange(config: Config, allocator: std.mem.Allocator) !void {
@@ -172,10 +172,10 @@ fn handleRange(config: Config, allocator: std.mem.Allocator) !void {
     }
 
     const range_str = config.args[0];
-    
+
     // Try to parse with our poker module
     var range = poker.parseRange(range_str, allocator) catch |err| {
-        print("Error parsing range '{s}': {}\n", .{range_str, err});
+        print("Error parsing range '{s}': {}\n", .{ range_str, err });
         return;
     };
     defer range.deinit();
@@ -196,13 +196,13 @@ fn handleRange(config: Config, allocator: std.mem.Allocator) !void {
 fn handleBench(config: Config, allocator: std.mem.Allocator) !void {
     ansi.printBold("🚀 Performance Benchmark\n", .{});
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
-    
+
     // Parse bench-specific arguments
     var bench_options = benchmark.BenchmarkOptions{};
     var run_validation = false;
     var run_test = false;
     var test_hand: ?u64 = null;
-    
+
     // Parse additional arguments
     var i: usize = 0;
     while (i < config.args.len) {
@@ -272,9 +272,9 @@ fn handleBench(config: Config, allocator: std.mem.Allocator) !void {
     if (bench_options.warmup) print("  • Cache warmup enabled\n", .{});
     if (bench_options.measure_overhead) print("  • Overhead measurement enabled\n", .{});
     if (bench_options.multiple_runs) print("  • Multiple runs for statistical analysis\n", .{});
-    
+
     const result = try benchmark.runBenchmark(bench_options, allocator);
-    
+
     // Display results
     print("\n", .{});
     ansi.printBold("📊 Benchmark Results\n", .{});
@@ -284,7 +284,7 @@ fn handleBench(config: Config, allocator: std.mem.Allocator) !void {
     }
     ansi.printGreen("  Batch performance:   {d:.2} ns/hand\n", .{result.batch_ns_per_hand});
     ansi.printGreen("  Hands per second:    {}\n", .{result.hands_per_second});
-    
+
     if (bench_options.multiple_runs) {
         if (result.coefficient_variation > 0.05) {
             ansi.printYellow("  Variation:           {d:.2}% (high - consider stable environment)\n", .{result.coefficient_variation * 100});
@@ -292,12 +292,12 @@ fn handleBench(config: Config, allocator: std.mem.Allocator) !void {
             ansi.printGreen("  Variation:           {d:.2}% (low - reliable measurement)\n", .{result.coefficient_variation * 100});
         }
     }
-    
+
     if (bench_options.show_comparison) {
         print("\n", .{});
         ansi.printBold("🔄 Performance Comparison\n", .{});
-        ansi.printCyan("  Batch (4x SIMD):     {d:.2} ns/hand ({} hands/sec)\n", .{result.batch_ns_per_hand, result.hands_per_second});
-        ansi.printYellow("  Single hand:         {d:.2} ns/hand ({d:.0} hands/sec)\n", .{result.single_ns_per_hand, 1e9 / result.single_ns_per_hand});
+        ansi.printCyan("  Batch (4x SIMD):     {d:.2} ns/hand ({} hands/sec)\n", .{ result.batch_ns_per_hand, result.hands_per_second });
+        ansi.printYellow("  Single hand:         {d:.2} ns/hand ({d:.0} hands/sec)\n", .{ result.single_ns_per_hand, 1e9 / result.single_ns_per_hand });
         ansi.printGreen("  SIMD Speedup:        {d:.2}x\n", .{result.simd_speedup});
     }
 
@@ -305,17 +305,17 @@ fn handleBench(config: Config, allocator: std.mem.Allocator) !void {
     if (run_validation) {
         print("\n", .{});
         ansi.printBold("✅ Correctness Validation\n", .{});
-        
+
         // Generate validation hands
         var prng = std.Random.DefaultPrng.init(123); // Different seed
         var rng = prng.random();
         const validation_hands = try allocator.alloc(u64, 16000);
         defer allocator.free(validation_hands);
-        
+
         for (validation_hands) |*hand| {
             hand.* = evaluator.generateRandomHand(&rng);
         }
-        
+
         _ = benchmark.validateCorrectness(validation_hands) catch |err| {
             ansi.printRed("❌ Validation failed: {}\n", .{err});
             return;
@@ -326,33 +326,33 @@ fn handleBench(config: Config, allocator: std.mem.Allocator) !void {
 
 fn handleDemo(allocator: std.mem.Allocator) !void {
     _ = allocator;
-    
+
     ansi.printBold("🎮 Zig Poker Evaluator Demo\n", .{});
     print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
 
     ansi.printBold("\n🃏 High-Performance Hand Evaluation\n", .{});
-    
+
     // Show evaluator performance
     var prng = std.Random.DefaultPrng.init(42);
     var rng = prng.random();
-    
+
     const test_hands = [_]u64{
         0x1F00000000000, // Royal flush pattern
         evaluator.generateRandomHand(&rng),
         evaluator.generateRandomHand(&rng),
     };
-    
+
     for (test_hands, 0..) |hand, i| {
         const result = evaluator.evaluateHand(hand);
-        ansi.printGreen("Hand {}: 0x{X} -> Rank: {}\n", .{i + 1, hand, result});
+        ansi.printGreen("Hand {}: 0x{X} -> Rank: {}\n", .{ i + 1, hand, result });
     }
-    
+
     ansi.printBold("\n🚀 Batch Processing\n", .{});
     const batch = evaluator.generateRandomHandBatch(&rng);
     const batch_results = evaluator.evaluateBatch4(batch);
-    
+
     for (0..4) |i| {
-        ansi.printCyan("Batch[{}]: 0x{X} -> Rank: {}\n", .{i, batch[i], batch_results[i]});
+        ansi.printCyan("Batch[{}]: 0x{X} -> Rank: {}\n", .{ i, batch[i], batch_results[i] });
     }
 
     ansi.printYellow("\nTry: poker-eval --help for more options\n", .{});

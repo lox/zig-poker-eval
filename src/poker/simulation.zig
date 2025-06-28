@@ -1,7 +1,7 @@
 const std = @import("std");
-const card = @import("../card/mod.zig");
+const card = @import("card");
 const poker = @import("poker.zig");
-const evaluator = @import("../evaluator/mod.zig");
+const evaluator = @import("evaluator");
 
 pub const MultiplayerShowdownResult = struct {
     winners: []u8,
@@ -190,21 +190,20 @@ test "showdown evaluation" {
     const jack_hearts = card.makeCard(2, 9); // Jh
     const two_spades = card.makeCard(3, 0); // 2s
     const three_diamonds = card.makeCard(1, 1); // 3d
-    
+
     // Create the 7-card hand: Ah As Kd Qc Jh 2s 3d
     const hand_with_pair = ace_hearts | ace_spades | king_diamonds | queen_clubs | jack_hearts | two_spades | three_diamonds;
-    
-    // Test with the evaluator 
+
+    // Test with the evaluator
     const raw_rank = evaluator.evaluateHand(hand_with_pair);
     const converted_rank = poker.convertEvaluatorRank(raw_rank);
-    
+
     // This should be ONE PAIR, not two pair - should pass now with corrected boundaries
     try testing.expect(converted_rank == .pair);
-    
+
     const hand1 = hand_with_pair;
     const hand2 = king_diamonds | queen_clubs | jack_hearts | two_spades | three_diamonds | card.makeCard(0, 6) | card.makeCard(3, 5); // High card hand
-    
-    
+
     const hands = [_]card.Hand{ hand1, hand2 };
     const result = try evaluateShowdown(hands[0..], allocator);
     defer result.deinit(allocator);
@@ -249,7 +248,7 @@ test "card combination" {
 
     const combined = combineCards(hole_cards, &board_cards);
     // Test that we can evaluate the combined hand
-    const result = card.evaluate(combined);
+    const result = evaluator.evaluateHand(combined);
     try testing.expect(result >= 1 and result <= 7462); // Hand rank values
 }
 

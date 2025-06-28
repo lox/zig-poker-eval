@@ -69,7 +69,6 @@ pub fn build(b: *std.Build) void {
     }
     const bench_step = b.step("bench", "Run performance benchmark via CLI");
     bench_step.dependOn(&run_bench_cmd.step);
-    
 
     // Run main executable
     const run_cmd = b.addRunArtifact(exe);
@@ -83,16 +82,17 @@ pub fn build(b: *std.Build) void {
 
     // Test step - run tests from all modules together
     const test_step = b.step("test", "Run all unit tests");
-    
-    // All tests in one runner - without module imports to avoid conflicts
+
+    // All tests in one runner - with module imports
     const all_tests = b.addTest(.{
         .root_source_file = b.path("src/test.zig"),
         .target = target,
         .optimize = optimize,
     });
-    // Removed module imports to allow direct file imports in test.zig
-    // Removed custom test runner to use default Zig test discovery
-    
+    all_tests.root_module.addImport("card", card_mod);
+    all_tests.root_module.addImport("evaluator", evaluator_mod);
+    all_tests.root_module.addImport("poker", poker_mod);
+
     const run_all_tests = b.addRunArtifact(all_tests);
     test_step.dependOn(&run_all_tests.step);
 }

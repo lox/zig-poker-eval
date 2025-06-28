@@ -25,7 +25,7 @@ echo ""
 
 # Build benchmark with debug symbols
 echo "Building benchmark..."
-zig build bench -Doptimize=ReleaseFast -Dcpu=native 
+zig build bench -Doptimize=ReleaseFast -Dcpu=native
 
 # Find the executable
 BENCH_EXE=$(find .zig-cache -name "bench" -type f | head -1)

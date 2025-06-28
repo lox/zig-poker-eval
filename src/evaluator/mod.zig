@@ -1,5 +1,5 @@
 const std = @import("std");
-const card = @import("../card/mod.zig");
+const card = @import("card");
 
 // Import internal modules
 const evaluator_impl = @import("evaluator.zig");
@@ -32,15 +32,15 @@ pub const HandCategory = enum(u4) {
 pub fn getHandCategory(rank: HandRank) HandCategory {
     // Evaluator uses lower numbers for better hands
     // These ranges are based on the actual slow evaluator implementation
-    if (rank <= 10) return .straight_flush;  // Royal flush + straight flushes (0-10)
+    if (rank <= 10) return .straight_flush; // Royal flush + straight flushes (0-10)
     if (rank <= 165) return .four_of_a_kind; // Four of a kind (10-165)
-    if (rank <= 321) return .full_house;     // Full house (166-321)
-    if (rank <= 1598) return .flush;         // Flush (322-1598)
-    if (rank <= 1608) return .straight;      // Straight (1599-1608)
+    if (rank <= 321) return .full_house; // Full house (166-321)
+    if (rank <= 1598) return .flush; // Flush (322-1598)
+    if (rank <= 1608) return .straight; // Straight (1599-1608)
     if (rank <= 2466) return .three_of_a_kind; // Three of a kind (1609-2466)
-    if (rank <= 3324) return .two_pair;      // Two pair (2467-3324)
-    if (rank <= 6184) return .pair;          // One pair (3325-6184)
-    return .high_card;  // High card (6185-7461)
+    if (rank <= 3324) return .two_pair; // Two pair (2467-3324)
+    if (rank <= 6184) return .pair; // One pair (3325-6184)
+    return .high_card; // High card (6185-7461)
 }
 
 // Utility functions for testing/debugging

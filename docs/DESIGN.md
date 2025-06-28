@@ -31,7 +31,7 @@ Split that into a 13-bit rank mask and four 13-bit suit masks on the fly with tw
 
 **Architecture-specific batch sizes:**
 - **x86-64 AVX-512**: 16 hands per batch (16×64-bit lanes)
-- **x86-64 AVX2**: 8 hands per batch (8×64-bit lanes)  
+- **x86-64 AVX2**: 8 hands per batch (8×64-bit lanes)
 - **ARM64 NEON**: 4 hands per batch (2×128-bit pipes, optimal for M1)
 
 This turns "cycles per hand" into "cycles per batch / N". Target: ~120 cycles per batch ⇒ 2.0-2.3 ns per hand.
@@ -65,7 +65,7 @@ Because flushes appear in <0.4% of random deals this mask is almost always zero;
    adr x_tmp, table_base
    ldrh w0, [x_tmp, x_idx0, lsl #1]  // Load displacement
    ldrh w1, [x_tmp, x_idx1, lsl #1]
-   ldrh w2, [x_tmp, x_idx2, lsl #1] 
+   ldrh w2, [x_tmp, x_idx2, lsl #1]
    ldrh w3, [x_tmp, x_idx3, lsl #1]
    // Pack results with zip1/zip2 instructions
    ```
@@ -229,13 +229,13 @@ const arch_config = comptime switch (@import("builtin").target.cpu.arch) {
 const Tables = struct {
     // CHD displacement array (same for all architectures)
     chd_g: [8192]u8,
-    
+
     // Architecture-adaptive value table
     chd_values: switch (arch_config.table_packing) {
         .none => [131072]u16,      // x86-64: direct 16-bit ranks
         .rank_pairs => [65536]u32, // ARM64: 2×13-bit ranks per u32
     },
-    
+
     // BBHash flush table (same for all architectures)
     flush_data: FlushTables,
 };
@@ -255,14 +255,14 @@ fn lookupWithGather(hands: []const u64, results: []u16) void {
     const batch_vec = @Vector(arch_config.batch_size, u64){ /* load hands */ };
     const rpc_vec = computeRPC(batch_vec);
     const hash_vec = computeHash(rpc_vec);
-    
+
     // Use SIMD gather for both displacement and final lookup
     const displ_indices = extractBuckets(hash_vec);
     const displacements = @gather(arch_config.batch_size, u8, &tables.chd_g, displ_indices);
-    
+
     const final_indices = computeFinalIndices(hash_vec, displacements);
     const ranks = @gather(arch_config.batch_size, u16, &tables.chd_values, final_indices);
-    
+
     @memcpy(results, @as([]const u16, &ranks));
 }
 
@@ -273,19 +273,19 @@ fn lookupWithExplicitLoads(hands: []const u64, results: []u16) void {
         const hash = computeHashScalar(rpc);
         const bucket = extractBucket(hash);
         const displacement = tables.chd_g[bucket];
-        
+
         const final_idx = (hash + displacement) & 0x1FFFF;
-        
+
         // ARM64: Extract from packed u32 table
         const packed_entry = tables.chd_values[final_idx >> 1];
-        const rank = if (final_idx & 1 == 0) 
-            @truncate(u16, packed_entry & 0x1FFF) 
-        else 
+        const rank = if (final_idx & 1 == 0)
+            @truncate(u16, packed_entry & 0x1FFF)
+        else
             @truncate(u16, packed_entry >> 13);
-            
+
         results[i] = rank;
     }
-    
+
     // Optional: Prefetch next batch
     if (arch_config.prefetch_strategy == .explicit) {
         @prefetch(&hands[arch_config.batch_size], .read, 3, .data);
@@ -298,21 +298,21 @@ fn lookupWithExplicitLoads(hands: []const u64, results: []u16) void {
 // In build.zig
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
-    
+
     // Architecture-specific optimizations
     const optimize_flags = switch (target.getCpuArch()) {
         .x86_64 => &[_][]const u8{ "-mavx512f", "-mavx512bw" },
         .aarch64 => &[_][]const u8{ "-mcpu=apple-m1" }, // or -mcpu=native
         else => &[_][]const u8{},
     };
-    
+
     const exe = b.addExecutable(.{
         .name = "poker-eval",
         .root_source_file = .{ .path = "src/main.zig" },
         .target = target,
         .optimize = .ReleaseFast,
     });
-    
+
     for (optimize_flags) |flag| {
         exe.addCSourceFile(.{ .file = .{ .path = "dummy.c" }, .flags = &[_][]const u8{flag} });
     }
