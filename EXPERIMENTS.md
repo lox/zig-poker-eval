@@ -1,6 +1,7 @@
 # Performance Optimization Experiments
 
-**Baseline**: 11.95 ns/hand (83.7M hands/s) - Simple direct u16 table lookup
+**Baseline**: 11.95 ns/hand (83.7M hands/s) - Simple direct u16 table lookup  
+**Current**: 7.17 ns/hand (139M hands/s) - SIMD batching with flush fallback elimination
 
 ## Experiment 1: Packed ARM64 Tables
 **Performance Impact**: +5.9% slower (12.65→11.95 ns/hand)  
@@ -254,6 +255,15 @@ inline for (0..4) |i| {
 
 **Key insight**: Strategic fallback elimination can provide targeted improvements without adding architectural complexity. The SIMD pipeline investment is preserved even when some lanes require different processing paths.
 
+## Experiment 9: Measurement Methodology Discovery (Reverted)
+**Performance Impact**: Neutral - no real improvement, heavy measurement artifacts  
+**Complexity**: High  
+**Status**: ❌ Reverted - complexity without benefits  
+
+**Critical discovery**: Heavy timing instrumentation caused **~22 ns/hand measurement overhead** (3x actual performance), completely misleading optimization efforts. 
+
+**Key lesson**: Always measure production performance without debugging/profiling overhead. "Heisenberg's uncertainty principle" applies to performance measurement.
+
 ## Key Learnings
 
 1. **Memory optimizations fail**: Working set (267KB) is cache-resident, not memory-bound
@@ -262,6 +272,7 @@ inline for (0..4) |i| {
 4. **Measure everything**: "Obvious" optimizations frequently backfire
 5. **Profile-guided is better**: All experiments were theory-driven; real profiling might reveal different bottlenecks
 6. **Algorithmic parallelism wins**: True SIMD batching succeeds where single-hand optimizations fail
+7. **Measurement methodology is critical**: Heavy instrumentation can cause 3x overhead, completely misleading results
 
 ---
 
