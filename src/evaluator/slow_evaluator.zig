@@ -405,22 +405,19 @@ test "overlapping straights edge case - hand 1" {
     // This contains TWO straights: 7-6-5-4-3 AND 6-5-4-3-2
     // Should return the HIGHER straight: 7-6-5-4-3
     const hand1: Hand = 0x1F8000000008;
-    const rank = evaluateHand(hand1);
+    _ = evaluateHand(hand1);
     
-    std.debug.print("Hand 1 rank: {}\n", .{rank});
     
     // Verify it's a flush
     try std.testing.expect(hasFlush(hand1));
     
     // Check what suit has the flush
     const suits = getSuitMasks(hand1);
-    for (suits, 0..) |suit, i| {
+    for (suits) |suit| {
         if (@popCount(suit) >= 5) {
-            std.debug.print("Flush suit {}: 0x{X} (popcount: {})\n", .{i, suit, @popCount(suit)});
             
             // Check which straights are present
-            const straight_7_high = getStraightMask(suit);
-            std.debug.print("Straight in flush suit: 0x{X}\n", .{straight_7_high});
+            _ = getStraightMask(suit);
         }
     }
 }
@@ -429,22 +426,19 @@ test "overlapping straights edge case - hand 2" {
     // Hand 2: 0x3F00001000 = hearts 8,9,T,J,Q,K + clubs A
     // This is a K-high straight flush
     const hand2: Hand = 0x3F00001000;
-    const rank = evaluateHand(hand2);
+    _ = evaluateHand(hand2);
     
-    std.debug.print("Hand 2 rank: {}\n", .{rank});
     
     // Verify it's a flush
     try std.testing.expect(hasFlush(hand2));
     
     // Check what suit has the flush
     const suits = getSuitMasks(hand2);
-    for (suits, 0..) |suit, i| {
+    for (suits) |suit| {
         if (@popCount(suit) >= 5) {
-            std.debug.print("Flush suit {}: 0x{X} (popcount: {})\n", .{i, suit, @popCount(suit)});
             
             // Check which straights are present
-            const straight_mask = getStraightMask(suit);
-            std.debug.print("Straight in flush suit: 0x{X}\n", .{straight_mask});
+            _ = getStraightMask(suit);
         }
     }
 }
