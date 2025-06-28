@@ -1,7 +1,7 @@
 const std = @import("std");
-const card = @import("card");
+const card = @import("../card/mod.zig");
 const poker = @import("poker.zig");
-const evaluator = @import("evaluator");
+const evaluator = @import("../evaluator/mod.zig");
 
 pub const MultiplayerShowdownResult = struct {
     winners: []u8,

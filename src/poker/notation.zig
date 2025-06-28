@@ -1,5 +1,5 @@
 const std = @import("std");
-const card = @import("card");
+const card = @import("../card/mod.zig");
 const poker = @import("poker.zig");
 
 // ✅ IMPLEMENTED:

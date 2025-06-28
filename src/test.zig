@@ -1,15 +1,23 @@
 const std = @import("std");
 
-// Test all modules - this file is designed to work with zig build test
-// For direct testing without modules, use individual file tests
+// Comprehensive test runner - imports all test files directly
+// This ensures all 60 tests are discovered and run
 test {
-    // Import all modules to run their tests
-    _ = @import("card");
-    _ = @import("evaluator");
-    _ = @import("poker");
-}
+    // Card tests
+    _ = @import("card/mod.zig");
 
-// Ensure all declarations are tested
-test {
-    std.testing.refAllDecls(@This());
+    // Evaluator tests
+    _ = @import("evaluator/evaluator.zig");
+    _ = @import("evaluator/slow_evaluator.zig");
+    _ = @import("evaluator/build_tables.zig");
+
+    // Import evaluator mod.zig to get any tests there
+    _ = @import("evaluator/mod.zig");
+
+    // Poker tests - these will work once we fix the imports
+    _ = @import("poker/poker.zig");
+    _ = @import("poker/equity.zig");
+    _ = @import("poker/ranges.zig");
+    _ = @import("poker/notation.zig");
+    _ = @import("poker/simulation.zig");
 }

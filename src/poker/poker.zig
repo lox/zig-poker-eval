@@ -1,5 +1,5 @@
 const std = @import("std");
-const evaluator = @import("evaluator");
+const evaluator = @import("../evaluator/mod.zig");
 
 // Re-export evaluator types for poker domain
 pub const HandRank = evaluator.HandCategory;

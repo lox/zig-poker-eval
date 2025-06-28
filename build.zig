@@ -83,16 +83,13 @@ pub fn build(b: *std.Build) void {
     // Test step - run tests from all modules together
     const test_step = b.step("test", "Run all unit tests");
 
-    // All tests in one runner - with full module support
+    // All tests in one runner - using direct file imports for simplicity
     const all_tests = b.addTest(.{
         .root_source_file = b.path("src/test.zig"),
         .target = target,
         .optimize = optimize,
     });
-    // Add module dependencies to test runner
-    all_tests.root_module.addImport("card", card_mod);
-    all_tests.root_module.addImport("evaluator", evaluator_mod);
-    all_tests.root_module.addImport("poker", poker_mod);
+    // No module dependencies - tests use direct relative imports
 
     const run_all_tests = b.addRunArtifact(all_tests);
     test_step.dependOn(&run_all_tests.step);

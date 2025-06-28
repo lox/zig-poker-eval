@@ -1,5 +1,5 @@
 const std = @import("std");
-const card = @import("card");
+const card = @import("../card/mod.zig");
 
 // Import internal modules
 const evaluator_impl = @import("evaluator.zig");
@@ -85,6 +85,8 @@ pub const slow = struct {
 // Import tests (required for test discovery)
 test {
     _ = evaluator_impl;
+    _ = slow_evaluator;
+    _ = @import("build_tables.zig");
     _ = card;
 }
 
