@@ -9232,14 +9232,6 @@ const CHD_MAGIC_CONSTANT: u64 = 0x9E3779B97F4A7C15;
 const CHD_NUM_BUCKETS: u32 = 8192;
 const CHD_TABLE_SIZE: u32 = 131072;
 
-// Compile-time size validation
-comptime {
-    const std = @import("std");
-    std.debug.assert(@sizeOf(@TypeOf(chd_g_array)) == 8192);
-    std.debug.assert(@sizeOf(@TypeOf(chd_value_table)) == 131072 * @sizeOf(u16));
-    std.debug.assert(@sizeOf(@TypeOf(flush_lookup_table)) == 8192 * @sizeOf(u16));
-}
-
 // Public API - only expose the functions needed by evaluator
 pub inline fn lookup(rpc: u32) u16 {
     return mphf.lookup(rpc, CHD_MAGIC_CONSTANT, &chd_g_array, &chd_value_table, CHD_TABLE_SIZE);

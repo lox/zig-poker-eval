@@ -4,16 +4,12 @@ const evaluator = @import("slow_evaluator");
 const mphf = @import("mphf.zig");
 
 // Table generation constants
-const CHD_NUM_BUCKETS = 8192; // 2^13 buckets
-const CHD_TABLE_SIZE = 131072; // 2^17 slots
 const CHD_EXPECTED_PATTERNS = 49205; // Non-flush patterns
 const FLUSH_PATTERNS = 1287; // C(13,5)
 
 // Generated table data
-var chd_g_array: [CHD_NUM_BUCKETS]u8 = undefined;
-var chd_value_table: [CHD_TABLE_SIZE]u16 = undefined;
+var chd_result: mphf.CHDResult = undefined;
 var flush_lookup_table: [8192]u16 = undefined;
-var chd_magic_constant: u64 = 0x9e3779b97f4a7c15;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -28,6 +24,13 @@ pub fn main() !void {
     // Generate output file
     print("Writing src/tables.zig...\n", .{});
     try writeTablesFile();
+    
+    // Validate generated table sizes
+    print("Validating table sizes...\n", .{});
+    std.debug.assert(chd_result.g_array.len == mphf.DEFAULT_NUM_BUCKETS);
+    std.debug.assert(chd_result.value_table.len == mphf.DEFAULT_TABLE_SIZE);
+    std.debug.assert(flush_lookup_table.len == 8192);
+    print("✓ Table sizes validated\n", .{});
 
     print("Table generation complete!\n", .{});
 }
@@ -35,10 +38,10 @@ pub fn main() !void {
 // Unit tests
 test "CHD hash function" {
     const test_rpc: u32 = 0x12345;
-    const hash_result = chdHash(test_rpc);
+    const hash_result = mphf.hash_key(test_rpc, mphf.DEFAULT_MAGIC_CONSTANT);
     
-    try std.testing.expect(hash_result.bucket < CHD_NUM_BUCKETS);
-    try std.testing.expect(hash_result.base_index < CHD_TABLE_SIZE);
+    try std.testing.expect(hash_result.bucket < mphf.DEFAULT_NUM_BUCKETS);
+    try std.testing.expect(hash_result.base_index < mphf.DEFAULT_TABLE_SIZE);
 }
 
 test "RPC computation" {
@@ -123,7 +126,7 @@ test "slow evaluator vs table patterns" {
 
 fn buildTables(allocator: std.mem.Allocator) !void {
     // Enumerate all 7-card hands once
-    var non_flush_patterns = std.ArrayList(Pattern).init(allocator);
+    var non_flush_patterns = std.ArrayList(mphf.Pattern).init(allocator);
     defer non_flush_patterns.deinit();
 
     var flush_patterns = std.AutoHashMap(u16, u16).init(allocator);
@@ -162,7 +165,7 @@ fn buildTables(allocator: std.mem.Allocator) !void {
             if (!seen_rpcs.contains(rpc)) {
                 const rank = evaluator.evaluateHand(hand);
                 try seen_rpcs.put(rpc, rank);
-                try non_flush_patterns.append(.{ .key = rpc, .rank = rank });
+                try non_flush_patterns.append(.{ .key = rpc, .value = rank });
             }
         }
     }
@@ -179,7 +182,8 @@ fn buildTables(allocator: std.mem.Allocator) !void {
 
     // Build CHD for non-flush
     print("Building CHD table...\n", .{});
-    try buildCHD(allocator, non_flush_patterns.items);
+    chd_result = try mphf.build_chd(allocator, non_flush_patterns.items, mphf.DEFAULT_NUM_BUCKETS, mphf.DEFAULT_TABLE_SIZE);
+    print("  CHD built successfully\n", .{});
 
     // Build direct lookup for flush
     print("Building flush lookup table...\n", .{});
@@ -190,84 +194,6 @@ fn buildTables(allocator: std.mem.Allocator) !void {
     }
 }
 
-fn buildCHD(allocator: std.mem.Allocator, patterns: []const Pattern) !void {
-    // Try different seeds until one works
-    for (0..10) |attempt| {
-        chd_magic_constant = 0x9e3779b97f4a7c15 +% (attempt * 0x123456789abcdef);
-
-        // Reset tables
-        chd_g_array = std.mem.zeroes(@TypeOf(chd_g_array));
-        chd_value_table = std.mem.zeroes(@TypeOf(chd_value_table));
-
-        // Group patterns by bucket
-        var buckets: [CHD_NUM_BUCKETS]std.ArrayList(Pattern) = undefined;
-        for (&buckets) |*bucket| {
-            bucket.* = std.ArrayList(Pattern).init(allocator);
-        }
-        defer {
-            for (&buckets) |*bucket| bucket.deinit();
-        }
-
-        for (patterns) |pattern| {
-            const h = chdHash(pattern.key);
-            try buckets[h.bucket].append(pattern);
-        }
-
-        // Try to find displacement for each bucket
-        var occupied = [_]bool{false} ** CHD_TABLE_SIZE;
-        var success = true;
-
-        // Process buckets in order of decreasing size
-        var bucket_order: [CHD_NUM_BUCKETS]u16 = undefined;
-        for (0..CHD_NUM_BUCKETS) |i| {
-            bucket_order[i] = @intCast(i);
-        }
-        std.sort.pdq(u16, &bucket_order, buckets, bucketSizeDesc);
-
-        for (bucket_order) |bucket_id| {
-            const bucket = &buckets[bucket_id];
-            if (bucket.items.len == 0) continue;
-
-            const displacement = findDisplacement(bucket.items, &occupied) orelse {
-                success = false;
-                break;
-            };
-
-            chd_g_array[bucket_id] = @intCast(displacement);
-
-            // Place all entries
-            for (bucket.items) |pattern| {
-                const h = chdHash(pattern.key);
-                const slot = (h.base_index + displacement) & (CHD_TABLE_SIZE - 1);
-                occupied[slot] = true;
-                chd_value_table[slot] = pattern.rank;
-            }
-        }
-
-        if (success) {
-            print("  CHD built successfully with seed attempt {}\n", .{attempt + 1});
-            return;
-        }
-    }
-
-    return error.CHDConstructionFailed;
-}
-
-fn findDisplacement(patterns: []const Pattern, occupied: *[CHD_TABLE_SIZE]bool) ?u32 {
-    for (0..256) |d| {
-        var collision = false;
-        for (patterns) |pattern| {
-            const h = chdHash(pattern.key);
-            const slot = (h.base_index + d) & (CHD_TABLE_SIZE - 1);
-            if (occupied[slot]) {
-                collision = true;
-                break;
-            }
-        }
-        if (!collision) return @intCast(d);
-    }
-    return null;
-}
 
 // Helper functions
 fn computeRPC(hand: evaluator.Hand) u32 {
@@ -289,9 +215,6 @@ fn computeRPC(hand: evaluator.Hand) u32 {
     return rpc;
 }
 
-fn chdHash(key: u32) mphf.HashResult {
-    return mphf.hash_key(key, chd_magic_constant);
-}
 
 fn getTop5Ranks(suit_mask: u16) u16 {
     if (@popCount(suit_mask) == 5) return suit_mask;
@@ -378,7 +301,7 @@ fn writeTablesFile() !void {
 
     // Write CHD tables (private)
     try w.print("const chd_g_array = [_]u8{{\n", .{});
-    for (chd_g_array, 0..) |val, i| {
+    for (chd_result.g_array, 0..) |val, i| {
         if (i % 16 == 0) try w.print("    ", .{});
         try w.print("{}, ", .{val});
         if (i % 16 == 15) try w.print("\n", .{});
@@ -386,7 +309,7 @@ fn writeTablesFile() !void {
     try w.print("}};\n\n", .{});
 
     try w.print("const chd_value_table = [_]u16{{\n", .{});
-    for (chd_value_table, 0..) |val, i| {
+    for (chd_result.value_table, 0..) |val, i| {
         if (i % 16 == 0) try w.print("    ", .{});
         try w.print("{}, ", .{val});
         if (i % 16 == 15) try w.print("\n", .{});
@@ -403,18 +326,10 @@ fn writeTablesFile() !void {
 
     // Write all CHD constants (private)
     try w.print("// CHD constants\n", .{});
-    try w.print("const CHD_MAGIC_CONSTANT: u64 = 0x{X};\n", .{chd_magic_constant});
-    try w.print("const CHD_NUM_BUCKETS: u32 = {};\n", .{CHD_NUM_BUCKETS});
-    try w.print("const CHD_TABLE_SIZE: u32 = {};\n", .{CHD_TABLE_SIZE});
-    
-    // Add compile-time size validation
-    try w.print("\n// Compile-time size validation\n", .{});
-    try w.print("comptime {{\n", .{});
-    try w.print("    const std = @import(\"std\");\n", .{});
-    try w.print("    std.debug.assert(@sizeOf(@TypeOf(chd_g_array)) == {});\n", .{CHD_NUM_BUCKETS});
-    try w.print("    std.debug.assert(@sizeOf(@TypeOf(chd_value_table)) == {} * @sizeOf(u16));\n", .{CHD_TABLE_SIZE});
-    try w.print("    std.debug.assert(@sizeOf(@TypeOf(flush_lookup_table)) == 8192 * @sizeOf(u16));\n", .{});
-    try w.print("}}\n\n", .{});
+    try w.print("const CHD_MAGIC_CONSTANT: u64 = 0x{X};\n", .{chd_result.magic_constant});
+    try w.print("const CHD_NUM_BUCKETS: u32 = {};\n", .{mphf.DEFAULT_NUM_BUCKETS});
+    try w.print("const CHD_TABLE_SIZE: u32 = {};\n", .{mphf.DEFAULT_TABLE_SIZE});
+    try w.print("\n", .{});
     
     // Write public API functions
     try w.print("// Public API - only expose the functions needed by evaluator\n", .{});
@@ -426,11 +341,7 @@ fn writeTablesFile() !void {
     try w.print("}}\n", .{});
 }
 
-// Simple types
-const Pattern = struct {
-    key: u32,
-    rank: u16,
-};
+// Remove old Pattern type - using mphf.Pattern now
 
 const HandIterator = struct {
     combination: [7]u8,
@@ -471,6 +382,4 @@ const HandIterator = struct {
     }
 };
 
-fn bucketSizeDesc(buckets: [CHD_NUM_BUCKETS]std.ArrayList(Pattern), a: u16, b: u16) bool {
-    return buckets[a].items.len > buckets[b].items.len;
-}
+// Remove old bucketSizeDesc function - using mphf.bucket_size_desc now

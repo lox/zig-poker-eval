@@ -1,6 +1,13 @@
 // Minimal Perfect Hash Function (CHD) implementation
 // Pure primitives - no dependencies on specific table implementations
 
+const std = @import("std");
+
+// Default CHD configuration
+pub const DEFAULT_NUM_BUCKETS = 8192; // 2^13 buckets
+pub const DEFAULT_TABLE_SIZE = 131072; // 2^17 slots
+pub const DEFAULT_MAGIC_CONSTANT = 0x9e3779b97f4a7c15;
+
 // Hash function used for CHD
 inline fn mix64(x: u64, magic_constant: u64) u64 {
     const h = x *% magic_constant;
@@ -11,6 +18,19 @@ inline fn mix64(x: u64, magic_constant: u64) u64 {
 pub const HashResult = struct {
     bucket: u32,
     base_index: u32,
+};
+
+// Pattern type for CHD construction
+pub const Pattern = struct {
+    key: u32,
+    value: u16,
+};
+
+// CHD construction result
+pub const CHDResult = struct {
+    g_array: []u8,
+    value_table: []u16,
+    magic_constant: u64,
 };
 
 // CHD lookup function (primitive)
@@ -30,4 +50,101 @@ pub fn hash_key(key: u32, magic_constant: u64) HashResult {
         .bucket = @intCast(h >> 51),
         .base_index = @intCast(h & 0x1FFFF),
     };
+}
+
+// Build CHD perfect hash table
+pub fn build_chd(allocator: std.mem.Allocator, patterns: []const Pattern, num_buckets: u32, table_size: u32) !CHDResult {
+    var g_array = try allocator.alloc(u8, num_buckets);
+    var value_table = try allocator.alloc(u16, table_size);
+    
+    // Try different seeds until one works
+    for (0..10) |attempt| {
+        const magic_constant = DEFAULT_MAGIC_CONSTANT +% (attempt * 0x123456789abcdef);
+
+        // Reset tables
+        @memset(g_array, 0);
+        @memset(value_table, 0);
+
+        // Group patterns by bucket
+        var buckets = try allocator.alloc(std.ArrayList(Pattern), num_buckets);
+        for (buckets) |*bucket| {
+            bucket.* = std.ArrayList(Pattern).init(allocator);
+        }
+        defer {
+            for (buckets) |*bucket| bucket.deinit();
+            allocator.free(buckets);
+        }
+
+        for (patterns) |pattern| {
+            const h = hash_key(pattern.key, magic_constant);
+            try buckets[h.bucket].append(pattern);
+        }
+
+        // Try to find displacement for each bucket
+        var occupied = try allocator.alloc(bool, table_size);
+        defer allocator.free(occupied);
+        @memset(occupied, false);
+        
+        var success = true;
+
+        // Process buckets in order of decreasing size
+        var bucket_order = try allocator.alloc(u32, num_buckets);
+        defer allocator.free(bucket_order);
+        for (0..num_buckets) |i| {
+            bucket_order[i] = @intCast(i);
+        }
+        std.sort.pdq(u32, bucket_order, buckets, bucket_size_desc);
+
+        for (bucket_order) |bucket_id| {
+            const bucket = &buckets[bucket_id];
+            if (bucket.items.len == 0) continue;
+
+            const displacement = find_displacement(bucket.items, occupied, magic_constant, table_size) orelse {
+                success = false;
+                break;
+            };
+
+            g_array[bucket_id] = @intCast(displacement);
+
+            // Place all entries
+            for (bucket.items) |pattern| {
+                const h = hash_key(pattern.key, magic_constant);
+                const slot = (h.base_index + displacement) & (table_size - 1);
+                occupied[slot] = true;
+                value_table[slot] = pattern.value;
+            }
+        }
+
+        if (success) {
+            return CHDResult{
+                .g_array = g_array,
+                .value_table = value_table,
+                .magic_constant = magic_constant,
+            };
+        }
+    }
+
+    allocator.free(g_array);
+    allocator.free(value_table);
+    return error.CHDConstructionFailed;
+}
+
+fn find_displacement(patterns: []const Pattern, occupied: []bool, magic_constant: u64, table_size: u32) ?u32 {
+    for (0..256) |d| {
+        var collision = false;
+        for (patterns) |pattern| {
+            const h = hash_key(pattern.key, magic_constant);
+            const slot = (h.base_index + d) & (table_size - 1);
+            if (occupied[slot]) {
+                collision = true;
+                break;
+            }
+        }
+        if (!collision) return @intCast(d);
+    }
+    return null;
+}
+
+fn bucket_size_desc(buckets: []std.ArrayList(Pattern), a: u32, b: u32) bool {
+    return buckets[a].items.len > buckets[b].items.len;
 }
