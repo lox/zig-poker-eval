@@ -4,4 +4,5 @@ const std = @import("std");
 test {
     std.testing.refAllDecls(@import("evaluator/evaluator.zig"));
     std.testing.refAllDecls(@import("evaluator/slow_evaluator.zig"));
+    std.testing.refAllDecls(@import("poker/mod.zig"));
 }

@@ -9,6 +9,17 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/evaluator/mod.zig"),
     });
 
+    // Define poker module
+    const poker_mod = b.addModule("poker", .{
+        .root_source_file = b.path("src/poker/mod.zig"),
+    });
+
+    // Define tools module
+    const tools_mod = b.addModule("tools", .{
+        .root_source_file = b.path("src/tools/benchmark.zig"),
+    });
+    tools_mod.addImport("evaluator", evaluator_mod);
+
     // Table builder executable (for manual table regeneration)
     const table_builder = b.addExecutable(.{
         .name = "build_tables",
@@ -36,25 +47,19 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     exe.root_module.addImport("evaluator", evaluator_mod);
+    exe.root_module.addImport("poker", poker_mod);
+    exe.root_module.addImport("tools", tools_mod);
 
     b.installArtifact(exe);
 
-    // Benchmark executable - top-level benchmark suite
-    const bench = b.addExecutable(.{
-        .name = "bench",
-        .root_source_file = b.path("src/bench.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    bench.root_module.addImport("evaluator", evaluator_mod);
-
-    // Run benchmark
-    const run_bench = b.addRunArtifact(bench);
+    // Benchmark command (now via CLI)
+    const run_bench_cmd = b.addRunArtifact(exe);
+    run_bench_cmd.addArg("bench");
     if (b.args) |args| {
-        run_bench.addArgs(args);
+        run_bench_cmd.addArgs(args);
     }
-    const bench_step = b.step("bench", "Run performance benchmark");
-    bench_step.dependOn(&run_bench.step);
+    const bench_step = b.step("bench", "Run performance benchmark via CLI");
+    bench_step.dependOn(&run_bench_cmd.step);
     
 
     // Run main executable
