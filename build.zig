@@ -71,23 +71,13 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run all unit tests");
     
     // Evaluator module tests
-    const evaluator_tests = b.addTest(.{
-        .root_source_file = b.path("src/evaluator/evaluator.zig"),
+    const all_tests = b.addTest(.{
+        .root_source_file = b.path("src/test_all.zig"),
         .target = target,
         .optimize = optimize,
     });
-    evaluator_tests.test_runner = .{ .path = b.path("src/tools/test_runner.zig"), .mode = .simple };
+    all_tests.test_runner = .{ .path = b.path("src/tools/test_runner.zig"), .mode = .simple };
     
-    const slow_evaluator_tests = b.addTest(.{
-        .root_source_file = b.path("src/evaluator/slow_evaluator.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    slow_evaluator_tests.test_runner = .{ .path = b.path("src/tools/test_runner.zig"), .mode = .simple };
-    
-    const run_evaluator_tests = b.addRunArtifact(evaluator_tests);
-    const run_slow_evaluator_tests = b.addRunArtifact(slow_evaluator_tests);
-
-    test_step.dependOn(&run_evaluator_tests.step);
-    test_step.dependOn(&run_slow_evaluator_tests.step);
+    const run_all_tests = b.addRunArtifact(all_tests);
+    test_step.dependOn(&run_all_tests.step);
 }
