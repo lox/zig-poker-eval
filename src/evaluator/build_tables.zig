@@ -1,6 +1,6 @@
 const std = @import("std");
 const print = std.debug.print;
-const evaluator = @import("slow_evaluator");
+const evaluator = @import("slow_evaluator.zig");
 const mphf = @import("mphf.zig");
 
 // Table generation constants
@@ -69,26 +69,22 @@ test "flush pattern extraction - overlapping straights" {
     // Test hand 1: spades 2,3,4,5,6,7 (mask 0x3F)
     const spades_mask: u16 = 0x3F; // 2,3,4,5,6,7
     const pattern1 = getTop5Ranks(spades_mask);
-    std.debug.print("Spades 2,3,4,5,6,7 -> pattern: 0x{X}\n", .{pattern1});
 
     // Should be 7-6-5-4-3 (0x003E), not 6-5-4-3-2 (0x001F)
     try std.testing.expectEqual(@as(u16, 0x003E), pattern1);
 
     // Test the evaluation of this pattern
-    const rank1 = evaluateFlushPattern(pattern1);
-    std.debug.print("Pattern 0x{X} evaluates to rank: {}\n", .{ pattern1, rank1 });
+    _ = evaluateFlushPattern(pattern1);
 
     // Test hand 2: hearts 8,9,T,J,Q,K (mask 0xFC0)
     const hearts_mask: u16 = 0xFC0; // 8,9,T,J,Q,K
     const pattern2 = getTop5Ranks(hearts_mask);
-    std.debug.print("Hearts 8,9,T,J,Q,K -> pattern: 0x{X}\n", .{pattern2});
 
     // Should be K-Q-J-T-9 (0x0F80)
     try std.testing.expectEqual(@as(u16, 0x0F80), pattern2);
 
     // Test the evaluation of this pattern
-    const rank2 = evaluateFlushPattern(pattern2);
-    std.debug.print("Pattern 0x{X} evaluates to rank: {}\n", .{ pattern2, rank2 });
+    _ = evaluateFlushPattern(pattern2);
 }
 
 test "slow evaluator vs table patterns" {
@@ -96,30 +92,25 @@ test "slow evaluator vs table patterns" {
     const hand1: evaluator.Hand = 0x1F8000000008;
     const hand2: evaluator.Hand = 0x3F00001000;
 
-    // Get slow evaluator results
-    const slow_rank1 = evaluator.evaluateHand(hand1);
-    const slow_rank2 = evaluator.evaluateHand(hand2);
+    // Just verify the hands can be evaluated without errors
+    _ = evaluator.evaluateHand(hand1);
+    _ = evaluator.evaluateHand(hand2);
 
-    std.debug.print("Hand 1 (0x{X}) slow rank: {}\n", .{ hand1, slow_rank1 });
-    std.debug.print("Hand 2 (0x{X}) slow rank: {}\n", .{ hand2, slow_rank2 });
-
-    // Get our pattern extraction results
+    // Verify pattern extraction works
     const suits1 = evaluator.getSuitMasks(hand1);
     const suits2 = evaluator.getSuitMasks(hand2);
 
-    for (suits1, 0..) |suit, i| {
+    for (suits1) |suit| {
         if (@popCount(suit) >= 5) {
             const pattern = getTop5Ranks(suit);
-            const table_rank = evaluateFlushPattern(pattern);
-            std.debug.print("Hand 1 suit {}: mask=0x{X}, pattern=0x{X}, table_rank={}\n", .{ i, suit, pattern, table_rank });
+            _ = evaluateFlushPattern(pattern);
         }
     }
 
-    for (suits2, 0..) |suit, i| {
+    for (suits2) |suit| {
         if (@popCount(suit) >= 5) {
             const pattern = getTop5Ranks(suit);
-            const table_rank = evaluateFlushPattern(pattern);
-            std.debug.print("Hand 2 suit {}: mask=0x{X}, pattern=0x{X}, table_rank={}\n", .{ i, suit, pattern, table_rank });
+            _ = evaluateFlushPattern(pattern);
         }
     }
 }
@@ -142,9 +133,6 @@ fn buildTables(allocator: std.mem.Allocator) !void {
 
     while (iterator.next()) |hand| {
         total_hands += 1;
-        if (total_hands % 10_000_000 == 0) {
-            print("  Processed {} million hands...\n", .{total_hands / 1_000_000});
-        }
 
         if (evaluator.hasFlush(hand)) {
             // Handle flush pattern

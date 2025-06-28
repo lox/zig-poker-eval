@@ -1,4 +1,5 @@
 const std = @import("std");
+const card = @import("../card/mod.zig");
 const poker = @import("poker.zig");
 
 // ✅ IMPLEMENTED:
@@ -35,7 +36,7 @@ pub const NotationError = error{
 /// - Ranges: "AA,KK,QQ", "AK,AQ", "AKs,AKo"
 /// - Mixed: "AA,AKo,JJ"
 /// Returns all possible hand combinations from the input
-pub fn parse(input: []const u8, allocator: std.mem.Allocator) ![]const [2]poker.Card {
+pub fn parse(input: []const u8, allocator: std.mem.Allocator) ![]const [2]card.Hand {
     if (input.len < 2) return NotationError.InvalidLength;
 
     // Handle comma-separated ranges
@@ -48,20 +49,20 @@ pub fn parse(input: []const u8, allocator: std.mem.Allocator) ![]const [2]poker.
 }
 
 /// Parse single notation (not comma-separated)
-fn parseSingle(notation: []const u8, allocator: std.mem.Allocator) ![]const [2]poker.Card {
+fn parseSingle(notation: []const u8, allocator: std.mem.Allocator) ![]const [2]card.Hand {
     // Handle shorthand notation first (most common case)
     // Handle pocket pairs (e.g., "AA", "KK", "88")
     if (notation.len == 2 and notation[0] == notation[1]) {
         const rank = try parseRankChar(notation[0]);
-        return try poker.generatePocketPair(rank, allocator);
+        return try card.generatePocketPair(rank, allocator);
     }
 
     // Handle specific cards (e.g., "AhKs", "AdAs")
     if (notation.len == 4) {
         const card1 = parseCard(notation[0..2]) catch return NotationError.InvalidNotation;
         const card2 = parseCard(notation[2..4]) catch return NotationError.InvalidNotation;
-        const result = try allocator.alloc([2]poker.Card, 1);
-        result[0] = [2]poker.Card{ card1, card2 };
+        const result = try allocator.alloc([2]card.Hand, 1);
+        result[0] = [2]card.Hand{ card1, card2 };
         return result;
     }
 
@@ -72,18 +73,18 @@ fn parseSingle(notation: []const u8, allocator: std.mem.Allocator) ![]const [2]p
 
         if (rank1 == rank2) {
             // This should be a pocket pair but wasn't caught above
-            return try poker.generatePocketPair(rank1, allocator);
+            return try card.generatePocketPair(rank1, allocator);
         }
 
         // Check for suited/offsuit indicator
         if (notation.len == 2) {
             // No indicator - return all combinations
-            return try poker.generateAllCombinations(rank1, rank2, allocator);
+            return try card.generateAllCombinations(rank1, rank2, allocator);
         } else if (notation.len == 3) {
             const indicator = notation[2];
             switch (indicator) {
-                's' => return try poker.generateSuitedCombinations(rank1, rank2, allocator),
-                'o' => return try poker.generateOffsuitCombinations(rank1, rank2, allocator),
+                's' => return try card.generateSuitedCombinations(rank1, rank2, allocator),
+                'o' => return try card.generateOffsuitCombinations(rank1, rank2, allocator),
                 else => return NotationError.InvalidNotation,
             }
         }
@@ -93,27 +94,27 @@ fn parseSingle(notation: []const u8, allocator: std.mem.Allocator) ![]const [2]p
 }
 
 /// Parse a rank character to Rank enum
-fn parseRankChar(c: u8) !poker.Rank {
+fn parseRankChar(c: u8) !card.Rank {
     return switch (c) {
-        '2' => poker.Rank.two,
-        '3' => poker.Rank.three,
-        '4' => poker.Rank.four,
-        '5' => poker.Rank.five,
-        '6' => poker.Rank.six,
-        '7' => poker.Rank.seven,
-        '8' => poker.Rank.eight,
-        '9' => poker.Rank.nine,
-        'T', 't' => poker.Rank.ten,
-        'J', 'j' => poker.Rank.jack,
-        'Q', 'q' => poker.Rank.queen,
-        'K', 'k' => poker.Rank.king,
-        'A', 'a' => poker.Rank.ace,
+        '2' => card.Rank.two,
+        '3' => card.Rank.three,
+        '4' => card.Rank.four,
+        '5' => card.Rank.five,
+        '6' => card.Rank.six,
+        '7' => card.Rank.seven,
+        '8' => card.Rank.eight,
+        '9' => card.Rank.nine,
+        'T', 't' => card.Rank.ten,
+        'J', 'j' => card.Rank.jack,
+        'Q', 'q' => card.Rank.queen,
+        'K', 'k' => card.Rank.king,
+        'A', 'a' => card.Rank.ace,
         else => NotationError.InvalidRank,
     };
 }
 
 /// Parse a suit character to Suit enum
-fn parseSuitChar(c: u8) !poker.Suit {
+fn parseSuitChar(c: u8) !card.Suit {
     return switch (c) {
         'h', 'H' => .hearts,
         'd', 'D' => .diamonds,
@@ -124,16 +125,16 @@ fn parseSuitChar(c: u8) !poker.Suit {
 }
 
 /// Parse a specific card (e.g., "Ah", "Kd")
-fn parseCard(input: []const u8) !poker.Card {
+fn parseCard(input: []const u8) !card.Hand {
     if (input.len != 2) return NotationError.InvalidLength;
     const rank = try parseRankChar(input[0]);
     const suit = try parseSuitChar(input[1]);
-    return poker.Card.init(@intFromEnum(rank), @intFromEnum(suit));
+    return card.makeCardFromEnums(suit, rank);
 }
 
 /// Internal function to parse comma-separated ranges
-fn parseRange(range_str: []const u8, allocator: std.mem.Allocator) ![]const [2]poker.Card {
-    var hands_list = std.ArrayList([2]poker.Card).init(allocator);
+fn parseRange(range_str: []const u8, allocator: std.mem.Allocator) ![]const [2]card.Hand {
+    var hands_list = std.ArrayList([2]card.Hand).init(allocator);
     defer hands_list.deinit();
 
     var iterator = std.mem.splitSequence(u8, range_str, ",");
@@ -278,16 +279,16 @@ test "parse and pick random (user pattern)" {
     const aa_combos = try parse("AA", allocator);
     defer allocator.free(aa_combos);
     const random_aa = aa_combos[rng.intRangeLessThan(usize, 0, aa_combos.len)];
-    try std.testing.expect(random_aa[0].getRank() == 14); // Both aces
-    try std.testing.expect(random_aa[1].getRank() == 14);
+    try std.testing.expect(card.handToCard(random_aa[0]).getRank() == 14); // Both aces
+    try std.testing.expect(card.handToCard(random_aa[1]).getRank() == 14);
 
     // Same for ranges
     const range_combos = try parse("AA,KK,QQ", allocator);
     defer allocator.free(range_combos);
     const random_pair = range_combos[rng.intRangeLessThan(usize, 0, range_combos.len)];
-    const rank = random_pair[0].getRank();
+    const rank = card.handToCard(random_pair[0]).getRank();
     try std.testing.expect(rank == 14 or rank == 13 or rank == 12); // A, K, or Q
-    try std.testing.expect(random_pair[0].getRank() == random_pair[1].getRank()); // Same rank
+    try std.testing.expect(card.handToCard(random_pair[0]).getRank() == card.handToCard(random_pair[1]).getRank()); // Same rank
 }
 
 test "ultra-simple API works for all examples" {

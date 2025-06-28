@@ -8,18 +8,32 @@ const ranges_impl = @import("ranges.zig");
 const notation_impl = @import("notation.zig");
 const simulation_impl = @import("simulation.zig");
 
-// PUBLIC API - Core poker types
-pub const Suit = poker_types.Suit;
-pub const Rank = poker_types.Rank;
+// PUBLIC API - Core poker types (from evaluator - source of truth)
+pub const Suit = evaluator.Suit;
+pub const Rank = evaluator.Rank;
+pub const Hand = evaluator.Hand;
+pub const Card = evaluator.Hand; // Individual cards are also Hand (u64)
+
+// Poker domain types
 pub const HandRank = poker_types.HandRank;
-pub const Card = poker_types.Card;
-pub const Hand = poker_types.Hand;
 pub const ShowdownResult = poker_types.ShowdownResult;
 
-// Utility functions
-pub const parseCards = poker_types.parseCards;
-pub const mustParseHoleCards = poker_types.mustParseHoleCards;
-pub const createCard = poker_types.createCard;
+// Card and hand creation functions (from evaluator)
+pub const makeCard = evaluator.makeCard;
+pub const makeCardFromEnums = evaluator.makeCardFromEnums;
+pub const parseCard = evaluator.parseCard;
+pub const parseCards = evaluator.parseCards;
+pub const mustParseCards = evaluator.mustParseCards;
+pub const makeHandFromCards = evaluator.makeHandFromCards;
+pub const makeHandFromHoleAndBoard = evaluator.makeHandFromHoleAndBoard;
+pub const hasCard = evaluator.hasCard;
+pub const countCards = evaluator.countCards;
+pub const getSuitMask = evaluator.getSuitMask;
+
+// Card generation functions (from evaluator)
+pub const generateSuitedCombinations = evaluator.generateSuitedCombinations;
+pub const generateOffsuitCombinations = evaluator.generateOffsuitCombinations;
+pub const generatePocketPair = evaluator.generatePocketPair;
 
 // PUBLIC API - Equity analysis
 pub const EquityResult = equity_impl.EquityResult;
@@ -40,13 +54,45 @@ pub const evaluateShowdown = simulation_impl.evaluateShowdown;
 pub const evaluateShowdownHeadToHead = simulation_impl.evaluateShowdownHeadToHead;
 pub const sampleRemainingCards = simulation_impl.sampleRemainingCards;
 
-// Convenience wrappers that inject the evaluator function
+// Bridge functions for hand evaluation
 pub fn evaluateHand(hand: Hand) HandRank {
-    return hand.evaluate(evaluator.evaluateHand);
+    const rank = evaluator.evaluateHand(hand);
+    return poker_types.convertEvaluatorRank(rank);
 }
 
 pub fn compareHands(hand1: Hand, hand2: Hand) ShowdownResult {
-    return hand1.compareWith(hand2, evaluator.evaluateHand);
+    const rank1 = evaluateHand(hand1);
+    const rank2 = evaluateHand(hand2);
+    
+    if (@intFromEnum(rank1) > @intFromEnum(rank2)) {
+        return .{ .winner = 0, .tie = false, .winning_rank = rank1 };
+    } else if (@intFromEnum(rank2) > @intFromEnum(rank1)) {
+        return .{ .winner = 1, .tie = false, .winning_rank = rank2 };
+    } else {
+        return .{ .winner = 0, .tie = true, .winning_rank = rank1 };
+    }
+}
+
+// Convenience functions for poker notation  
+pub fn createCard(suit: Suit, rank: Rank) Card {
+    return makeCardFromEnums(suit, rank);
+}
+
+pub fn createHand(cards: []const struct { Suit, Rank }) Hand {
+    var hand: Hand = 0;
+    for (cards) |card_info| {
+        const card = createCard(card_info[0], card_info[1]);
+        hand |= card;
+    }
+    return hand;
+}
+
+pub fn mustParseHoleCards(comptime card_string: []const u8) Hand {
+    if (card_string.len != 4) {
+        @compileError("Hole cards must be exactly 4 characters (e.g., 'AhAs'): " ++ card_string);
+    }
+    const cards = evaluator.mustParseCards(card_string);
+    return cards[0] | cards[1];
 }
 
 // Import tests (required for test discovery)

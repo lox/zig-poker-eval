@@ -4,15 +4,22 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Define card module (source of truth for card format)
+    const card_mod = b.addModule("card", .{
+        .root_source_file = b.path("src/card/mod.zig"),
+    });
+
     // Define evaluator module
     const evaluator_mod = b.addModule("evaluator", .{
         .root_source_file = b.path("src/evaluator/mod.zig"),
     });
+    evaluator_mod.addImport("card", card_mod);
 
     // Define poker module
     const poker_mod = b.addModule("poker", .{
         .root_source_file = b.path("src/poker/mod.zig"),
     });
+    poker_mod.addImport("card", card_mod);
     poker_mod.addImport("evaluator", evaluator_mod);
 
     // Define tools module
@@ -47,6 +54,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    exe.root_module.addImport("card", card_mod);
     exe.root_module.addImport("evaluator", evaluator_mod);
     exe.root_module.addImport("poker", poker_mod);
     exe.root_module.addImport("tools", tools_mod);
@@ -73,16 +81,17 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the poker evaluator");
     run_step.dependOn(&run_cmd.step);
 
-    // Test step - run tests from all modules separately for full test discovery
+    // Test step - run tests from all modules together
     const test_step = b.step("test", "Run all unit tests");
     
-    // Evaluator module tests
+    // All tests in one runner - without module imports to avoid conflicts
     const all_tests = b.addTest(.{
         .root_source_file = b.path("src/test.zig"),
         .target = target,
         .optimize = optimize,
     });
-    all_tests.test_runner = .{ .path = b.path("src/tools/test_runner.zig"), .mode = .simple };
+    // Removed module imports to allow direct file imports in test.zig
+    // Removed custom test runner to use default Zig test discovery
     
     const run_all_tests = b.addRunArtifact(all_tests);
     test_step.dependOn(&run_all_tests.step);
