@@ -2,14 +2,14 @@ const std = @import("std");
 const evaluator = @import("evaluator.zig");
 
 // Re-export the core functions for assembly analysis
-pub const evaluate_hand = evaluator.evaluate_hand;
+pub const evaluateHand = evaluator.evaluateHand;
 pub const evaluate_batch_4 = evaluator.evaluate_batch_4;
 pub const benchmark_single = evaluator.benchmark_single;
 pub const benchmark_batch = evaluator.benchmark_batch;
 
 // Export functions for assembly analysis
 export fn bench_single_hand(hand: u64) u16 {
-    return evaluate_hand(hand);
+    return evaluateHand(hand);
 }
 
 export fn bench_batch_hands(hands: @Vector(4, u64)) @Vector(4, u16) {
@@ -35,7 +35,7 @@ pub fn main() !void {
     
     std.debug.print("Clean Evaluator Results:\n", .{});
     for (test_hands, 0..) |hand, i| {
-        const rank = evaluate_hand(hand);
+        const rank = evaluateHand(hand);
         std.debug.print("Hand {}: 0x{X} -> Rank: {}\n", .{i, hand, rank});
     }
     

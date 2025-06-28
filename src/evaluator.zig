@@ -6,7 +6,7 @@ const RANK_MASK = 0x1FFF; // 13 bits for ranks
 
 // === Scalar RPC Computation (for single hands and flushes) ===
 
-fn compute_rpc_from_hand(hand: u64) u32 {
+fn computeRpcFromHand(hand: u64) u32 {
     var rank_counts = [_]u8{0} ** 13;
 
     for (0..4) |suit| {
@@ -28,7 +28,7 @@ fn compute_rpc_from_hand(hand: u64) u32 {
 
 // === SIMD RPC Computation (for 4-hand batches) ===
 
-fn compute_rpc_simd4(hands: [4]u64) [4]u32 {
+fn computeRpcSimd4(hands: [4]u64) [4]u32 {
     // Extract suits for all 4 hands (structure-of-arrays)
     var clubs: [4]u16 = undefined;
     var diamonds: [4]u16 = undefined; 
@@ -75,11 +75,11 @@ fn compute_rpc_simd4(hands: [4]u64) [4]u32 {
 }
 
 
-fn chd_lookup_scalar(rpc: u32) u16 {
+fn chdLookupScalar(rpc: u32) u16 {
     return tables.lookup(rpc);
 }
 
-pub fn is_flush_hand(hand: u64) bool {
+pub fn isFlushHand(hand: u64) bool {
     const suits = [4]u16{
         @as(u16, @truncate(hand >> 0)) & RANK_MASK,   // clubs
         @as(u16, @truncate(hand >> 13)) & RANK_MASK,  // diamonds
@@ -93,7 +93,7 @@ pub fn is_flush_hand(hand: u64) bool {
     return false;
 }
 
-pub fn get_flush_pattern(hand: u64) u16 {
+pub fn getFlushPattern(hand: u64) u16 {
     const suits = [4]u16{
         @as(u16, @truncate(hand >> 0)) & RANK_MASK,   // clubs
         @as(u16, @truncate(hand >> 13)) & RANK_MASK,  // diamonds
@@ -103,13 +103,13 @@ pub fn get_flush_pattern(hand: u64) u16 {
     
     for (suits) |suit_mask| {
         if (@popCount(suit_mask) >= 5) {
-            return get_top5_ranks(suit_mask);
+            return getTop5Ranks(suit_mask);
         }
     }
     return 0; // Should never happen for flush hands
 }
 
-fn get_top5_ranks(suit_mask: u16) u16 {
+fn getTop5Ranks(suit_mask: u16) u16 {
     if (@popCount(suit_mask) == 5) return suit_mask;
 
     // Check for straights first
@@ -140,14 +140,14 @@ fn get_top5_ranks(suit_mask: u16) u16 {
 
 // === Public API ===
 
-pub fn evaluate_hand(hand: u64) u16 {
-    if (is_flush_hand(hand)) {
-        const pattern = get_flush_pattern(hand);
-        return tables.flush_lookup(pattern);
+pub fn evaluateHand(hand: u64) u16 {
+    if (isFlushHand(hand)) {
+        const pattern = getFlushPattern(hand);
+        return tables.flushLookup(pattern);
     }
     
-    const rpc = compute_rpc_from_hand(hand);
-    return chd_lookup_scalar(rpc);
+    const rpc = computeRpcFromHand(hand);
+    return chdLookupScalar(rpc);
 }
 
 
@@ -161,30 +161,30 @@ pub fn evaluate_hand(hand: u64) u16 {
 //
 // The SIMD benefits come from compute_rpc_simd4(), not from manual vectorization
 // of the control flow, so we let the compiler handle the conditional evaluation.
-pub fn evaluate_batch_4(hands: @Vector(4, u64)) @Vector(4, u16) {
+pub fn evaluateBatch4(hands: @Vector(4, u64)) @Vector(4, u16) {
     const hands_array = [4]u64{ hands[0], hands[1], hands[2], hands[3] };
     
     // Compute RPC for all 4 hands using SIMD (this is where the real speedup comes from)
-    const rpc_results = compute_rpc_simd4(hands_array);
+    const rpc_results = computeRpcSimd4(hands_array);
     
     // Simple per-hand evaluation - compiler vectorizes this effectively
     return @Vector(4, u16){
-        if (is_flush_hand(hands_array[0])) tables.flush_lookup(get_flush_pattern(hands_array[0])) else chd_lookup_scalar(rpc_results[0]),
-        if (is_flush_hand(hands_array[1])) tables.flush_lookup(get_flush_pattern(hands_array[1])) else chd_lookup_scalar(rpc_results[1]),
-        if (is_flush_hand(hands_array[2])) tables.flush_lookup(get_flush_pattern(hands_array[2])) else chd_lookup_scalar(rpc_results[2]),
-        if (is_flush_hand(hands_array[3])) tables.flush_lookup(get_flush_pattern(hands_array[3])) else chd_lookup_scalar(rpc_results[3]),
+        if (isFlushHand(hands_array[0])) tables.flushLookup(getFlushPattern(hands_array[0])) else chdLookupScalar(rpc_results[0]),
+        if (isFlushHand(hands_array[1])) tables.flushLookup(getFlushPattern(hands_array[1])) else chdLookupScalar(rpc_results[1]),
+        if (isFlushHand(hands_array[2])) tables.flushLookup(getFlushPattern(hands_array[2])) else chdLookupScalar(rpc_results[2]),
+        if (isFlushHand(hands_array[3])) tables.flushLookup(getFlushPattern(hands_array[3])) else chdLookupScalar(rpc_results[3]),
     };
 }
 
 // Architecture-adaptive batch processing - processes hands in 4-hand SIMD batches
-pub fn evaluate_batch_dynamic(hands: []const u64, results: []u16) void {
+pub fn evaluateBatchDynamic(hands: []const u64, results: []u16) void {
     std.debug.assert(hands.len == results.len);
     
     // Process in chunks of 4 (optimal for SIMD)
     var i: usize = 0;
     while (i + 4 <= hands.len) : (i += 4) {
         const batch_hands = @Vector(4, u64){ hands[i], hands[i+1], hands[i+2], hands[i+3] };
-        const batch_results = evaluate_batch_4(batch_hands);
+        const batch_results = evaluateBatch4(batch_hands);
         
         results[i] = batch_results[0];
         results[i+1] = batch_results[1];
@@ -194,7 +194,7 @@ pub fn evaluate_batch_dynamic(hands: []const u64, results: []u16) void {
     
     // Handle remainder
     while (i < hands.len) : (i += 1) {
-        results[i] = evaluate_hand(hands[i]);
+        results[i] = evaluateHand(hands[i]);
     }
 }
 
@@ -207,8 +207,8 @@ test "flush pattern extraction" {
         (@as(u64, 0x0040) << 26) | // hearts: 7 (bit 6) 
         (@as(u64, 0x0020) << 13);  // diamonds: 6 (bit 5)
     
-    try std.testing.expect(is_flush_hand(royal_flush));
-    const pattern = get_flush_pattern(royal_flush);
+    try std.testing.expect(isFlushHand(royal_flush));
+    const pattern = getFlushPattern(royal_flush);
     try std.testing.expectEqual(@as(u16, 0x1F00), pattern); // A K Q J T pattern
 }
 
@@ -219,30 +219,30 @@ test "straight flush pattern" {
         (@as(u64, 0x1000) << 13) | // diamonds: A (bit 12)
         (@as(u64, 0x0800) << 26);  // hearts: K (bit 11)
     
-    try std.testing.expect(is_flush_hand(straight_flush));
-    const pattern = get_flush_pattern(straight_flush);
+    try std.testing.expect(isFlushHand(straight_flush));
+    const pattern = getFlushPattern(straight_flush);
     try std.testing.expectEqual(@as(u16, 0x03E0), pattern); // 9 8 7 6 5 pattern
 }
 
-pub fn benchmark_single(iterations: u32) u64 {
+pub fn benchmarkSingle(iterations: u32) u64 {
     var sum: u64 = 0;
     const test_hand: u64 = 0x123456789ABCD;
     
     for (0..iterations) |_| {
-        sum +%= evaluate_hand(test_hand);
+        sum +%= evaluateHand(test_hand);
     }
     
     return sum;
 }
 
-pub fn benchmark_batch(iterations: u32) u64 {
+pub fn benchmarkBatch(iterations: u32) u64 {
     var sum: u64 = 0;
     const test_hands = @Vector(4, u64){ 
         0x1F00000000000, 0x123456789ABCD, 0x0F0F0F0F0F0F0, 0x1F00 
     };
     
     for (0..iterations) |_| {
-        const results = evaluate_batch_4(test_hands);
+        const results = evaluateBatch4(test_hands);
         sum +%= results[0] + results[1] + results[2] + results[3];
     }
     

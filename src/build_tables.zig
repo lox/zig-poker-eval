@@ -24,7 +24,7 @@ pub fn main() !void {
     // Generate output file
     print("Writing src/tables.zig...\n", .{});
     try writeTablesFile();
-    
+
     // Validate generated table sizes
     print("Validating table sizes...\n", .{});
     std.debug.assert(chd_result.g_array.len == mphf.DEFAULT_NUM_BUCKETS);
@@ -38,28 +38,28 @@ pub fn main() !void {
 // Unit tests
 test "CHD hash function" {
     const test_rpc: u32 = 0x12345;
-    const hash_result = mphf.hash_key(test_rpc, mphf.DEFAULT_MAGIC_CONSTANT);
-    
+    const hash_result = mphf.hashKey(test_rpc, mphf.DEFAULT_MAGIC_CONSTANT);
+
     try std.testing.expect(hash_result.bucket < mphf.DEFAULT_NUM_BUCKETS);
     try std.testing.expect(hash_result.base_index < mphf.DEFAULT_TABLE_SIZE);
 }
 
 test "RPC computation" {
     // Test a simple hand: AsKsQsJsTs (royal flush in spades)
-    const hand: evaluator.Hand = 
+    const hand: evaluator.Hand =
         evaluator.makeCard(0, 12) | // As
-        evaluator.makeCard(0, 11) | // Ks  
+        evaluator.makeCard(0, 11) | // Ks
         evaluator.makeCard(0, 10) | // Qs
-        evaluator.makeCard(0, 9) |  // Js
-        evaluator.makeCard(0, 8) |  // Ts
-        evaluator.makeCard(1, 7) |  // 8h
-        evaluator.makeCard(2, 6);   // 7d
-    
+        evaluator.makeCard(0, 9) | // Js
+        evaluator.makeCard(0, 8) | // Ts
+        evaluator.makeCard(1, 7) | // 8h
+        evaluator.makeCard(2, 6); // 7d
+
     const rpc = computeRPC(hand);
-    
+
     // This should be a valid RPC value
     try std.testing.expect(rpc > 0);
-    
+
     // Test that ranks have proper counts (5 spades + 2 other suits)
     // Should have rank counts: A=1, K=1, Q=1, J=1, T=1, 8=1, 7=1, others=0
     // In base-5: this should produce a specific pattern
@@ -70,56 +70,56 @@ test "flush pattern extraction - overlapping straights" {
     const spades_mask: u16 = 0x3F; // 2,3,4,5,6,7
     const pattern1 = getTop5Ranks(spades_mask);
     std.debug.print("Spades 2,3,4,5,6,7 -> pattern: 0x{X}\n", .{pattern1});
-    
+
     // Should be 7-6-5-4-3 (0x003E), not 6-5-4-3-2 (0x001F)
     try std.testing.expectEqual(@as(u16, 0x003E), pattern1);
-    
+
     // Test the evaluation of this pattern
     const rank1 = evaluateFlushPattern(pattern1);
-    std.debug.print("Pattern 0x{X} evaluates to rank: {}\n", .{pattern1, rank1});
-    
+    std.debug.print("Pattern 0x{X} evaluates to rank: {}\n", .{ pattern1, rank1 });
+
     // Test hand 2: hearts 8,9,T,J,Q,K (mask 0xFC0)
     const hearts_mask: u16 = 0xFC0; // 8,9,T,J,Q,K
     const pattern2 = getTop5Ranks(hearts_mask);
     std.debug.print("Hearts 8,9,T,J,Q,K -> pattern: 0x{X}\n", .{pattern2});
-    
+
     // Should be K-Q-J-T-9 (0x0F80)
     try std.testing.expectEqual(@as(u16, 0x0F80), pattern2);
-    
+
     // Test the evaluation of this pattern
     const rank2 = evaluateFlushPattern(pattern2);
-    std.debug.print("Pattern 0x{X} evaluates to rank: {}\n", .{pattern2, rank2});
+    std.debug.print("Pattern 0x{X} evaluates to rank: {}\n", .{ pattern2, rank2 });
 }
 
 test "slow evaluator vs table patterns" {
     // Test the two failing hands directly
     const hand1: evaluator.Hand = 0x1F8000000008;
     const hand2: evaluator.Hand = 0x3F00001000;
-    
+
     // Get slow evaluator results
     const slow_rank1 = evaluator.evaluateHand(hand1);
     const slow_rank2 = evaluator.evaluateHand(hand2);
-    
-    std.debug.print("Hand 1 (0x{X}) slow rank: {}\n", .{hand1, slow_rank1});
-    std.debug.print("Hand 2 (0x{X}) slow rank: {}\n", .{hand2, slow_rank2});
-    
+
+    std.debug.print("Hand 1 (0x{X}) slow rank: {}\n", .{ hand1, slow_rank1 });
+    std.debug.print("Hand 2 (0x{X}) slow rank: {}\n", .{ hand2, slow_rank2 });
+
     // Get our pattern extraction results
     const suits1 = evaluator.getSuitMasks(hand1);
     const suits2 = evaluator.getSuitMasks(hand2);
-    
+
     for (suits1, 0..) |suit, i| {
         if (@popCount(suit) >= 5) {
             const pattern = getTop5Ranks(suit);
             const table_rank = evaluateFlushPattern(pattern);
-            std.debug.print("Hand 1 suit {}: mask=0x{X}, pattern=0x{X}, table_rank={}\n", .{i, suit, pattern, table_rank});
+            std.debug.print("Hand 1 suit {}: mask=0x{X}, pattern=0x{X}, table_rank={}\n", .{ i, suit, pattern, table_rank });
         }
     }
-    
+
     for (suits2, 0..) |suit, i| {
         if (@popCount(suit) >= 5) {
             const pattern = getTop5Ranks(suit);
             const table_rank = evaluateFlushPattern(pattern);
-            std.debug.print("Hand 2 suit {}: mask=0x{X}, pattern=0x{X}, table_rank={}\n", .{i, suit, pattern, table_rank});
+            std.debug.print("Hand 2 suit {}: mask=0x{X}, pattern=0x{X}, table_rank={}\n", .{ i, suit, pattern, table_rank });
         }
     }
 }
@@ -182,7 +182,7 @@ fn buildTables(allocator: std.mem.Allocator) !void {
 
     // Build CHD for non-flush
     print("Building CHD table...\n", .{});
-    chd_result = try mphf.build_chd(allocator, non_flush_patterns.items, mphf.DEFAULT_NUM_BUCKETS, mphf.DEFAULT_TABLE_SIZE);
+    chd_result = try mphf.buildChd(allocator, non_flush_patterns.items, mphf.DEFAULT_NUM_BUCKETS, mphf.DEFAULT_TABLE_SIZE);
     print("  CHD built successfully\n", .{});
 
     // Build direct lookup for flush
@@ -193,7 +193,6 @@ fn buildTables(allocator: std.mem.Allocator) !void {
         flush_lookup_table[entry.key_ptr.*] = entry.value_ptr.*;
     }
 }
-
 
 // Helper functions
 fn computeRPC(hand: evaluator.Hand) u32 {
@@ -214,7 +213,6 @@ fn computeRPC(hand: evaluator.Hand) u32 {
     }
     return rpc;
 }
-
 
 fn getTop5Ranks(suit_mask: u16) u16 {
     if (@popCount(suit_mask) == 5) return suit_mask;
@@ -255,7 +253,7 @@ fn evaluateFlushPattern(pattern: u16) u16 {
     // Check if this pattern is a straight flush first
     const straight_patterns = [_]u16{
         0x1F00, // A-K-Q-J-T (royal flush)
-        0x0F80, // K-Q-J-T-9  
+        0x0F80, // K-Q-J-T-9
         0x07C0, // Q-J-T-9-8
         0x03E0, // J-T-9-8-7
         0x01F0, // T-9-8-7-6
@@ -265,7 +263,7 @@ fn evaluateFlushPattern(pattern: u16) u16 {
         0x001F, // 6-5-4-3-2
         0x100F, // A-5-4-3-2 (wheel)
     };
-    
+
     for (straight_patterns, 0..) |straight_pattern, i| {
         if (pattern == straight_pattern) {
             // This is a straight flush
@@ -279,12 +277,12 @@ fn evaluateFlushPattern(pattern: u16) u16 {
             }
         }
     }
-    
+
     // Not a straight flush, so it's a regular flush
     // Find the highest card in the pattern
     const high_card_bit = @clz(pattern);
     const high_card_rank = 15 - high_card_bit;
-    
+
     // Use the same formula as slow_evaluator for flush ranking:
     // Flush ranks are 322-1598, with A-high=322, K-high=422, etc.
     return 322 + @as(u16, (12 - high_card_rank)) * 100;
@@ -296,7 +294,7 @@ fn writeTablesFile() !void {
     const w = file.writer();
 
     try w.print("// Generated lookup tables for poker evaluator\n\n", .{});
-    
+
     try w.print("const mphf = @import(\"mphf.zig\");\n\n", .{});
 
     // Write CHD tables (private)
@@ -330,13 +328,13 @@ fn writeTablesFile() !void {
     try w.print("const CHD_NUM_BUCKETS: u32 = {};\n", .{mphf.DEFAULT_NUM_BUCKETS});
     try w.print("const CHD_TABLE_SIZE: u32 = {};\n", .{mphf.DEFAULT_TABLE_SIZE});
     try w.print("\n", .{});
-    
+
     // Write public API functions
     try w.print("// Public API - only expose the functions needed by evaluator\n", .{});
     try w.print("pub inline fn lookup(rpc: u32) u16 {{\n", .{});
     try w.print("    return mphf.lookup(rpc, CHD_MAGIC_CONSTANT, &chd_g_array, &chd_value_table, CHD_TABLE_SIZE);\n", .{});
     try w.print("}}\n\n", .{});
-    try w.print("pub inline fn flush_lookup(pattern: u16) u16 {{\n", .{});
+    try w.print("pub inline fn flushLookup(pattern: u16) u16 {{\n", .{});
     try w.print("    return flush_lookup_table[pattern];\n", .{});
     try w.print("}}\n", .{});
 }
@@ -381,5 +379,3 @@ const HandIterator = struct {
         return false;
     }
 };
-
-// Remove old bucketSizeDesc function - using mphf.bucket_size_desc now

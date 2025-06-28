@@ -115,7 +115,7 @@ fn benchmarkSingleHands(hands: []const u64) !f64 {
         const start = std.time.nanoTimestamp();
         
         for (hands) |hand| {
-            checksum +%= evaluator.evaluate_hand(hand);
+            checksum +%= evaluator.evaluateHand(hand);
         }
         
         const end = std.time.nanoTimestamp();

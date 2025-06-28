@@ -21,7 +21,7 @@ High-performance 7-card poker hand evaluator using SIMD and perfect hashing:
 
 ## Code Style
 - **Zig version**: 0.14.0 syntax (print requires `.{}` parameter: `print("text", .{});`)
-- **Naming**: snake_case for functions/variables, PascalCase for types
+- **Naming**: camelCase for functions, snake_case for variables, PascalCase for types (idiomatic Zig)
 - **Imports**: `const std = @import("std");` first, then local imports
 - **Error handling**: Use Zig's error unions `!T`, propagate with `try`
 - **SIMD**: Use `@Vector(16, u64)` for AVX-512, fallback to 8-lane AVX2

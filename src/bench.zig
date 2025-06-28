@@ -21,7 +21,7 @@ fn warmupCaches(test_hands: []const u64) void {
     var i: usize = 0;
     while (i + BATCH_SIZE <= warmup_hands) {
         const batch = createBatch(test_hands, i);
-        _ = evaluator.evaluate_batch_4(batch);
+        _ = evaluator.evaluateBatch4(batch);
         i += BATCH_SIZE;
     }
 }
@@ -61,7 +61,7 @@ fn runSingleBenchmark(iterations: u32, test_hands: []const u64) f64 {
         // Create batch from consecutive hands
         const batch = createBatch(test_hands, hand_idx);
         
-        const results = evaluator.evaluate_batch_4(batch);
+        const results = evaluator.evaluateBatch4(batch);
         for (0..BATCH_SIZE) |j| {
             checksum +%= results[j];
         }
@@ -105,7 +105,7 @@ fn validateCorrectness(test_hands: []const u64) !bool {
     while (i + BATCH_SIZE <= validation_hands) {
         const batch = createBatch(test_hands, i);
         
-        const fast_results = evaluator.evaluate_batch_4(batch);
+        const fast_results = evaluator.evaluateBatch4(batch);
 
         for (0..BATCH_SIZE) |j| {
             const slow_result = slow_evaluator.evaluateHand(test_hands[i + j]);
@@ -144,7 +144,7 @@ pub fn testEvaluator() !void {
     const batch = validation.generateRandomHandBatch(&rng);
 
     // Evaluate batch
-    const batch_results = evaluator.evaluate_batch_4(batch);
+    const batch_results = evaluator.evaluateBatch4(batch);
 
     // Validate against single-hand evaluation
     var matches: u32 = 0;
@@ -245,7 +245,7 @@ pub fn testSingleHand() !void {
     const test_hand: u64 = 0x1F00; // Royal flush clubs (A-K-Q-J-T of clubs)
 
     const slow_result = slow_evaluator.evaluateHand(test_hand);
-    const fast_result = evaluator.evaluate_hand(test_hand);
+    const fast_result = evaluator.evaluateHand(test_hand);
 
     print("Test hand:         0x{X}\n", .{test_hand});
     print("Slow evaluator:    {d}\n", .{slow_result});

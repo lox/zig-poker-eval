@@ -65,7 +65,7 @@ test "known hand types" {
 
     for (test_hands) |test_case| {
         const slow_rank = slow_evaluator.evaluateHand(test_case.hand);
-        const fast_rank = evaluator.evaluate_hand(test_case.hand);
+        const fast_rank = evaluator.evaluateHand(test_case.hand);
 
         const match = slow_rank == fast_rank;
 
@@ -116,7 +116,7 @@ test "random hands validation" {
 
         if (cards_selected == 7) {
             const slow_rank = slow_evaluator.evaluateHand(hand);
-            const fast_rank = evaluator.evaluate_hand(hand);
+            const fast_rank = evaluator.evaluateHand(hand);
 
             total_count += 1;
 
@@ -148,7 +148,7 @@ test "single hand evaluation" {
     const test_hand: u64 = 0x1F00; // A-K-Q-J-T of clubs
 
     const slow_result = slow_evaluator.evaluateHand(test_hand);
-    const fast_result = evaluator.evaluate_hand(test_hand);
+    const fast_result = evaluator.evaluateHand(test_hand);
 
     // Only print on failure
     if (slow_result != fast_result) {
@@ -165,7 +165,7 @@ test "batch evaluation" {
     const batch = generateRandomHandBatch(&rng);
 
     // Evaluate batch
-    const batch_results = evaluator.evaluate_batch_4(batch);
+    const batch_results = evaluator.evaluateBatch4(batch);
 
     // Validate against single-hand evaluation
     var matches: u32 = 0;
@@ -211,7 +211,7 @@ test "batch correctness validation" {
     // Validate batches
     const batch_size = 4;
     for (test_batches) |batch| {
-        const fast_results = evaluator.evaluate_batch_4(batch);
+        const fast_results = evaluator.evaluateBatch4(batch);
 
         for (0..batch_size) |j| {
             const slow_result = slow_evaluator.evaluateHand(batch[j]);
@@ -242,7 +242,7 @@ test "single hand evaluation benchmark correctness" {
     for (0..1000) |_| {
         const test_hand = generateRandomHand(&rng);
         const slow_result = slow_evaluator.evaluateHand(test_hand);
-        const fast_result = evaluator.evaluate_hand(test_hand);
+        const fast_result = evaluator.evaluateHand(test_hand);
         
         try std.testing.expectEqual(slow_result, fast_result);
     }
@@ -256,7 +256,7 @@ test "hybrid evaluator batch accuracy" {
     // Generate batches and validate
     for (0..50) |_| {
         const batch = generateRandomHandBatch(&rng);
-        const batch_results = evaluator.evaluate_batch_4(batch);
+        const batch_results = evaluator.evaluateBatch4(batch);
         
         const batch_size = 4;
         for (0..batch_size) |i| {

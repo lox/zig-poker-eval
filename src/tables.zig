@@ -9237,6 +9237,6 @@ pub inline fn lookup(rpc: u32) u16 {
     return mphf.lookup(rpc, CHD_MAGIC_CONSTANT, &chd_g_array, &chd_value_table, CHD_TABLE_SIZE);
 }
 
-pub inline fn flush_lookup(pattern: u16) u16 {
+pub inline fn flushLookup(pattern: u16) u16 {
     return flush_lookup_table[pattern];
 }

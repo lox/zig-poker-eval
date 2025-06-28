@@ -44,7 +44,7 @@ pub inline fn lookup(key: u32, magic_constant: u64, g_array: []const u8, value_t
 }
 
 // CHD hash function for table construction
-pub fn hash_key(key: u32, magic_constant: u64) HashResult {
+pub fn hashKey(key: u32, magic_constant: u64) HashResult {
     const h = mix64(@as(u64, key), magic_constant);
     return .{
         .bucket = @intCast(h >> 51),
@@ -53,7 +53,7 @@ pub fn hash_key(key: u32, magic_constant: u64) HashResult {
 }
 
 // Build CHD perfect hash table
-pub fn build_chd(allocator: std.mem.Allocator, patterns: []const Pattern, num_buckets: u32, table_size: u32) !CHDResult {
+pub fn buildChd(allocator: std.mem.Allocator, patterns: []const Pattern, num_buckets: u32, table_size: u32) !CHDResult {
     var g_array = try allocator.alloc(u8, num_buckets);
     var value_table = try allocator.alloc(u16, table_size);
     
@@ -76,7 +76,7 @@ pub fn build_chd(allocator: std.mem.Allocator, patterns: []const Pattern, num_bu
         }
 
         for (patterns) |pattern| {
-            const h = hash_key(pattern.key, magic_constant);
+            const h = hashKey(pattern.key, magic_constant);
             try buckets[h.bucket].append(pattern);
         }
 
@@ -93,13 +93,13 @@ pub fn build_chd(allocator: std.mem.Allocator, patterns: []const Pattern, num_bu
         for (0..num_buckets) |i| {
             bucket_order[i] = @intCast(i);
         }
-        std.sort.pdq(u32, bucket_order, buckets, bucket_size_desc);
+        std.sort.pdq(u32, bucket_order, buckets, bucketSizeDesc);
 
         for (bucket_order) |bucket_id| {
             const bucket = &buckets[bucket_id];
             if (bucket.items.len == 0) continue;
 
-            const displacement = find_displacement(bucket.items, occupied, magic_constant, table_size) orelse {
+            const displacement = findDisplacement(bucket.items, occupied, magic_constant, table_size) orelse {
                 success = false;
                 break;
             };
@@ -108,7 +108,7 @@ pub fn build_chd(allocator: std.mem.Allocator, patterns: []const Pattern, num_bu
 
             // Place all entries
             for (bucket.items) |pattern| {
-                const h = hash_key(pattern.key, magic_constant);
+                const h = hashKey(pattern.key, magic_constant);
                 const slot = (h.base_index + displacement) & (table_size - 1);
                 occupied[slot] = true;
                 value_table[slot] = pattern.value;
@@ -129,11 +129,11 @@ pub fn build_chd(allocator: std.mem.Allocator, patterns: []const Pattern, num_bu
     return error.CHDConstructionFailed;
 }
 
-fn find_displacement(patterns: []const Pattern, occupied: []bool, magic_constant: u64, table_size: u32) ?u32 {
+fn findDisplacement(patterns: []const Pattern, occupied: []bool, magic_constant: u64, table_size: u32) ?u32 {
     for (0..256) |d| {
         var collision = false;
         for (patterns) |pattern| {
-            const h = hash_key(pattern.key, magic_constant);
+            const h = hashKey(pattern.key, magic_constant);
             const slot = (h.base_index + d) & (table_size - 1);
             if (occupied[slot]) {
                 collision = true;
@@ -145,6 +145,6 @@ fn find_displacement(patterns: []const Pattern, occupied: []bool, magic_constant
     return null;
 }
 
-fn bucket_size_desc(buckets: []std.ArrayList(Pattern), a: u32, b: u32) bool {
+fn bucketSizeDesc(buckets: []std.ArrayList(Pattern), a: u32, b: u32) bool {
     return buckets[a].items.len > buckets[b].items.len;
 }
