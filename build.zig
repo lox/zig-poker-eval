@@ -13,6 +13,7 @@ pub fn build(b: *std.Build) void {
     const poker_mod = b.addModule("poker", .{
         .root_source_file = b.path("src/poker/mod.zig"),
     });
+    poker_mod.addImport("evaluator", evaluator_mod);
 
     // Define tools module
     const tools_mod = b.addModule("tools", .{
