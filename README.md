@@ -1,6 +1,6 @@
 # Zig Poker Evaluator & Analysis Toolkit
 
-A comprehensive high-performance poker hand evaluator and analysis toolkit in Zig 0.14.0. Combines ultra-fast 7-card hand evaluation (~8ns per hand) with complete poker analysis capabilities including equity calculations, range analysis, and Monte Carlo simulations.
+A comprehensive high-performance poker hand evaluator and analysis toolkit in Zig 0.14.0. Combines ultra-fast 7-card hand evaluation (~7ns per hand) with complete poker analysis capabilities including equity calculations, range analysis, and Monte Carlo simulations.
 
 ## Setup
 
@@ -19,7 +19,7 @@ zig build run
 # Run demo (hand evaluation + SIMD batching)
 zig build run -- demo
 
-# Parse poker ranges
+# Parse poker ranges (currently working)
 zig build run -- range "AA,KK,AKs"
 
 # Run comprehensive benchmark
@@ -34,12 +34,29 @@ zig build test
 
 ## Examples
 
-### Hand Evaluation
+### High-Performance Hand Evaluation
 
 ```zig
-const poker = @import("poker.zig");
+const evaluator = @import("evaluator");
 
-// Create a 7-card hand (hole cards + community cards)
+// Single hand evaluation (7-card hand encoded as u64)
+const hand: u64 = 0x1F00000000000; // Royal flush pattern
+const rank = evaluator.evaluateHand(hand); // Lower rank = stronger hand
+
+// SIMD batch evaluation (4 hands simultaneously) 
+var rng = std.Random.DefaultPrng.init(42).random();
+const batch = evaluator.generateRandomHandBatch(&rng);
+const results = evaluator.evaluateBatch4(batch); // 1.5x speedup
+
+// Performance: ~7ns per hand, 140M+ hands/sec
+```
+
+### Poker Analysis (using integrated poker module)
+
+```zig
+const poker = @import("poker");
+
+// Create a 7-card hand (hole cards + community cards)  
 const hand = poker.createHand(&.{
     .{ .hearts, .ace },   // Hole card 1
     .{ .spades, .ace },   // Hole card 2
@@ -56,15 +73,14 @@ const rank = hand.evaluate(); // .straight_flush (royal flush)
 ### Equity Calculation
 
 ```zig
-const equity = @import("equity.zig");
-const poker = @import("poker.zig");
+const poker = @import("poker");
 
 // Calculate preflop equity using simplified parsing
 const aa = poker.mustParseHoleCards("AhAs");
 const kk = poker.mustParseHoleCards("KdKc");
 
 var prng = std.Random.DefaultPrng.init(42);
-const result = try equity.monteCarlo(aa, kk, &.{}, 100000, prng.random(), allocator);
+const result = try poker.monteCarlo(aa, kk, &.{}, 100000, prng.random(), allocator);
 // result.equity() ≈ 0.80 (80% equity for AA vs KK preflop)
 
 // Multi-way equity with postflop board
@@ -72,28 +88,29 @@ const qq = poker.mustParseHoleCards("QhQs");
 const board_cards = poker.mustParseCards("AdKh7s");
 
 var hands = [_][2]poker.Card{ aa, kk, qq };
-const results = try equity.multiway(&hands, &board_cards, 50000, prng.random(), allocator);
+const results = try poker.evaluateShowdown(&hands, &board_cards, 50000, prng.random(), allocator);
 defer allocator.free(results);
 // results[0].equity() ≈ 0.42 (AA equity in 3-way pot)
 ```
 
-### Range vs Range Equity
+### Range Analysis
 
 ```zig
-const ranges = @import("ranges.zig");
+const poker = @import("poker");
 
 // Create ranges using standard poker notation
-var hero_range = try ranges.parseRange("AA,KK,QQ,AKs,AQs", allocator);  // Tight range
+var hero_range = try poker.parseRange("AA,KK,QQ,AKs,AQs", allocator);  // Tight range
 defer hero_range.deinit();
 
-var villain_range = try ranges.parseRange("TT,99,88,KQs,QJs", allocator); // Calling range
+var villain_range = try poker.parseRange("TT,99,88,KQs,QJs", allocator); // Calling range
 defer villain_range.deinit();
 
-// Calculate range vs range equity
-const result = try ranges.calculateRangeEquityMonteCarlo(
-    &hero_range, &villain_range, &.{}, 10000, rng, allocator
-);
-// Hero: 49.5%, Villain: 50.5%
+// Analyze range combinations
+std.debug.print("Hero range: {} combinations\n", .{hero_range.handCount()});
+std.debug.print("Villain range: {} combinations\n", .{villain_range.handCount()});
+
+// Range vs range equity calculation (via poker module)
+// Full implementation available through integrated analysis tools
 ```
 
 ### Range Notation Syntax
@@ -137,20 +154,20 @@ Running benchmark with 100000 iterations...
 ### CLI Commands
 
 ```bash
-# Range analysis
-poker-eval range "AA,KK,AKs"              # 16 combinations
-poker-eval range "AA-TT,AKs,AQs" --verbose
+# Range analysis (currently working)
+zig build run -- range "AA,KK,AKs"              # 16 combinations
+zig build run -- range "AA-TT,AKs,AQs" --verbose
 
 # Hand evaluation (coming soon)
-poker-eval eval "AhAsKhQsJhThTc"
+zig build run -- eval "AhAsKhQsJhThTc"
 
-# Equity analysis (coming soon)
-poker-eval equity "AhAs" "KdKc" --sims 100000
+# Equity analysis (coming soon)  
+zig build run -- equity "AhAs" "KdKc" --sims 100000
 
-# Advanced benchmarking
-poker-eval bench --iterations 1000000     # Custom iterations
-poker-eval bench --validate --test        # With validation
-poker-eval bench --test-hand 0x1F00       # Test specific hands
+# Advanced benchmarking (fully functional)
+zig build run -- bench --iterations 1000000     # Custom iterations
+zig build run -- bench --validate --test        # With validation
+zig build run -- bench --test-hand 0x1F00       # Test specific hands
 ```
 
 ### Architecture
@@ -176,52 +193,42 @@ poker-eval bench --test-hand 0x1F00       # Test specific hands
 #### Tools (`src/tools/`)
 - **`benchmark.zig`**: Comprehensive benchmarking framework with statistical analysis
 
-## Profiling
+## Benchmarking & Profiling
 
-Two profiling approaches are available for performance analysis:
+The unified CLI provides comprehensive benchmarking with statistical analysis:
 
-### 1. External System Profiling (Recommended)
-Uses macOS `sample` command for real execution context profiling (macOS only):
-
+### Built-in Benchmarking
 ```bash
-# Profile both benchmarks (debug mode for better symbol resolution)
-./scripts/profile_bench.sh
+# Full statistical benchmark with multiple runs
+zig build bench -Doptimize=ReleaseFast
 
-# Profile specific components
-./scripts/profile_bench.sh eval    # Hand evaluation only
-./scripts/profile_bench.sh equity  # Equity calculation only
+# Quick benchmark for development
+zig build run -- bench --quick
+
+# Advanced options
+zig build run -- bench --iterations 1000000 --validate --test
+zig build run -- bench --test-hand 0x1F00 --single-run
 ```
 
-Both will generate a `profile_output.txt` file in the root directory.
-
-**Sample Output:**
-```
-Top functions by sample count:
-19 equity.monteCarlo + 604  /src/equity.zig:48     (73% of samples)
-6  equity.monteCarlo + 488  /src/equity.zig:40     (23% of samples)
-1  equity.monteCarlo + 776  /src/equity.zig:52     (4% of samples)
-```
-
-### 2. Custom Micro-Benchmarking
-For detailed component-level analysis and algorithm comparisons:
-
+### Performance Analysis
 ```bash
-# Run comprehensive micro-benchmark analysis
-zig build profile -Doptimize=ReleaseFast
+# Test specific hand patterns
+zig build run -- bench --test-hand 0x1F00      # Royal flush
+zig build run -- bench --test-hand 0x123456    # Random hand
+
+# Validate against reference implementation  
+zig build run -- bench --validate              # Tests 16K hands
+
+# Comprehensive testing
+zig build run -- bench --test --validate       # Full evaluator test
 ```
 
-**Sample Output:**
-```
-Function                       Calls   Total (ms)   Avg (ns)   Min (ns)   Max (ns)
---------------------------------------------------------------------------------
-full_evaluation               100000        1.555       15.6          0       1000
-rank_extraction               100000        1.634       16.3          0       1000
-flush_detection               100000        1.609       16.1          0       2000
-straight_detection            100000        1.575       15.8          0       1000
-pair_counting                 100000        1.590       15.9          0       2000
-```
-
-For detailed optimization techniques and experimental results, see `EXPERIMENTS.md`.
+The benchmark framework provides:
+- **Statistical Analysis**: Multiple runs, median, coefficient of variation
+- **Cache Warmup**: Proper cache preparation for accurate measurements  
+- **Overhead Measurement**: Framework overhead calculation and subtraction
+- **SIMD Comparison**: Single vs batch performance analysis
+- **Correctness Validation**: 100% accuracy verification against reference
 
 ## Project Structure
 
