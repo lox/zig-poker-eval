@@ -1,6 +1,7 @@
 const std = @import("std");
 const print = std.debug.print;
 const evaluator = @import("slow_evaluator");
+const mphf = @import("mphf.zig");
 
 // Table generation constants
 const CHD_NUM_BUCKETS = 8192; // 2^13 buckets
@@ -288,16 +289,8 @@ fn computeRPC(hand: evaluator.Hand) u32 {
     return rpc;
 }
 
-fn chdHash(key: u32) struct { bucket: u32, base_index: u32 } {
-    var h = @as(u64, key);
-    h ^= h >> 33;
-    h *%= chd_magic_constant;
-    h ^= h >> 29;
-
-    return .{
-        .bucket = @intCast(h >> 51),
-        .base_index = @intCast(h & 0x1FFFF),
-    };
+fn chdHash(key: u32) mphf.HashResult {
+    return mphf.hash_key(key, chd_magic_constant);
 }
 
 fn getTop5Ranks(suit_mask: u16) u16 {
@@ -380,9 +373,11 @@ fn writeTablesFile() !void {
     const w = file.writer();
 
     try w.print("// Generated lookup tables for poker evaluator\n\n", .{});
+    
+    try w.print("const mphf = @import(\"mphf.zig\");\n\n", .{});
 
-    // Write CHD tables
-    try w.print("pub const chd_g_array = [_]u8{{\n", .{});
+    // Write CHD tables (private)
+    try w.print("const chd_g_array = [_]u8{{\n", .{});
     for (chd_g_array, 0..) |val, i| {
         if (i % 16 == 0) try w.print("    ", .{});
         try w.print("{}, ", .{val});
@@ -390,7 +385,7 @@ fn writeTablesFile() !void {
     }
     try w.print("}};\n\n", .{});
 
-    try w.print("pub const chd_value_table = [_]u16{{\n", .{});
+    try w.print("const chd_value_table = [_]u16{{\n", .{});
     for (chd_value_table, 0..) |val, i| {
         if (i % 16 == 0) try w.print("    ", .{});
         try w.print("{}, ", .{val});
@@ -398,7 +393,7 @@ fn writeTablesFile() !void {
     }
     try w.print("}};\n\n", .{});
 
-    try w.print("pub const flush_lookup_table = [_]u16{{\n", .{});
+    try w.print("const flush_lookup_table = [_]u16{{\n", .{});
     for (flush_lookup_table, 0..) |val, i| {
         if (i % 16 == 0) try w.print("    ", .{});
         try w.print("{}, ", .{val});
@@ -406,11 +401,11 @@ fn writeTablesFile() !void {
     }
     try w.print("}};\n\n", .{});
 
-    // Write all CHD constants
+    // Write all CHD constants (private)
     try w.print("// CHD constants\n", .{});
-    try w.print("pub const CHD_MAGIC_CONSTANT: u64 = 0x{X};\n", .{chd_magic_constant});
-    try w.print("pub const CHD_NUM_BUCKETS: u32 = {};\n", .{CHD_NUM_BUCKETS});
-    try w.print("pub const CHD_TABLE_SIZE: u32 = {};\n", .{CHD_TABLE_SIZE});
+    try w.print("const CHD_MAGIC_CONSTANT: u64 = 0x{X};\n", .{chd_magic_constant});
+    try w.print("const CHD_NUM_BUCKETS: u32 = {};\n", .{CHD_NUM_BUCKETS});
+    try w.print("const CHD_TABLE_SIZE: u32 = {};\n", .{CHD_TABLE_SIZE});
     
     // Add compile-time size validation
     try w.print("\n// Compile-time size validation\n", .{});
@@ -419,6 +414,15 @@ fn writeTablesFile() !void {
     try w.print("    std.debug.assert(@sizeOf(@TypeOf(chd_g_array)) == {});\n", .{CHD_NUM_BUCKETS});
     try w.print("    std.debug.assert(@sizeOf(@TypeOf(chd_value_table)) == {} * @sizeOf(u16));\n", .{CHD_TABLE_SIZE});
     try w.print("    std.debug.assert(@sizeOf(@TypeOf(flush_lookup_table)) == 8192 * @sizeOf(u16));\n", .{});
+    try w.print("}}\n\n", .{});
+    
+    // Write public API functions
+    try w.print("// Public API - only expose the functions needed by evaluator\n", .{});
+    try w.print("pub inline fn lookup(rpc: u32) u16 {{\n", .{});
+    try w.print("    return mphf.lookup(rpc, CHD_MAGIC_CONSTANT, &chd_g_array, &chd_value_table, CHD_TABLE_SIZE);\n", .{});
+    try w.print("}}\n\n", .{});
+    try w.print("pub inline fn flush_lookup(pattern: u16) u16 {{\n", .{});
+    try w.print("    return flush_lookup_table[pattern];\n", .{});
     try w.print("}}\n", .{});
 }
 

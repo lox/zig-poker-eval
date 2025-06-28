@@ -1,6 +1,8 @@
 // Generated lookup tables for poker evaluator
 
-pub const chd_g_array = [_]u8{
+const mphf = @import("mphf.zig");
+
+const chd_g_array = [_]u8{
     2, 1, 3, 6, 1, 0, 2, 6, 0, 1, 0, 4, 1, 4, 0, 9, 
     2, 8, 14, 0, 0, 1, 0, 6, 0, 5, 4, 3, 0, 0, 9, 8, 
     5, 0, 1, 4, 1, 0, 0, 5, 1, 2, 3, 5, 3, 3, 1, 0, 
@@ -515,7 +517,7 @@ pub const chd_g_array = [_]u8{
     3, 0, 12, 0, 3, 0, 5, 4, 5, 1, 0, 0, 1, 1, 4, 0, 
 };
 
-pub const chd_value_table = [_]u16{
+const chd_value_table = [_]u16{
     0, 190, 0, 3064, 0, 1934, 0, 0, 266, 0, 0, 2671, 0, 0, 0, 0, 
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 180, 0, 5745, 0, 0, 0, 
     0, 1869, 0, 2666, 0, 2324, 0, 5745, 0, 286, 0, 0, 2732, 169, 1999, 0, 
@@ -8710,7 +8712,7 @@ pub const chd_value_table = [_]u16{
     5965, 0, 0, 0, 2739, 0, 0, 0, 0, 2540, 0, 0, 0, 0, 0, 2474, 
 };
 
-pub const flush_lookup_table = [_]u16{
+const flush_lookup_table = [_]u16{
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1022, 
@@ -9226,9 +9228,9 @@ pub const flush_lookup_table = [_]u16{
 };
 
 // CHD constants
-pub const CHD_MAGIC_CONSTANT: u64 = 0x9E3779B97F4A7C15;
-pub const CHD_NUM_BUCKETS: u32 = 8192;
-pub const CHD_TABLE_SIZE: u32 = 131072;
+const CHD_MAGIC_CONSTANT: u64 = 0x9E3779B97F4A7C15;
+const CHD_NUM_BUCKETS: u32 = 8192;
+const CHD_TABLE_SIZE: u32 = 131072;
 
 // Compile-time size validation
 comptime {
@@ -9236,4 +9238,13 @@ comptime {
     std.debug.assert(@sizeOf(@TypeOf(chd_g_array)) == 8192);
     std.debug.assert(@sizeOf(@TypeOf(chd_value_table)) == 131072 * @sizeOf(u16));
     std.debug.assert(@sizeOf(@TypeOf(flush_lookup_table)) == 8192 * @sizeOf(u16));
+}
+
+// Public API - only expose the functions needed by evaluator
+pub inline fn lookup(rpc: u32) u16 {
+    return mphf.lookup(rpc, CHD_MAGIC_CONSTANT, &chd_g_array, &chd_value_table, CHD_TABLE_SIZE);
+}
+
+pub inline fn flush_lookup(pattern: u16) u16 {
+    return flush_lookup_table[pattern];
 }

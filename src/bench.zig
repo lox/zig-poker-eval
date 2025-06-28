@@ -16,17 +16,7 @@ fn createBatch(hands: []const u64, start_idx: usize) @Vector(BATCH_SIZE, u64) {
 }
 
 fn warmupCaches(test_hands: []const u64) void {
-    // Touch lookup tables
-    const tables = @import("tables.zig");
-    // Touch the CHD tables to warm cache
-    for (tables.chd_g_array[0..@min(1024, tables.chd_g_array.len)]) |displacement| {
-        std.mem.doNotOptimizeAway(displacement);
-    }
-    for (tables.chd_value_table[0..@min(16384, tables.chd_value_table.len)]) |value| {
-        std.mem.doNotOptimizeAway(value);
-    }
-
-    // Touch first portion of hands by evaluating them in batches
+    // Warm up caches by evaluating some hands
     const warmup_hands = @min(65536, test_hands.len); // 64K hands max
     var i: usize = 0;
     while (i + BATCH_SIZE <= warmup_hands) {
