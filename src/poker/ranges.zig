@@ -526,14 +526,12 @@ test "range notation parsing - comprehensive" {
                 std.debug.print("FAIL: {s} - Expected {} hands, got {}\n", .{ test_case.description, test_case.expected_count, actual_count });
             }
             try std.testing.expectEqual(test_case.expected_count, actual_count);
-
-            std.debug.print("PASS: {s} - {} hands\n", .{ test_case.description, actual_count });
         } else {
             if (result) |_| {
                 std.debug.print("FAIL: {s} - Expected to fail but succeeded\n", .{test_case.description});
                 try std.testing.expect(false);
             } else |_| {
-                std.debug.print("PASS: {s} - Correctly failed\n", .{test_case.description});
+                // Test passed - expected failure occurred
             }
         }
     }
@@ -570,8 +568,6 @@ test "range notation parsing - comma separated ranges" {
             std.debug.print("FAIL: {s} - Expected {} hands, got {}\n", .{ test_case.description, test_case.expected_count, actual_count });
         }
         try std.testing.expectEqual(test_case.expected_count, actual_count);
-
-        std.debug.print("PASS: {s} - {} hands\n", .{ test_case.description, actual_count });
     }
 }
 

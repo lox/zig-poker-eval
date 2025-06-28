@@ -315,5 +315,4 @@ test "ultra-simple API works for all examples" {
     defer allocator.free(r4);
     try std.testing.expect(r4.len == 24); // 6+12+6 = 24
 
-    std.debug.print("Ultra-simple API with just parse() works!\n", .{});
 }
