@@ -80,17 +80,38 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the poker evaluator");
     run_step.dependOn(&run_cmd.step);
 
-    // Test step - run tests from all modules together
+    // Test step - run tests from all modules
     const test_step = b.step("test", "Run all unit tests");
 
-    // All tests in one runner - using direct file imports for simplicity
-    const all_tests = b.addTest(.{
-        .root_source_file = b.path("src/test.zig"),
+    // Test each module individually with proper dependencies
+
+    // Card module tests (no dependencies)
+    const card_tests = b.addTest(.{
+        .root_source_file = b.path("src/card/mod.zig"),
         .target = target,
         .optimize = optimize,
     });
-    // No module dependencies - tests use direct relative imports
+    const run_card_tests = b.addRunArtifact(card_tests);
+    test_step.dependOn(&run_card_tests.step);
 
-    const run_all_tests = b.addRunArtifact(all_tests);
-    test_step.dependOn(&run_all_tests.step);
+    // Evaluator module tests (depends on card)
+    const evaluator_tests = b.addTest(.{
+        .root_source_file = b.path("src/evaluator/mod.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    evaluator_tests.root_module.addImport("card", card_mod);
+    const run_evaluator_tests = b.addRunArtifact(evaluator_tests);
+    test_step.dependOn(&run_evaluator_tests.step);
+
+    // Poker module tests (depends on card and evaluator)
+    const poker_tests = b.addTest(.{
+        .root_source_file = b.path("src/poker/mod.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    poker_tests.root_module.addImport("card", card_mod);
+    poker_tests.root_module.addImport("evaluator", evaluator_mod);
+    const run_poker_tests = b.addRunArtifact(poker_tests);
+    test_step.dependOn(&run_poker_tests.step);
 }

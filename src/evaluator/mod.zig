@@ -1,5 +1,5 @@
 const std = @import("std");
-const card = @import("../card/mod.zig");
+const card = @import("card");
 
 // Import internal modules
 const evaluator_impl = @import("evaluator.zig");

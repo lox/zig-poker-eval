@@ -8,7 +8,8 @@ See [DESIGN.md](DESIGN.md) for complete design specification.
 ## Build Commands (Zig 0.14.0)
 - `zig build` - Build main executable
 - `zig build run` - Run main poker evaluator
-- `zig build test` - Run all unit tests
+- `zig build test` - Run all unit tests (63 tests across all modules)
+- `zig build test --summary all` - Run tests with detailed summary of all modules
 - `zig build bench -Doptimize=ReleaseFast` - Run performance benchmark (target: 2-5ns/hand)
 - `zig build build-tables -Doptimize=ReleaseFast` - Generate lookup tables (manual use only, creates src/tables.zig)
 

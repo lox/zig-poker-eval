@@ -30,8 +30,8 @@ repos:
         language: system
         files: \.zig$
       - id: zig-test
-        name: zig test src/test.zig
-        entry: zig test src/test.zig
+        name: zig build test
+        entry: zig build test
         language: system
         files: \.zig$
         pass_filenames: false
