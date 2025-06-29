@@ -4,41 +4,66 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Define card module (source of truth for card format)
+    // Define core modules in dependency order
+
+    // Level 1: Card module (no dependencies)
     const card_mod = b.addModule("card", .{
-        .root_source_file = b.path("src/card/mod.zig"),
+        .root_source_file = b.path("src/card.zig"),
     });
 
-    // Define evaluator module
+    // Level 2: Evaluator module (depends on card)
     const evaluator_mod = b.addModule("evaluator", .{
-        .root_source_file = b.path("src/evaluator/mod.zig"),
+        .root_source_file = b.path("src/evaluator.zig"),
     });
     evaluator_mod.addImport("card", card_mod);
 
-    // Define poker module
+    // Level 3: Hand module (depends on card)
+    const hand_mod = b.addModule("hand", .{
+        .root_source_file = b.path("src/hand.zig"),
+    });
+    hand_mod.addImport("card", card_mod);
+
+    // Level 3: Range module (depends on card, hand)
+    const range_mod = b.addModule("range", .{
+        .root_source_file = b.path("src/range.zig"),
+    });
+    range_mod.addImport("card", card_mod);
+    range_mod.addImport("hand", hand_mod);
+
+    // Level 3: Equity module (depends on card, evaluator)
+    const equity_mod = b.addModule("equity", .{
+        .root_source_file = b.path("src/equity.zig"),
+    });
+    equity_mod.addImport("card", card_mod);
+    equity_mod.addImport("evaluator", evaluator_mod);
+
+    // Level 4: Main poker module (depends on all others)
     const poker_mod = b.addModule("poker", .{
-        .root_source_file = b.path("src/poker/mod.zig"),
+        .root_source_file = b.path("src/poker.zig"),
     });
     poker_mod.addImport("card", card_mod);
     poker_mod.addImport("evaluator", evaluator_mod);
+    poker_mod.addImport("hand", hand_mod);
+    poker_mod.addImport("range", range_mod);
+    poker_mod.addImport("equity", equity_mod);
 
-    // Define tools module
+    // Tools module (depends on poker for benchmarking)
     const tools_mod = b.addModule("tools", .{
         .root_source_file = b.path("src/tools/benchmark.zig"),
     });
-    tools_mod.addImport("evaluator", evaluator_mod);
+    tools_mod.addImport("poker", poker_mod);
 
     // Table builder executable (for manual table regeneration)
     const table_builder = b.addExecutable(.{
         .name = "build_tables",
-        .root_source_file = b.path("src/evaluator/build_tables.zig"),
+        .root_source_file = b.path("src/internal/build_tables.zig"),
         .target = target,
         .optimize = optimize,
     });
 
     // Add module path for slow evaluator (needed by table builder)
     const slow_evaluator = b.createModule(.{
-        .root_source_file = b.path("src/evaluator/slow_evaluator.zig"),
+        .root_source_file = b.path("src/internal/slow_evaluator.zig"),
     });
     table_builder.root_module.addImport("slow_evaluator", slow_evaluator);
 
@@ -54,8 +79,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    exe.root_module.addImport("card", card_mod);
-    exe.root_module.addImport("evaluator", evaluator_mod);
+    // CLI only needs the main poker module (which provides everything)
     exe.root_module.addImport("poker", poker_mod);
     exe.root_module.addImport("tools", tools_mod);
 
@@ -87,7 +111,7 @@ pub fn build(b: *std.Build) void {
 
     // Card module tests (no dependencies)
     const card_tests = b.addTest(.{
-        .root_source_file = b.path("src/card/mod.zig"),
+        .root_source_file = b.path("src/card.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -96,7 +120,7 @@ pub fn build(b: *std.Build) void {
 
     // Evaluator module tests (depends on card)
     const evaluator_tests = b.addTest(.{
-        .root_source_file = b.path("src/evaluator/mod.zig"),
+        .root_source_file = b.path("src/evaluator.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -104,14 +128,49 @@ pub fn build(b: *std.Build) void {
     const run_evaluator_tests = b.addRunArtifact(evaluator_tests);
     test_step.dependOn(&run_evaluator_tests.step);
 
-    // Poker module tests (depends on card and evaluator)
+    // Hand module tests (depends on card)
+    const hand_tests = b.addTest(.{
+        .root_source_file = b.path("src/hand.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    hand_tests.root_module.addImport("card", card_mod);
+    const run_hand_tests = b.addRunArtifact(hand_tests);
+    test_step.dependOn(&run_hand_tests.step);
+
+    // Range module tests (depends on card, hand)
+    const range_tests = b.addTest(.{
+        .root_source_file = b.path("src/range.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    range_tests.root_module.addImport("card", card_mod);
+    range_tests.root_module.addImport("hand", hand_mod);
+    const run_range_tests = b.addRunArtifact(range_tests);
+    test_step.dependOn(&run_range_tests.step);
+
+    // Equity module tests (depends on card, evaluator)
+    const equity_tests = b.addTest(.{
+        .root_source_file = b.path("src/equity.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    equity_tests.root_module.addImport("card", card_mod);
+    equity_tests.root_module.addImport("evaluator", evaluator_mod);
+    const run_equity_tests = b.addRunArtifact(equity_tests);
+    test_step.dependOn(&run_equity_tests.step);
+
+    // Main poker module tests (depends on all modules)
     const poker_tests = b.addTest(.{
-        .root_source_file = b.path("src/poker/mod.zig"),
+        .root_source_file = b.path("src/poker.zig"),
         .target = target,
         .optimize = optimize,
     });
     poker_tests.root_module.addImport("card", card_mod);
     poker_tests.root_module.addImport("evaluator", evaluator_mod);
+    poker_tests.root_module.addImport("hand", hand_mod);
+    poker_tests.root_module.addImport("range", range_mod);
+    poker_tests.root_module.addImport("equity", equity_mod);
     const run_poker_tests = b.addRunArtifact(poker_tests);
     test_step.dependOn(&run_poker_tests.step);
 }

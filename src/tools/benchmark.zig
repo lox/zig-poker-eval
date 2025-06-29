@@ -1,5 +1,5 @@
 const std = @import("std");
-const evaluator = @import("evaluator");
+const poker = @import("poker");
 
 pub const BenchmarkOptions = struct {
     iterations: u32 = 100000,
@@ -39,8 +39,8 @@ fn warmupCaches(test_hands: []const u64) void {
 
     // Warm up by evaluating some random hands
     for (0..1024) |_| {
-        const hand = evaluator.generateRandomHand(&rng);
-        std.mem.doNotOptimizeAway(evaluator.evaluateHand(hand));
+        const hand = poker.generateRandomHand(&rng);
+        std.mem.doNotOptimizeAway(poker.evaluateHand(hand));
     }
 
     // Touch first portion of hands by evaluating them in batches
@@ -48,7 +48,7 @@ fn warmupCaches(test_hands: []const u64) void {
     var i: usize = 0;
     while (i + BATCH_SIZE <= warmup_hands) {
         const batch = createBatch(test_hands, i);
-        _ = evaluator.evaluateBatch4(batch);
+        _ = poker.evaluateBatch4(batch);
         i += BATCH_SIZE;
     }
 }
@@ -88,7 +88,7 @@ fn runSingleBenchmark(iterations: u32, test_hands: []const u64) f64 {
         // Create batch from consecutive hands
         const batch = createBatch(test_hands, hand_idx);
 
-        const results = evaluator.evaluateBatch4(batch);
+        const results = poker.evaluateBatch4(batch);
         for (0..BATCH_SIZE) |j| {
             checksum +%= results[j];
         }
@@ -127,7 +127,7 @@ fn benchmarkSingleHand(test_hands: []const u64, count: u32) f64 {
     const start = std.time.nanoTimestamp();
 
     for (0..count) |i| {
-        checksum +%= evaluator.evaluateHand(test_hands[i % test_hands.len]);
+        checksum +%= poker.evaluateHand(test_hands[i % test_hands.len]);
     }
 
     const end = std.time.nanoTimestamp();
@@ -147,7 +147,7 @@ pub fn runBenchmark(options: BenchmarkOptions, allocator: std.mem.Allocator) !Be
     defer allocator.free(test_hands);
 
     for (test_hands) |*hand| {
-        hand.* = evaluator.generateRandomHand(&rng);
+        hand.* = poker.generateRandomHand(&rng);
     }
 
     var result = BenchmarkResult{
@@ -222,10 +222,10 @@ pub fn validateCorrectness(test_hands: []const u64) !bool {
     while (i + BATCH_SIZE <= validation_hands) {
         const batch = createBatch(test_hands, i);
 
-        const fast_results = evaluator.evaluateBatch4(batch);
+        const fast_results = poker.evaluateBatch4(batch);
 
         for (0..BATCH_SIZE) |j| {
-            const slow_result = evaluator.slow.evaluateHand(test_hands[i + j]);
+            const slow_result = poker.slow.evaluateHand(test_hands[i + j]);
             const fast_result = fast_results[j];
 
             if (slow_result == fast_result) {
@@ -250,10 +250,10 @@ pub fn validateCorrectness(test_hands: []const u64) !bool {
 pub fn testEvaluator() !void {
     var prng = std.Random.DefaultPrng.init(42);
     var rng = prng.random();
-    const batch = evaluator.generateRandomHandBatch(&rng);
+    const batch = poker.generateRandomHandBatch(&rng);
 
     // Evaluate batch
-    const batch_results = evaluator.evaluateBatch4(batch);
+    const batch_results = poker.evaluateBatch4(batch);
 
     // Validate against single-hand evaluation
     var matches: u32 = 0;
@@ -261,7 +261,7 @@ pub fn testEvaluator() !void {
     for (0..BATCH_SIZE) |i| {
         const hand = batch[i];
         const batch_result = batch_results[i];
-        const single_result = evaluator.slow.evaluateHand(hand);
+        const single_result = poker.slow.evaluateHand(hand);
 
         if (batch_result == single_result) {
             matches += 1;
@@ -275,8 +275,8 @@ pub fn testEvaluator() !void {
 
 // Test a specific hand for debugging
 pub fn testSingleHand(hand: u64) struct { slow: u16, fast: u16, match: bool } {
-    const slow_result = evaluator.slow.evaluateHand(hand);
-    const fast_result = evaluator.evaluateHand(hand);
+    const slow_result = poker.slow.evaluateHand(hand);
+    const fast_result = poker.evaluateHand(hand);
 
     return .{
         .slow = slow_result,

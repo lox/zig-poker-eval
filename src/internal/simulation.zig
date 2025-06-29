@@ -1,5 +1,6 @@
 const std = @import("std");
 const card = @import("card");
+const hand = @import("hand");
 const poker = @import("poker.zig");
 const evaluator = @import("evaluator");
 
@@ -84,18 +85,17 @@ pub fn evaluateShowdownHeadToHead(hand1: card.Hand, hand2: card.Hand) i8 {
 }
 
 // Sample remaining cards, avoiding conflicts with used cards
-pub fn sampleRemainingCards(used_cards: []const card.Hand, num_cards: u8, rng: std.Random, allocator: std.mem.Allocator) ![]card.Hand {
-    const used_bits = cardSliceToBitmask(used_cards);
-
-    var sampled_cards: u64 = 0;
+// Returns Hand (CardSet) with num_cards randomly sampled
+pub fn sampleRemainingCards(used_cards: card.Hand, num_cards: u8, rng: std.Random) card.Hand {
+    var sampled_cards: card.Hand = 0;
     var cards_sampled: u8 = 0;
 
     while (cards_sampled < num_cards) {
         const card_idx = rng.uintLessThan(u8, 52);
-        const card_bit = @as(u64, 1) << @intCast(card_idx);
+        const card_bit = @as(card.Hand, 1) << @intCast(card_idx);
 
         // Skip if card already used or sampled
-        if ((used_bits & card_bit) != 0 or (sampled_cards & card_bit) != 0) {
+        if ((used_cards & card_bit) != 0 or (sampled_cards & card_bit) != 0) {
             continue;
         }
 
@@ -103,20 +103,15 @@ pub fn sampleRemainingCards(used_cards: []const card.Hand, num_cards: u8, rng: s
         cards_sampled += 1;
     }
 
-    return bitmaskToCardSlice(sampled_cards, allocator);
-}
-
-// Combine hole cards + board into Hand for evaluation - delegates to poker module
-pub fn combineCards(hole_cards: [2]card.Hand, board_cards: []const card.Hand) card.Hand {
-    return card.fromHoleAndBoard(hole_cards, board_cards);
+    return sampled_cards;
 }
 
 // Extract individual cards not in used cards for enumeration
-pub fn enumerateRemainingCards(used_cards: []const card.Hand, allocator: std.mem.Allocator) ![]card.Hand {
-    const used_bits = cardSliceToBitmask(used_cards);
+// Get remaining cards as CardSet (bitmask)
+pub fn enumerateRemainingCards(used_cards: card.Hand) card.Hand {
     // All cards bitmask minus used cards
-    const remaining_bits = ~used_bits & ((1 << 52) - 1);
-    return bitmaskToCardSlice(remaining_bits, allocator);
+    const all_cards_mask = (@as(card.Hand, 1) << 52) - 1;
+    return ~used_cards & all_cards_mask;
 }
 
 // Get all possible combinations of n cards from remaining deck
@@ -221,45 +216,38 @@ test "card sampling" {
     var prng = std.Random.DefaultPrng.init(42);
     const rng = prng.random();
 
-    // Use AA as hole cards
-    const used_cards = card.mustParseCards("AhAs");
-    const sampled = try sampleRemainingCards(&used_cards, 5, rng, allocator);
-    defer allocator.free(sampled);
+    // Use AA as hole cards (CardSet approach)
+    const used_cards = hand.mustParseHand("AhAs");
+    const sampled = sampleRemainingCards(used_cards, 5, rng);
 
     // Should have exactly 5 cards
-    try testing.expect(sampled.len == 5);
+    try testing.expect(card.countCards(sampled) == 5);
 
-    // Should not conflict with used cards (no AA in sampled)
-    var used_bits: u64 = 0;
-    for (used_cards) |used_card| {
-        used_bits |= used_card;
-    }
-    var sampled_bits: u64 = 0;
-    for (sampled) |sampled_card| {
-        sampled_bits |= sampled_card;
-    }
-    try testing.expect((used_bits & sampled_bits) == 0);
+    // Should not conflict with used cards (no overlap)
+    try testing.expect((used_cards & sampled) == 0);
 }
 
 test "card combination" {
-    // Use comptime parsing - no allocation needed
-    const hole_cards = card.mustParseCards("AhAs");
-    const board_cards = card.mustParseCards("KdQcJh2s3d");
+    // Use comptime parsing with CardSet approach
+    const hole_cards = hand.mustParseHand("AhAs");
+    const board_cards = hand.mustParseHand("KdQcJh2s3d");
 
-    const combined = combineCards(hole_cards, &board_cards);
+    const combined = hole_cards | board_cards;
+
+    // Verify we have 7 cards total
+    try testing.expect(card.countCards(combined) == 7);
+
     // Test that we can evaluate the combined hand
     const result = evaluator.evaluateHand(combined);
     try testing.expect(result >= 1 and result <= 7462); // Hand rank values
 }
 
 test "enumerate remaining cards" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const used_cards = hand.mustParseHand("AhAs");
+    const remaining = enumerateRemainingCards(used_cards);
 
-    const used_cards = card.mustParseCards("AhAs");
-    const remaining = try enumerateRemainingCards(&used_cards, allocator);
-    defer allocator.free(remaining);
+    try testing.expect(card.countCards(remaining) == 50); // 52 - 2 used cards
 
-    try testing.expect(remaining.len == 50); // 52 - 2 used cards
+    // Verify no overlap with used cards
+    try testing.expect((used_cards & remaining) == 0);
 }

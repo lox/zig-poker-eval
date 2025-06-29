@@ -132,6 +132,26 @@ fn parseCard(input: []const u8) !card.Hand {
     return card.makeCardFromEnums(suit, rank);
 }
 
+/// Helper function to extract rank from a single card Hand for testing
+/// Returns poker rank (2-14) from a single card's bits
+fn getSingleCardRank(single_card: card.Hand) u8 {
+    // Check each suit to find which one has the card
+    const suits = [4]card.Suit{ .clubs, .diamonds, .hearts, .spades };
+    for (suits) |suit| {
+        const suit_mask = card.getSuitMask(single_card, suit);
+        if (suit_mask != 0) {
+            // Find the rank within this suit
+            const ranks = [13]card.Rank{ .two, .three, .four, .five, .six, .seven, .eight, .nine, .ten, .jack, .queen, .king, .ace };
+            for (ranks, 0..) |rank, rank_idx| {
+                if ((suit_mask & (@as(u16, 1) << @intCast(rank_idx))) != 0) {
+                    return @intFromEnum(rank) + 2; // Convert to poker rank (2-14)
+                }
+            }
+        }
+    }
+    return @intFromEnum(card.Rank.two) + 2; // Fallback
+}
+
 /// Internal function to parse comma-separated ranges
 fn parseRange(range_str: []const u8, allocator: std.mem.Allocator) ![]const [2]card.Hand {
     var hands_list = std.ArrayList([2]card.Hand).init(allocator);
@@ -279,16 +299,20 @@ test "parse and pick random (user pattern)" {
     const aa_combos = try parse("AA", allocator);
     defer allocator.free(aa_combos);
     const random_aa = aa_combos[rng.intRangeLessThan(usize, 0, aa_combos.len)];
-    try std.testing.expect(card.handToCard(random_aa[0]).getRank() == 14); // Both aces
-    try std.testing.expect(card.handToCard(random_aa[1]).getRank() == 14);
+    const ace_value = @intFromEnum(card.Rank.ace) + 2; // 14
+    try std.testing.expect(getSingleCardRank(random_aa[0]) == ace_value); // Both aces
+    try std.testing.expect(getSingleCardRank(random_aa[1]) == ace_value);
 
     // Same for ranges
     const range_combos = try parse("AA,KK,QQ", allocator);
     defer allocator.free(range_combos);
     const random_pair = range_combos[rng.intRangeLessThan(usize, 0, range_combos.len)];
-    const rank = card.handToCard(random_pair[0]).getRank();
-    try std.testing.expect(rank == 14 or rank == 13 or rank == 12); // A, K, or Q
-    try std.testing.expect(card.handToCard(random_pair[0]).getRank() == card.handToCard(random_pair[1]).getRank()); // Same rank
+    const rank = getSingleCardRank(random_pair[0]);
+    const ace_value = @intFromEnum(card.Rank.ace) + 2; // 14
+    const king_value = @intFromEnum(card.Rank.king) + 2; // 13
+    const queen_value = @intFromEnum(card.Rank.queen) + 2; // 12
+    try std.testing.expect(rank == ace_value or rank == king_value or rank == queen_value);
+    try std.testing.expect(getSingleCardRank(random_pair[0]) == getSingleCardRank(random_pair[1])); // Same rank
 }
 
 test "ultra-simple API works for all examples" {

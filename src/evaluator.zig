@@ -1,10 +1,46 @@
 const std = @import("std");
-const tables = @import("tables.zig");
+const card = @import("card");
 
-// High-performance evaluator with SIMD batching
+// Internal dependencies
+const tables = @import("internal/tables.zig");
+const slow_eval = @import("internal/slow_evaluator.zig");
+
+/// Hand rank type - lower numbers represent stronger hands
+pub const HandRank = u16;
+
+/// Hand categories from weakest to strongest
+pub const HandCategory = enum(u4) {
+    high_card = 1,
+    pair = 2,
+    two_pair = 3,
+    three_of_a_kind = 4,
+    straight = 5,
+    flush = 6,
+    full_house = 7,
+    four_of_a_kind = 8,
+    straight_flush = 9,
+};
+
+/// Convert evaluator rank (lower=better) to HandCategory enum
+pub fn getHandCategory(rank: HandRank) HandCategory {
+    // Evaluator uses lower numbers for better hands
+    // These ranges are based on the actual slow evaluator implementation
+    if (rank <= 10) return .straight_flush; // Royal flush + straight flushes (0-10)
+    if (rank <= 165) return .four_of_a_kind; // Four of a kind (10-165)
+    if (rank <= 321) return .full_house; // Full house (166-321)
+    if (rank <= 1598) return .flush; // Flush (322-1598)
+    if (rank <= 1608) return .straight; // Straight (1599-1608)
+    if (rank <= 2466) return .three_of_a_kind; // Three of a kind (1609-2466)
+    if (rank <= 3324) return .two_pair; // Two pair (2467-3324)
+    if (rank <= 6184) return .pair; // One pair (3325-6184)
+    return .high_card; // High card (6185-7461)
+}
+
+// === Core Constants ===
+
 const RANK_MASK = 0x1FFF; // 13 bits for ranks
 
-// === Scalar RPC Computation (for single hands and flushes) ===
+// === Scalar RPC Computation ===
 
 fn computeRpcFromHand(hand: u64) u32 {
     var rank_counts = [_]u8{0} ** 13;
@@ -26,7 +62,7 @@ fn computeRpcFromHand(hand: u64) u32 {
     return rpc;
 }
 
-// === SIMD RPC Computation (for 4-hand batches) ===
+// === SIMD RPC Computation ===
 
 fn computeRpcSimd4(hands: [4]u64) [4]u32 {
     // Extract suits for all 4 hands (structure-of-arrays)
@@ -77,6 +113,8 @@ fn computeRpcSimd4(hands: [4]u64) [4]u32 {
 fn chdLookupScalar(rpc: u32) u16 {
     return tables.lookup(rpc);
 }
+
+// === Flush Detection and Pattern Extraction ===
 
 pub fn isFlushHand(hand: u64) bool {
     const suits = [4]u16{
@@ -139,7 +177,9 @@ fn getTop5Ranks(suit_mask: u16) u16 {
 
 // === Public API ===
 
-pub fn evaluateHand(hand: u64) u16 {
+/// Evaluate a single 7-card hand and return its rank
+/// Lower ranks represent stronger hands (0 = royal flush, 7461 = worst high card)
+pub fn evaluateHand(hand: card.Hand) HandRank {
     if (isFlushHand(hand)) {
         const pattern = getFlushPattern(hand);
         return tables.flushLookup(pattern);
@@ -149,16 +189,7 @@ pub fn evaluateHand(hand: u64) u16 {
     return chdLookupScalar(rpc);
 }
 
-// Simple batch evaluation - leverages SIMD RPC computation with clean control flow
-//
-// This approach was chosen over complex flush mask logic because:
-// - Same performance (7.24 ns/hand) as the complex version (7.29 ns/hand)
-// - Much more readable (8 lines vs 25 lines)
-// - Better LLVM IR generation (more vectorization, no memory allocation)
-// - Simpler control flow allows compiler optimizations to work effectively
-//
-// The SIMD benefits come from compute_rpc_simd4(), not from manual vectorization
-// of the control flow, so we let the compiler handle the conditional evaluation.
+/// Evaluate a batch of 4 hands using SIMD for optimal performance
 pub fn evaluateBatch4(hands: @Vector(4, u64)) @Vector(4, u16) {
     const hands_array = [4]u64{ hands[0], hands[1], hands[2], hands[3] };
 
@@ -174,7 +205,7 @@ pub fn evaluateBatch4(hands: @Vector(4, u64)) @Vector(4, u16) {
     };
 }
 
-// Architecture-adaptive batch processing - processes hands in 4-hand SIMD batches
+/// Process a dynamic number of hands in optimal 4-hand SIMD batches
 pub fn evaluateBatchDynamic(hands: []const u64, results: []u16) void {
     std.debug.assert(hands.len == results.len);
 
@@ -196,7 +227,7 @@ pub fn evaluateBatchDynamic(hands: []const u64, results: []u16) void {
     }
 }
 
-// === Benchmarking ===
+// === Benchmarking Functions ===
 
 pub fn benchmarkSingle(iterations: u32) u64 {
     var sum: u64 = 0;
@@ -223,9 +254,10 @@ pub fn benchmarkBatch(iterations: u32) u64 {
 
 // === Test Utilities ===
 
-const slow_evaluator = @import("slow_evaluator.zig");
+/// Expose slow evaluator for validation
+pub const slow_evaluator = slow_eval;
 
-// Generate random hands for testing (4-hand batches)
+/// Generate a batch of 4 random 7-card hands
 pub fn generateRandomHandBatch(rng: *std.Random) @Vector(4, u64) {
     var hands: [4]u64 = undefined;
 
@@ -236,6 +268,7 @@ pub fn generateRandomHandBatch(rng: *std.Random) @Vector(4, u64) {
     return @as(@Vector(4, u64), hands);
 }
 
+/// Generate a single random 7-card hand
 pub fn generateRandomHand(rng: *std.Random) u64 {
     var hand: u64 = 0;
     var cards_dealt: u8 = 0;
@@ -243,10 +276,10 @@ pub fn generateRandomHand(rng: *std.Random) u64 {
     while (cards_dealt < 7) {
         const suit = rng.intRangeAtMost(u8, 0, 3);
         const rank = rng.intRangeAtMost(u8, 0, 12);
-        const card = slow_evaluator.makeCard(suit, rank);
+        const card_bits = slow_eval.makeCard(suit, rank);
 
-        if ((hand & card) == 0) {
-            hand |= card;
+        if ((hand & card_bits) == 0) {
+            hand |= card_bits;
             cards_dealt += 1;
         }
     }
@@ -256,6 +289,14 @@ pub fn generateRandomHand(rng: *std.Random) u64 {
 
 // === Tests ===
 
+const testing = std.testing;
+
+test "hand category conversion" {
+    try testing.expect(getHandCategory(1) == .straight_flush);
+    try testing.expect(getHandCategory(100) == .four_of_a_kind);
+    try testing.expect(getHandCategory(7000) == .high_card);
+}
+
 test "flush pattern extraction" {
     // Test royal flush in spades: As Ks Qs Js Ts + 2 non-spade cards
     const royal_flush: u64 =
@@ -263,9 +304,9 @@ test "flush pattern extraction" {
         (@as(u64, 0x0040) << 26) | // hearts: 7 (bit 6)
         (@as(u64, 0x0020) << 13); // diamonds: 6 (bit 5)
 
-    try std.testing.expect(isFlushHand(royal_flush));
+    try testing.expect(isFlushHand(royal_flush));
     const pattern = getFlushPattern(royal_flush);
-    try std.testing.expectEqual(@as(u16, 0x1F00), pattern); // A K Q J T pattern
+    try testing.expectEqual(@as(u16, 0x1F00), pattern); // A K Q J T pattern
 }
 
 test "straight flush pattern" {
@@ -275,16 +316,16 @@ test "straight flush pattern" {
         (@as(u64, 0x1000) << 13) | // diamonds: A (bit 12)
         (@as(u64, 0x0800) << 26); // hearts: K (bit 11)
 
-    try std.testing.expect(isFlushHand(straight_flush));
+    try testing.expect(isFlushHand(straight_flush));
     const pattern = getFlushPattern(straight_flush);
-    try std.testing.expectEqual(@as(u16, 0x03E0), pattern); // 9 8 7 6 5 pattern
+    try testing.expectEqual(@as(u16, 0x03E0), pattern); // 9 8 7 6 5 pattern
 }
 
 test "single hand evaluation" {
     // Test a specific hand - Royal flush clubs
     const test_hand: u64 = 0x1F00; // A-K-Q-J-T of clubs
 
-    const slow_result = slow_evaluator.evaluateHand(test_hand);
+    const slow_result = slow_eval.evaluateHand(test_hand);
     const fast_result = evaluateHand(test_hand);
 
     // Only print on failure
@@ -292,7 +333,7 @@ test "single hand evaluation" {
         std.debug.print("Single hand FAIL: hand=0x{X}, slow={}, fast={}\n", .{ test_hand, slow_result, fast_result });
     }
 
-    try std.testing.expectEqual(slow_result, fast_result);
+    try testing.expectEqual(slow_result, fast_result);
 }
 
 test "batch evaluation" {
@@ -311,7 +352,7 @@ test "batch evaluation" {
     for (0..batch_size) |i| {
         const hand = batch[i];
         const batch_result = batch_results[i];
-        const single_result = slow_evaluator.evaluateHand(hand);
+        const single_result = slow_eval.evaluateHand(hand);
 
         if (batch_result == single_result) {
             matches += 1;
@@ -329,5 +370,10 @@ test "batch evaluation" {
         std.debug.print("Batch accuracy: {}/{} ({d:.1}%)\n", .{ matches, batch_size, accuracy });
     }
 
-    try std.testing.expectEqual(@as(u32, @intCast(batch_size)), matches);
+    try testing.expectEqual(@as(u32, @intCast(batch_size)), matches);
+}
+
+// Ensure all tests in this module are discovered
+test {
+    std.testing.refAllDecls(@This());
 }

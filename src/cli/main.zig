@@ -1,6 +1,5 @@
 const std = @import("std");
 const print = std.debug.print;
-const evaluator = @import("evaluator");
 const poker = @import("poker");
 const ansi = @import("ansi.zig");
 const benchmark = @import("tools");
@@ -15,25 +14,28 @@ fn printHandCategories(categories: anytype) void {
 
 const Command = enum { equity, eval, range, bench, demo, help };
 
-fn formatCard(card: poker.Card) [2]u8 {
+fn formatCard(card: poker.Hand) [2]u8 {
     _ = card;
-    // Note: This needs to be adapted based on poker.Card API
+    // Note: This needs to be adapted based on poker.Hand API
     // Placeholder implementation
     return [2]u8{ 'A', 'h' };
 }
 
 /// Parse hand notation (e.g., "AKo", "88", "AhKs") into a specific 2-card hand
-fn parseHandNotation(hand_str: []const u8, rng: std.Random, allocator: std.mem.Allocator) ![2]poker.Card {
-    // Try unified notation parsing first
-    if (poker.parse(hand_str, allocator)) |combinations| {
-        defer allocator.free(combinations);
-        if (combinations.len > 0) {
-            const idx = rng.intRangeLessThan(usize, 0, combinations.len);
-            return combinations[idx];
-        }
-    } else |_| {}
+fn parseHandNotation(hand_str: []const u8, rng: std.Random, allocator: std.mem.Allocator) ![2]poker.Hand {
+    _ = rng;
+    _ = allocator;
 
-    // Fall back to specific card parsing - this needs to be implemented
+    // Try parsing as hole cards first (e.g., "AsKd")
+    if (hand_str.len == 4) {
+        // Parse two specific cards
+        const card1 = poker.parseCard(hand_str[0..2]) catch return error.ParsingFailed;
+        const card2 = poker.parseCard(hand_str[2..4]) catch return error.ParsingFailed;
+        return [2]poker.Hand{ card1, card2 };
+    }
+
+    // For now, return a placeholder for range notation like "AA", "AKs", etc.
+    // TODO: Implement proper range expansion
     return error.ParsingNotYetImplemented;
 }
 
@@ -159,8 +161,8 @@ fn handleEval(config: Config, allocator: std.mem.Allocator) !void {
     print("\nMeanwhile, here's our high-performance evaluator in action:\n", .{});
     var prng = std.Random.DefaultPrng.init(42);
     var rng = prng.random();
-    const test_hand = evaluator.generateRandomHand(&rng);
-    const result = evaluator.evaluateHand(test_hand);
+    const test_hand = poker.generateRandomHand(&rng);
+    const result = poker.evaluateHand(test_hand);
     print("Random hand: 0x{X} -> Rank: {}\n", .{ test_hand, result });
 }
 
@@ -313,7 +315,7 @@ fn handleBench(config: Config, allocator: std.mem.Allocator) !void {
         defer allocator.free(validation_hands);
 
         for (validation_hands) |*hand| {
-            hand.* = evaluator.generateRandomHand(&rng);
+            hand.* = poker.generateRandomHand(&rng);
         }
 
         _ = benchmark.validateCorrectness(validation_hands) catch |err| {
@@ -338,18 +340,18 @@ fn handleDemo(allocator: std.mem.Allocator) !void {
 
     const test_hands = [_]u64{
         0x1F00000000000, // Royal flush pattern
-        evaluator.generateRandomHand(&rng),
-        evaluator.generateRandomHand(&rng),
+        poker.generateRandomHand(&rng),
+        poker.generateRandomHand(&rng),
     };
 
     for (test_hands, 0..) |hand, i| {
-        const result = evaluator.evaluateHand(hand);
+        const result = poker.evaluateHand(hand);
         ansi.printGreen("Hand {}: 0x{X} -> Rank: {}\n", .{ i + 1, hand, result });
     }
 
     ansi.printBold("\n🚀 Batch Processing\n", .{});
-    const batch = evaluator.generateRandomHandBatch(&rng);
-    const batch_results = evaluator.evaluateBatch4(batch);
+    const batch = poker.generateRandomHandBatch(&rng);
+    const batch_results = poker.evaluateBatch4(batch);
 
     for (0..4) |i| {
         ansi.printCyan("Batch[{}]: 0x{X} -> Rank: {}\n", .{ i, batch[i], batch_results[i] });

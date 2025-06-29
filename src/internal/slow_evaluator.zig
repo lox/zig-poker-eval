@@ -1,9 +1,11 @@
 const std = @import("std");
+const card = @import("card");
 
 // Slow but correct hand evaluator
+// Uses modern card abstractions from card.zig
 
-// Hand evaluation types and constants
-pub const Hand = u64;
+// Re-export types from modern card module
+pub const Hand = card.Hand;
 pub const HandRank = u16;
 
 // Hand ranking constants (from lowest to highest)
@@ -19,33 +21,23 @@ pub const HAND_RANKS = struct {
     pub const STRAIGHT_FLUSH = 8;
 };
 
-// Card utilities
-pub const CLUBS_OFFSET = 0;
-pub const DIAMONDS_OFFSET = 13;
-pub const HEARTS_OFFSET = 26;
-pub const SPADES_OFFSET = 39;
-pub const RANK_MASK = 0x1FFF;
-
-pub fn makeCard(suit: u8, rank: u8) Hand {
-    const offset = suit * 13;
-    return @as(Hand, 1) << @intCast(offset + rank);
-}
+// Use modern card creation function
+pub const makeCard = card.makeCard;
 
 pub fn getRankMask(hand: Hand) u16 {
-    const clubs = @as(u16, @truncate(hand >> CLUBS_OFFSET)) & RANK_MASK;
-    const diamonds = @as(u16, @truncate(hand >> DIAMONDS_OFFSET)) & RANK_MASK;
-    const hearts = @as(u16, @truncate(hand >> HEARTS_OFFSET)) & RANK_MASK;
-    const spades = @as(u16, @truncate(hand >> SPADES_OFFSET)) & RANK_MASK;
-
+    const clubs = card.getSuitMask(hand, .clubs);
+    const diamonds = card.getSuitMask(hand, .diamonds);
+    const hearts = card.getSuitMask(hand, .hearts);
+    const spades = card.getSuitMask(hand, .spades);
     return clubs | diamonds | hearts | spades;
 }
 
 pub fn getSuitMasks(hand: Hand) [4]u16 {
     return [4]u16{
-        @as(u16, @truncate(hand >> CLUBS_OFFSET)) & RANK_MASK,
-        @as(u16, @truncate(hand >> DIAMONDS_OFFSET)) & RANK_MASK,
-        @as(u16, @truncate(hand >> HEARTS_OFFSET)) & RANK_MASK,
-        @as(u16, @truncate(hand >> SPADES_OFFSET)) & RANK_MASK,
+        card.getSuitMask(hand, .clubs),
+        card.getSuitMask(hand, .diamonds),
+        card.getSuitMask(hand, .hearts),
+        card.getSuitMask(hand, .spades),
     };
 }
 
