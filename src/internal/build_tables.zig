@@ -22,7 +22,7 @@ pub fn main() !void {
     try buildTables(allocator);
 
     // Generate output file
-    print("Writing src/tables.zig...\n", .{});
+    print("Writing src/internal/tables.zig...\n", .{});
     try writeTablesFile();
 
     // Validate generated table sizes
@@ -277,7 +277,7 @@ fn evaluateFlushPattern(pattern: u16) u16 {
 }
 
 fn writeTablesFile() !void {
-    const file = try std.fs.cwd().createFile("src/tables.zig", .{});
+    const file = try std.fs.cwd().createFile("src/internal/tables.zig", .{});
     defer file.close();
     const w = file.writer();
 

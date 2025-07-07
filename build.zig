@@ -65,7 +65,9 @@ pub fn build(b: *std.Build) void {
     const slow_evaluator = b.createModule(.{
         .root_source_file = b.path("src/internal/slow_evaluator.zig"),
     });
+    slow_evaluator.addImport("card", card_mod);
     table_builder.root_module.addImport("slow_evaluator", slow_evaluator);
+    table_builder.root_module.addImport("card", card_mod);
 
     // Run step to build lookup tables (manual use only)
     const build_tables = b.addRunArtifact(table_builder);
@@ -103,6 +105,34 @@ pub fn build(b: *std.Build) void {
 
     const run_step = b.step("run", "Run the poker evaluator");
     run_step.dependOn(&run_cmd.step);
+
+    // Generate all hands tool
+    const gen_all_hands = b.addExecutable(.{
+        .name = "generate-all-hands",
+        .root_source_file = b.path("src/tools/generate_all_hands.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    gen_all_hands.root_module.addImport("poker", poker_mod);
+    b.installArtifact(gen_all_hands);
+
+    const run_gen_all = b.addRunArtifact(gen_all_hands);
+    const gen_all_step = b.step("gen-all", "Generate all 133M hand evaluations");
+    gen_all_step.dependOn(&run_gen_all.step);
+
+    // Verify all hands tool
+    const verify_all_hands = b.addExecutable(.{
+        .name = "verify-all-hands",
+        .root_source_file = b.path("src/tools/verify_all_hands.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    verify_all_hands.root_module.addImport("poker", poker_mod);
+    b.installArtifact(verify_all_hands);
+
+    const run_verify_all = b.addRunArtifact(verify_all_hands);
+    const verify_all_step = b.step("verify-all", "Verify evaluator against all 133M hands");
+    verify_all_step.dependOn(&run_verify_all.step);
 
     // Test step - run tests from all modules
     const test_step = b.step("test", "Run all unit tests");

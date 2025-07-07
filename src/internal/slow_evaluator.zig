@@ -178,16 +178,27 @@ pub fn evaluateHand(hand: Hand) HandRank {
     }
 
     // Full house (ranks 166-321: best boats are lower numbers)
-    if (trips > 0 and pairs > 0) {
+    // Handle case with 2 trips (e.g., AAA KKK x) or trips + pairs
+    if (trips > 0 and (pairs > 0 or trips > 1)) {
         var trip_rank: u8 = 0;
         var pair_rank: u8 = 0;
+        var second_trip_rank: u8 = 0;
 
+        // Find the highest trip
         for (rank_counts, 0..) |count, rank| {
-            if (count == 3) {
+            if (count == 3 and rank > trip_rank) {
+                second_trip_rank = trip_rank;
                 trip_rank = @intCast(rank);
-            } else if (count == 2) {
+            } else if (count == 3 and rank > second_trip_rank) {
+                second_trip_rank = @intCast(rank);
+            } else if (count == 2 and rank > pair_rank) {
                 pair_rank = @intCast(rank);
             }
+        }
+
+        // If we have two trips, use the lower trip as the pair
+        if (trips > 1) {
+            pair_rank = second_trip_rank;
         }
 
         // Higher trip rank = better hand = lower rank number
@@ -431,4 +442,25 @@ test "overlapping straights edge case - hand 2" {
             _ = getStraightMask(suit);
         }
     }
+}
+
+test "two trips makes full house" {
+    // Test case: AAAKKK7 - two trips should be a full house
+    // AAA = A♠A♥A♦, KKK = K♠K♥K♦, 7 = 7♣
+    const hand = makeCard(0, 12) | // A♣
+        makeCard(1, 12) | // A♦
+        makeCard(2, 12) | // A♥
+        makeCard(0, 11) | // K♣
+        makeCard(1, 11) | // K♦
+        makeCard(2, 11) | // K♥
+        makeCard(0, 6); // 7♣
+
+    const rank = evaluateHand(hand);
+
+    // Should be a full house (rank 166-321)
+    try std.testing.expect(rank >= 166 and rank <= 321);
+
+    // Specifically, should be AAAKK which is a very strong full house
+    // Should be 166 + 0*12 + 1 = 167 (Aces over Kings)
+    try std.testing.expect(rank == 167);
 }
