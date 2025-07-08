@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        zig-version: [0.14.0]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: ${{ matrix.zig-version }}
+
+      - name: Cache Zig
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cache/zig
+            ~/AppData/Local/zig
+            zig-cache
+            .zig-cache
+          key: ${{ runner.os }}-zig-${{ matrix.zig-version }}-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          restore-keys: |
+            ${{ runner.os }}-zig-${{ matrix.zig-version }}-
+            ${{ runner.os }}-zig-
+
+      - name: Format check
+        run: zig fmt --check .
+
+      - name: Build
+        run: zig build
+
+      - name: Run tests
+        run: zig build test --summary all
+
+      - name: Build optimized
+        run: zig build -Doptimize=ReleaseFast
+
+      - name: Run benchmarks
+        run: zig build bench -Doptimize=ReleaseFast
+        # Only run benchmarks on Linux for consistency
+        if: matrix.os == 'ubuntu-latest'
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.14.0
+
+      - name: Check formatting
+        run: zig fmt --check .
+
+      - name: Check for TODO/FIXME comments
+        run: |
+          if grep -r "TODO\|FIXME" src/ --exclude-dir=.git; then
+            echo "Found TODO/FIXME comments that should be addressed or tracked as issues"
+            exit 0  # Don't fail, just warn
+          fi
