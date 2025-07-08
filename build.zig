@@ -37,6 +37,13 @@ pub fn build(b: *std.Build) void {
     equity_mod.addImport("card", card_mod);
     equity_mod.addImport("evaluator", evaluator_mod);
 
+    // Level 3: Fast equity module (depends on card, evaluator)
+    const equity_fast_mod = b.addModule("equity_fast", .{
+        .root_source_file = b.path("src/equity_fast.zig"),
+    });
+    equity_fast_mod.addImport("card", card_mod);
+    equity_fast_mod.addImport("evaluator", evaluator_mod);
+
     // Level 4: Main poker module (depends on all others)
     const poker_mod = b.addModule("poker", .{
         .root_source_file = b.path("src/poker.zig"),
@@ -52,6 +59,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/tools/benchmark.zig"),
     });
     tools_mod.addImport("poker", poker_mod);
+    tools_mod.addImport("equity_fast", equity_fast_mod);
 
     // Table builder executable (for manual table regeneration)
     const table_builder = b.addExecutable(.{
