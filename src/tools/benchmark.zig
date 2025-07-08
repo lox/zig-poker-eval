@@ -306,23 +306,23 @@ pub fn benchmarkBatchSizes(allocator: std.mem.Allocator) !void {
     warmupCaches(test_hands);
 
     try stdout.print("\nBatch Size Performance Comparison\n", .{});
-    try stdout.print("=================================\n", .{});
+    try stdout.print("==================================================================\n", .{});
     try stdout.print("Batch Size | ns/hand | Million hands/sec | Speedup vs single\n", .{});
     try stdout.print("-----------|---------|-------------------|------------------\n", .{});
 
     // Benchmark single hand for baseline
     const single_time = benchmarkSingleHand(test_hands, 1000000);
-    try stdout.print("{:>10} | {:>7.2} | {:>17.1} | {:>16.2}x\n", .{ 1, single_time, 1000.0 / single_time, 1.0 });
+    try stdout.print("{d:>10} | {d:>7.2} | {d:>17.1} | {d:>16.2}x\n", .{ 1, single_time, 1000.0 / single_time, 1.0 });
 
     // Test different batch sizes
-    const batch_sizes = [_]usize{ 2, 4, 6, 8, 10, 12, 16, 20 };
+    const batch_sizes = [_]usize{ 2, 4, 6, 8, 10, 12, 16, 20, 24, 32, 40, 48, 64 };
 
     inline for (batch_sizes) |batch_size| {
         const iterations = @max(100000, 1000000 / batch_size);
         const time_per_hand = try benchmarkBatchSizeGeneric(batch_size, test_hands, iterations);
         const speedup = single_time / time_per_hand;
 
-        try stdout.print("{:>10} | {:>7.2} | {:>17.1} | {:>16.2}x\n", .{ batch_size, time_per_hand, 1000.0 / time_per_hand, speedup });
+        try stdout.print("{d:>10} | {d:>7.2} | {d:>17.1} | {d:>16.2}x\n", .{ batch_size, time_per_hand, 1000.0 / time_per_hand, speedup });
     }
 }
 

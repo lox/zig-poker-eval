@@ -67,13 +67,13 @@ fn computeRpcFromHand(hand: u64) u32 {
 fn computeRpcSimd(comptime batchSize: usize, hands: *const [batchSize]u64) [batchSize]u32 {
     var result: [batchSize]u32 = undefined;
 
-    // For now, only SIMD-optimize batch size 4
-    if (batchSize == 4) {
-        // Extract suits for all 4 hands (structure-of-arrays)
-        var clubs: [4]u16 = undefined;
-        var diamonds: [4]u16 = undefined;
-        var hearts: [4]u16 = undefined;
-        var spades: [4]u16 = undefined;
+    // Use SIMD for batch sizes that are powers of 2 or have good SIMD support
+    if (batchSize == 2 or batchSize == 4 or batchSize == 8 or batchSize == 16 or batchSize == 32 or batchSize == 64) {
+        // Extract suits for all hands (structure-of-arrays)
+        var clubs: [batchSize]u16 = undefined;
+        var diamonds: [batchSize]u16 = undefined;
+        var hearts: [batchSize]u16 = undefined;
+        var spades: [batchSize]u16 = undefined;
 
         for (hands, 0..) |hand, i| {
             clubs[i] = @as(u16, @truncate((hand >> 0) & RANK_MASK));
@@ -82,21 +82,21 @@ fn computeRpcSimd(comptime batchSize: usize, hands: *const [batchSize]u64) [batc
             spades[i] = @as(u16, @truncate((hand >> 39) & RANK_MASK));
         }
 
-        const clubs_v: @Vector(4, u16) = clubs;
-        const diamonds_v: @Vector(4, u16) = diamonds;
-        const hearts_v: @Vector(4, u16) = hearts;
-        const spades_v: @Vector(4, u16) = spades;
+        const clubs_v: @Vector(batchSize, u16) = clubs;
+        const diamonds_v: @Vector(batchSize, u16) = diamonds;
+        const hearts_v: @Vector(batchSize, u16) = hearts;
+        const spades_v: @Vector(batchSize, u16) = spades;
 
-        var rpc_vec: @Vector(4, u32) = @splat(0);
+        var rpc_vec: @Vector(batchSize, u32) = @splat(0);
 
         // Vectorized rank counting for all 13 ranks
         inline for (0..13) |rank| {
-            const rank_bit: @Vector(4, u16) = @splat(@as(u16, 1) << @intCast(rank));
-            const zero_vec: @Vector(4, u16) = @splat(0);
+            const rank_bit: @Vector(batchSize, u16) = @splat(@as(u16, 1) << @intCast(rank));
+            const zero_vec: @Vector(batchSize, u16) = @splat(0);
 
             // Count rank occurrences across all suits (vectorized)
-            const one_vec: @Vector(4, u8) = @splat(1);
-            const zero_u8_vec: @Vector(4, u8) = @splat(0);
+            const one_vec: @Vector(batchSize, u8) = @splat(1);
+            const zero_u8_vec: @Vector(batchSize, u8) = @splat(0);
 
             const clubs_has = @select(u8, (clubs_v & rank_bit) != zero_vec, one_vec, zero_u8_vec);
             const diamonds_has = @select(u8, (diamonds_v & rank_bit) != zero_vec, one_vec, zero_u8_vec);
@@ -107,11 +107,11 @@ fn computeRpcSimd(comptime batchSize: usize, hands: *const [batchSize]u64) [batc
             const rank_count_vec = clubs_has + diamonds_has + hearts_has + spades_has;
 
             // Vectorized base-5 encoding: rpc = rpc * 5 + count
-            const five_vec: @Vector(4, u32) = @splat(5);
-            rpc_vec = rpc_vec * five_vec + @as(@Vector(4, u32), rank_count_vec);
+            const five_vec: @Vector(batchSize, u32) = @splat(5);
+            rpc_vec = rpc_vec * five_vec + @as(@Vector(batchSize, u32), rank_count_vec);
         }
 
-        const rpc_array: [4]u32 = @as([4]u32, rpc_vec);
+        const rpc_array: [batchSize]u32 = @as([batchSize]u32, rpc_vec);
         @memcpy(&result, &rpc_array);
     } else {
         // Fallback to scalar computation for other batch sizes
@@ -230,6 +230,14 @@ pub fn evaluateBatch(comptime batchSize: usize, hands: @Vector(batchSize, u64)) 
 /// Legacy function for backward compatibility - evaluate 4 hands
 pub fn evaluateBatch4(hands: @Vector(4, u64)) @Vector(4, u16) {
     return evaluateBatch(4, hands);
+}
+
+/// Default batch size for optimal performance on modern CPUs
+pub const DEFAULT_BATCH_SIZE = 32;
+
+/// Evaluate hands using the optimal batch size
+pub fn evaluateBatch32(hands: @Vector(32, u64)) @Vector(32, u16) {
+    return evaluateBatch(32, hands);
 }
 
 // === Benchmarking Functions ===

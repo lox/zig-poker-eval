@@ -77,7 +77,7 @@ pub fn main() !void {
 
     var mismatches: u32 = 0;
     var batch_mismatches: u32 = 0;
-    const batch_size = 4;
+    const batch_size = 32;
 
     // Verify in batches
     var i: usize = 0;
@@ -92,7 +92,7 @@ pub fn main() !void {
 
         // Evaluate batch
         const batch = @as(@Vector(batch_size, u64), hands);
-        const batch_results = poker.evaluateBatch4(batch);
+        const batch_results = poker.evaluateBatch32(batch);
 
         // Check results
         for (0..batch_size) |j| {
@@ -143,14 +143,13 @@ pub fn main() !void {
 
             // Just measure the batch evaluation performance
             var idx: usize = 0;
-            while (idx + 4 <= num_hands) : (idx += 4) {
-                const batch = @Vector(4, u64){
-                    results[idx].hand,
-                    results[idx + 1].hand,
-                    results[idx + 2].hand,
-                    results[idx + 3].hand,
-                };
-                const batch_results = poker.evaluateBatch4(batch);
+            while (idx + 32 <= num_hands) : (idx += 32) {
+                var batch_array: [32]u64 = undefined;
+                for (0..32) |j| {
+                    batch_array[j] = results[idx + j].hand;
+                }
+                const batch = @as(@Vector(32, u64), batch_array);
+                const batch_results = poker.evaluateBatch32(batch);
                 std.mem.doNotOptimizeAway(batch_results);
             }
 
@@ -164,7 +163,7 @@ pub fn main() !void {
         // Calculate statistics
         std.mem.sort(f64, &times, {}, std.sort.asc(f64));
         const median_time = times[2];
-        const median_hands_per_sec = @as(f64, @floatFromInt((num_hands / 4) * 4)) / median_time;
+        const median_hands_per_sec = @as(f64, @floatFromInt((num_hands / 32) * 32)) / median_time;
 
         try stdout.print("\nMedian performance: {d:.0} hands/second ({d:.2} ns/hand)\n", .{
             median_hands_per_sec,

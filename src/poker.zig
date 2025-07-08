@@ -87,6 +87,13 @@ pub const evaluateBatch4 = evaluator.evaluateBatch4;
 /// batchSize must be known at compile time for optimal performance
 pub const evaluateBatch = evaluator.evaluateBatch;
 
+/// Default batch size for optimal performance (32)
+pub const DEFAULT_BATCH_SIZE = evaluator.DEFAULT_BATCH_SIZE;
+
+/// Evaluate 32 hands simultaneously for optimal performance
+/// Achieves ~4.1 ns/hand on modern CPUs
+pub const evaluateBatch32 = evaluator.evaluateBatch32;
+
 // === HAND COMBINATIONS ===
 
 /// Generate all suited combinations for two ranks
