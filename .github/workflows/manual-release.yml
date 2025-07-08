@@ -24,7 +24,7 @@ jobs:
       - uses: cashapp/activate-hermit@v1
 
       - name: Run tests first
-        run: zig build test
+        run: zig build test --summary all
 
       - name: Validate version
         id: version

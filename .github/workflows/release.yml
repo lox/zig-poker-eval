@@ -18,7 +18,7 @@ jobs:
       - uses: cashapp/activate-hermit@v1
 
       - name: Run tests
-        run: zig build test
+        run: zig build test --summary all
 
   release:
     name: Create Release

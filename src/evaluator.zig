@@ -528,9 +528,12 @@ test "verify problem hands from verify-all" {
         const fast_rank = evaluateHand(hand);
         const category = getHandCategory(fast_rank);
 
-        std.debug.print("Problem hand {}: 0x{X}\n", .{ i, hand });
-        std.debug.print("  Slow rank: {} (category: {})\n", .{ slow_rank, getHandCategory(slow_rank) });
-        std.debug.print("  Fast rank: {} (category: {})\n", .{ fast_rank, category });
+        // Only print debug info if there's a mismatch
+        if (slow_rank != fast_rank) {
+            std.debug.print("Problem hand {}: 0x{X}\n", .{ i, hand });
+            std.debug.print("  Slow rank: {} (category: {})\n", .{ slow_rank, getHandCategory(slow_rank) });
+            std.debug.print("  Fast rank: {} (category: {})\n", .{ fast_rank, category });
+        }
 
         if (slow_rank != fast_rank) {
             // Let's decode the hand to understand what cards it has
