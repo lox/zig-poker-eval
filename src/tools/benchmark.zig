@@ -1,6 +1,5 @@
 const std = @import("std");
 const poker = @import("poker");
-const equity_fast = @import("equity_fast");
 
 pub const BenchmarkOptions = struct {
     iterations: u32 = 100000,
@@ -361,41 +360,24 @@ pub fn benchmarkEquity(allocator: std.mem.Allocator, options: BenchmarkOptions) 
             used_cards |= new_card;
         }
 
-        // Run benchmark - compare standard vs optimized
-        // Create separate RNGs with same seed for fair comparison
-        var prng1 = std.Random.DefaultPrng.init(12345);
-        const rng1 = prng1.random();
-        var prng2 = std.Random.DefaultPrng.init(12345);
-        const rng2 = prng2.random();
+        // Run benchmark
+        const start = std.time.nanoTimestamp();
+        const result = try poker.monteCarlo(hero_cards, villain_cards, board_cards[0..board_size], scenario.iterations, rng, allocator);
+        const end = std.time.nanoTimestamp();
 
-        const start_standard = std.time.nanoTimestamp();
-        const result = try poker.monteCarlo(hero_cards, villain_cards, board_cards[0..board_size], scenario.iterations, rng1, allocator);
-        const end_standard = std.time.nanoTimestamp();
-
-        // Run optimized version
-        const start_fast = std.time.nanoTimestamp();
-        const result_fast = equity_fast.monteCarloVectorized(hero_cards, villain_cards, board_cards[0..board_size], scenario.iterations, rng2);
-        const end_fast = std.time.nanoTimestamp();
-
-        const elapsed_ns = @as(f64, @floatFromInt(end_standard - start_standard));
-        const elapsed_ns_fast = @as(f64, @floatFromInt(end_fast - start_fast));
+        const elapsed_ns = @as(f64, @floatFromInt(end - start));
         const elapsed_ms = elapsed_ns / 1_000_000.0;
-        const elapsed_ms_fast = elapsed_ns_fast / 1_000_000.0;
         const sims_per_sec = @as(f64, @floatFromInt(scenario.iterations)) / (elapsed_ns / 1_000_000_000.0);
-        const sims_per_sec_fast = @as(f64, @floatFromInt(scenario.iterations)) / (elapsed_ns_fast / 1_000_000_000.0);
 
         try stdout.print("{s:<18} | {d:>11} | {d:>9.2} | {d:>18.2}\n", .{
             scenario.name,
             scenario.iterations,
-            elapsed_ms_fast,
-            sims_per_sec_fast / 1_000_000.0,
+            elapsed_ms,
+            sims_per_sec / 1_000_000.0,
         });
 
         if (options.verbose) {
-            try stdout.print("  Standard: {d:.2} ms ({d:.2}M sims/sec)\n", .{ elapsed_ms, sims_per_sec / 1_000_000.0 });
-            try stdout.print("  Optimized: {d:.2} ms ({d:.2}M sims/sec)\n", .{ elapsed_ms_fast, sims_per_sec_fast / 1_000_000.0 });
-            try stdout.print("  Speedup: {d:.2}x\n", .{elapsed_ns / elapsed_ns_fast});
-            try stdout.print("  Hero equity: {d:.2}% (std: {d:.2}%)\n", .{ result_fast.equity() * 100.0, result.equity() * 100.0 });
+            try stdout.print("  Hero equity: {d:.2}%\n", .{result.equity() * 100.0});
         }
     }
 
