@@ -61,6 +61,15 @@ feat!: remove deprecated API
 BREAKING CHANGE: The old API has been removed in favor of the new one.
 ```
 
+### Force a Release:
+To force a patch release even with commits that don't normally trigger a version bump (like `chore:`), you can:
+1. Use the manual release workflow, or
+2. Include `[release]` in your commit message:
+
+```
+chore: update dependencies [release]
+```
+
 ## Version Management
 
 Versions are stored in `build.zig.zon` and follow semantic versioning (MAJOR.MINOR.PATCH).
