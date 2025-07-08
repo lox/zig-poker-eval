@@ -21,7 +21,7 @@ pub const BenchmarkResult = struct {
 };
 
 // Helper functions for rigorous benchmarking
-const BATCH_SIZE = 4;
+const BATCH_SIZE = 32;
 
 // Helper to create batches from hand arrays
 fn createBatch(hands: []const u64, start_idx: usize) @Vector(BATCH_SIZE, u64) {
@@ -48,7 +48,7 @@ fn warmupCaches(test_hands: []const u64) void {
     var i: usize = 0;
     while (i + BATCH_SIZE <= warmup_hands) {
         const batch = createBatch(test_hands, i);
-        _ = poker.evaluateBatch4(batch);
+        _ = poker.evaluateBatch(BATCH_SIZE, batch);
         i += BATCH_SIZE;
     }
 }
@@ -88,7 +88,7 @@ fn runSingleBenchmark(iterations: u32, test_hands: []const u64) f64 {
         // Create batch from consecutive hands
         const batch = createBatch(test_hands, hand_idx);
 
-        const results = poker.evaluateBatch4(batch);
+        const results = poker.evaluateBatch(BATCH_SIZE, batch);
         for (0..BATCH_SIZE) |j| {
             checksum +%= results[j];
         }
@@ -222,7 +222,7 @@ pub fn validateCorrectness(test_hands: []const u64) !bool {
     while (i + BATCH_SIZE <= validation_hands) {
         const batch = createBatch(test_hands, i);
 
-        const fast_results = poker.evaluateBatch4(batch);
+        const fast_results = poker.evaluateBatch(BATCH_SIZE, batch);
 
         for (0..BATCH_SIZE) |j| {
             const slow_result = poker.slow.evaluateHand(test_hands[i + j]);
@@ -250,10 +250,12 @@ pub fn validateCorrectness(test_hands: []const u64) !bool {
 pub fn testEvaluator() !void {
     var prng = std.Random.DefaultPrng.init(42);
     var rng = prng.random();
-    const batch = poker.generateRandomHandBatch(&rng);
+
+    // Generate a batch using the comptime-sized function
+    const batch = poker.generateRandomHandBatch(BATCH_SIZE, &rng);
 
     // Evaluate batch
-    const batch_results = poker.evaluateBatch4(batch);
+    const batch_results = poker.evaluateBatch(BATCH_SIZE, batch);
 
     // Validate against single-hand evaluation
     var matches: u32 = 0;

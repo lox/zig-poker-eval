@@ -25,7 +25,7 @@ fn warmupCaches(results: []const HandResult) void {
             results[i + 2].hand,
             results[i + 3].hand,
         };
-        std.mem.doNotOptimizeAway(poker.evaluateBatch4(batch));
+        std.mem.doNotOptimizeAway(poker.evaluateBatch(4, batch));
     }
 }
 

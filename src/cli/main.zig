@@ -503,8 +503,8 @@ const DemoCommand = struct {
         }
 
         ansi.printBold("\n🚀 Batch Processing\n", .{});
-        const batch = poker.generateRandomHandBatch(&rng);
-        const batch_results = poker.evaluateBatch4(batch);
+        const batch = poker.generateRandomHandBatch(4, &rng);
+        const batch_results = poker.evaluateBatch(4, batch);
 
         for (0..4) |i| {
             ansi.printCyan("Batch[{}]: 0x{X} -> Rank: {}\n", .{ i, batch[i], batch_results[i] });

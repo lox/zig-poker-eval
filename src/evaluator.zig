@@ -227,11 +227,6 @@ pub fn evaluateBatch(comptime batchSize: usize, hands: @Vector(batchSize, u64)) 
     return @as(@Vector(batchSize, u16), results);
 }
 
-/// Legacy function for backward compatibility - evaluate 4 hands
-pub fn evaluateBatch4(hands: @Vector(4, u64)) @Vector(4, u16) {
-    return evaluateBatch(4, hands);
-}
-
 /// Default batch size for optimal performance on modern CPUs
 pub const DEFAULT_BATCH_SIZE = 32;
 
@@ -258,7 +253,7 @@ pub fn benchmarkBatch(iterations: u32) u64 {
     const test_hands = @Vector(4, u64){ 0x1F00000000000, 0x123456789ABCD, 0x0F0F0F0F0F0F0, 0x1F00 };
 
     for (0..iterations) |_| {
-        const results = evaluateBatch4(test_hands);
+        const results = evaluateBatch(4, test_hands);
         sum +%= results[0] + results[1] + results[2] + results[3];
     }
 
@@ -293,15 +288,15 @@ pub fn benchmarkBatchSize(comptime batchSize: usize, iterations: u32) u64 {
 /// Expose slow evaluator for validation
 pub const slow_evaluator = slow_eval;
 
-/// Generate a batch of 4 random 7-card hands
-pub fn generateRandomHandBatch(rng: *std.Random) @Vector(4, u64) {
-    var hands: [4]u64 = undefined;
+/// Generate a batch of random 7-card hands with comptime size
+pub fn generateRandomHandBatch(comptime size: usize, rng: *std.Random) @Vector(size, u64) {
+    var hands: [size]u64 = undefined;
 
     for (&hands) |*hand| {
         hand.* = generateRandomHand(rng);
     }
 
-    return @as(@Vector(4, u64), hands);
+    return @as(@Vector(size, u64), hands);
 }
 
 /// Generate a single random 7-card hand
@@ -376,10 +371,10 @@ test "batch evaluation" {
     // Generate test batch
     var prng = std.Random.DefaultPrng.init(42);
     var rng = prng.random();
-    const batch = generateRandomHandBatch(&rng);
+    const batch = generateRandomHandBatch(4, &rng);
 
     // Evaluate batch
-    const batch_results = evaluateBatch4(batch);
+    const batch_results = evaluateBatch(4, batch);
 
     // Validate against single-hand evaluation
     var matches: u32 = 0;

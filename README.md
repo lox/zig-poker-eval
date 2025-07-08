@@ -1,6 +1,6 @@
 # Zig Poker Evaluator & Analysis Toolkit
 
-A comprehensive high-performance poker hand evaluator and analysis toolkit in Zig 0.14.0. Combines ultra-fast 7-card hand evaluation (~7ns per hand) with complete poker analysis capabilities including equity calculations, range analysis, and Monte Carlo simulations.
+A comprehensive high-performance poker hand evaluator and analysis toolkit in Zig 0.14.0. Combines ultra-fast 7-card hand evaluation (~4.5ns per hand) with complete poker analysis capabilities including equity calculations, range analysis, and Monte Carlo simulations.
 
 ## Setup
 
@@ -37,18 +37,18 @@ zig build test
 ### High-Performance Hand Evaluation
 
 ```zig
-const evaluator = @import("evaluator");
+const poker = @import("poker");
 
 // Single hand evaluation (7-card hand encoded as u64)
 const hand: u64 = 0x1F00000000000; // Royal flush pattern
-const rank = evaluator.evaluateHand(hand); // Lower rank = stronger hand
+const rank = poker.evaluateHand(hand); // Lower rank = stronger hand
 
-// SIMD batch evaluation (4 hands simultaneously)
+// SIMD batch evaluation (32 hands simultaneously)
 var rng = std.Random.DefaultPrng.init(42).random();
-const batch = evaluator.generateRandomHandBatch(&rng);
-const results = evaluator.evaluateBatch4(batch); // 1.5x speedup
+const batch = poker.generateRandomHandBatch(32, &rng);
+const results = poker.evaluateBatch(32, batch);
 
-// Performance: ~7ns per hand, 140M+ hands/sec
+// Performance: ~4.5ns per hand, 224M+ hands/sec
 ```
 
 ### Poker Analysis (using integrated poker module)
@@ -56,18 +56,15 @@ const results = evaluator.evaluateBatch4(batch); // 1.5x speedup
 ```zig
 const poker = @import("poker");
 
-// Create a 7-card hand (hole cards + community cards)
-const hand = poker.createHand(&.{
-    .{ .hearts, .ace },   // Hole card 1
-    .{ .spades, .ace },   // Hole card 2
-    .{ .hearts, .king },  // Flop
-    .{ .hearts, .queen }, // Flop
-    .{ .hearts, .jack },  // Flop
-    .{ .hearts, .ten },   // Turn
-    .{ .clubs, .two },    // River
-});
+// Parse and evaluate a 7-card hand
+const hand = poker.mustParseHand("AhAsKhQhJhTh2c");
+const rank = poker.evaluateHand(hand); // Returns 1 (royal flush)
+const category = poker.getHandCategory(rank); // .straight_flush
 
-const rank = hand.evaluate(); // .straight_flush (royal flush)
+// Alternative: create cards individually
+const ace_hearts = poker.makeCard(.hearts, .ace);
+const ace_spades = poker.makeCard(.spades, .ace);
+// ... combine into hand using bitwise OR
 ```
 
 ### Equity Calculation
@@ -75,22 +72,26 @@ const rank = hand.evaluate(); // .straight_flush (royal flush)
 ```zig
 const poker = @import("poker");
 
-// Calculate preflop equity using simplified parsing
-const aa = poker.mustParseHoleCards("AhAs");
-const kk = poker.mustParseHoleCards("KdKc");
+// Calculate preflop equity
+const aa = poker.mustParseHand("AhAs");
+const kk = poker.mustParseHand("KdKc");
 
 var prng = std.Random.DefaultPrng.init(42);
-const result = try poker.monteCarlo(aa, kk, &.{}, 100000, prng.random(), allocator);
+const result = try poker.monteCarlo(aa, kk, 0, 100000, prng.random(), allocator);
 // result.equity() ≈ 0.80 (80% equity for AA vs KK preflop)
 
-// Multi-way equity with postflop board
-const qq = poker.mustParseHoleCards("QhQs");
-const board_cards = poker.mustParseCards("AdKh7s");
+// Multi-way equity with board
+const qq = poker.mustParseHand("QhQs");
+const board = poker.mustParseHand("AdKh7s");
 
-var hands = [_][2]poker.Card{ aa, kk, qq };
-const results = try poker.evaluateShowdown(&hands, &board_cards, 50000, prng.random(), allocator);
+const hands = [_]poker.Hand{ aa, kk, qq };
+const results = try poker.multiway(&hands, board, 50000, prng.random(), allocator);
 defer allocator.free(results);
 // results[0].equity() ≈ 0.42 (AA equity in 3-way pot)
+
+// Exact calculation (small boards only)
+const exact_result = try poker.exact(aa, kk, board, allocator);
+// Enumerates all possible outcomes for perfect accuracy
 ```
 
 ### Range Analysis
@@ -109,8 +110,10 @@ defer villain_range.deinit();
 std.debug.print("Hero range: {} combinations\n", .{hero_range.handCount()});
 std.debug.print("Villain range: {} combinations\n", .{villain_range.handCount()});
 
-// Range vs range equity calculation (via poker module)
-// Full implementation available through integrated analysis tools
+// Use predefined ranges
+var button_range = try poker.CommonRanges.buttonOpen(allocator);
+defer button_range.deinit();
+// Contains: AA-22, AK-A2, KQ-K8, suited connectors, etc.
 ```
 
 ### Range Notation Syntax
@@ -139,16 +142,11 @@ Running benchmark with 100000 iterations...
   • Multiple runs for statistical analysis
 
 📊 Benchmark Results
-  Total hands:         400000
-  Framework overhead:  0.72 ns/hand
-  Batch performance:   6.57 ns/hand
-  Hands per second:    152,224,378
-  Variation:           1.71% (low - reliable measurement)
-
-🔄 Performance Comparison
-  Batch (4x SIMD):     6.57 ns/hand (152,224,378 hands/sec)
-  Single hand:         10.70 ns/hand (93,457,944 hands/sec)
-  SIMD Speedup:        1.63x
+  Total hands:         3200000
+  Framework overhead:  0.62 ns/hand
+  Batch performance:   4.46 ns/hand
+  Hands per second:    224,293,824
+  Variation:           5.28% (high - consider stable environment)
 ```
 
 ### CLI Commands
@@ -173,7 +171,7 @@ zig build run -- bench --test-hand 0x1F00       # Test specific hands
 ### Architecture
 
 #### Evaluator Core (`src/evaluator/`)
-- **`evaluator.zig`**: SIMD-optimized batch evaluation (2-7ns per hand)
+- **`evaluator.zig`**: SIMD-optimized batch evaluation (~4.5ns per hand)
 - **`slow_evaluator.zig`**: Reference implementation for validation
 - **`tables.zig`**: Pre-computed perfect hash lookup tables (120KB)
 - **`mphf.zig`**: CHD perfect hash function implementation
@@ -239,7 +237,7 @@ src/
 │   └── ansi.zig         # Terminal color utilities
 ├── evaluator/
 │   ├── mod.zig          # Public evaluator API
-│   ├── evaluator.zig    # SIMD-optimized evaluation (2-7ns)
+│   ├── evaluator.zig    # SIMD-optimized evaluation (~4.5ns)
 │   ├── slow_evaluator.zig # Reference implementation
 │   ├── tables.zig       # Perfect hash lookup tables (120KB)
 │   ├── mphf.zig         # CHD perfect hash implementation
@@ -259,4 +257,69 @@ docs/                    # Technical documentation
 CLAUDE.md               # AI coding assistant instructions
 build.zig               # Build configuration with modules
 bin/                    # Hermit-managed Zig installation
+```
+
+## API Reference
+
+### Core Types
+- `Hand` - 64-bit bitfield representing cards
+- `Suit` - Card suits (clubs=0, diamonds=1, hearts=2, spades=3)
+- `Rank` - Card ranks (two=0 through ace=12)
+- `HandRank` - Evaluation result (0-7461, lower = stronger)
+- `HandCategory` - Categories from high_card to straight_flush
+- `Range` - Poker range with hand combinations and probabilities
+
+### Hand Creation & Parsing
+```zig
+// Parse hands and cards
+const hand = poker.mustParseHand("AhKsQdJcTh9s8c");  // 7-card hand
+const cards = poker.mustParseHand("AhKs");           // Any number of cards
+
+// Create individual cards
+const card = poker.makeCard(.hearts, .ace);          // Using enums
+const card2 = poker.parseCard("Ks") catch unreachable; // Parse single card
+```
+
+### Hand Evaluation
+```zig
+// Single hand evaluation
+const rank = poker.evaluateHand(hand);               // Returns 0-7461
+const category = poker.getHandCategory(rank);        // e.g., .two_pair
+
+// SIMD batch evaluation
+const batch = poker.generateRandomHandBatch(32, &rng);
+const results = poker.evaluateBatch(32, batch);      // 32 hands (optimal)
+```
+
+### Equity Calculations
+```zig
+// Monte Carlo simulation
+const equity = try poker.monteCarlo(hero, villain, board, 100000, rng, allocator);
+
+// Exact enumeration (for small boards)
+const exact = try poker.exact(hero, villain, board, allocator);
+
+// Multi-threaded calculation
+const threaded = try poker.threaded(hero, villain, board, 100000, seed, allocator);
+
+// Multi-way pots
+const hands = [_]poker.Hand{ aa, kk, qq };
+const results = try poker.multiway(&hands, board, 50000, rng, allocator);
+```
+
+### Range Operations
+```zig
+// Parse poker ranges
+var range = try poker.parseRange("AA,KK,QQ,AKs", allocator);
+defer range.deinit();
+
+// Use predefined ranges
+var tight = try poker.CommonRanges.tightOpen(allocator);
+var loose = try poker.CommonRanges.looseCall(allocator);
+var button = try poker.CommonRanges.buttonOpen(allocator);
+
+// Generate specific combinations
+const suited = try poker.generateSuitedCombinations(.ace, .king, allocator);
+const offsuit = try poker.generateOffsuitCombinations(.ace, .king, allocator);
+const pairs = try poker.generatePocketPair(.ace, allocator);
 ```

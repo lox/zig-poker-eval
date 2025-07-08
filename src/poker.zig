@@ -79,10 +79,6 @@ pub const evaluateHand = evaluator.evaluateHand;
 /// Example: getHandCategory(100) -> .four_of_a_kind
 pub const getHandCategory = evaluator.getHandCategory;
 
-/// Evaluate 4 hands simultaneously using SIMD
-/// Provides significant speedup for batch processing
-pub const evaluateBatch4 = evaluator.evaluateBatch4;
-
 /// Evaluate a batch of hands with configurable batch size
 /// batchSize must be known at compile time for optimal performance
 pub const evaluateBatch = evaluator.evaluateBatch;

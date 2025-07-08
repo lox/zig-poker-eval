@@ -3,7 +3,7 @@ const evaluator = @import("evaluator.zig");
 
 // Re-export the core functions for assembly analysis
 pub const evaluateHand = evaluator.evaluateHand;
-pub const evaluateBatch4 = evaluator.evaluateBatch4;
+pub const evaluateBatch = evaluator.evaluateBatch;
 pub const benchmarkSingle = evaluator.benchmarkSingle;
 pub const benchmarkBatch = evaluator.benchmarkBatch;
 
@@ -13,7 +13,7 @@ export fn bench_single_hand(hand: u64) u16 {
 }
 
 export fn bench_batch_hands(hands: @Vector(4, u64)) @Vector(4, u16) {
-    return evaluateBatch4(hands);
+    return evaluateBatch(4, hands);
 }
 
 export fn bench_performance_loop() u64 {
