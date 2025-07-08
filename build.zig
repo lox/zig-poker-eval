@@ -38,6 +38,18 @@ pub fn build(b: *std.Build) void {
     range_mod.addImport("hand", hand_mod);
     range_mod.addImport("equity", equity_mod);
 
+    // Level 4: Analysis module (depends on card)
+    const analysis_mod = b.addModule("analysis", .{
+        .root_source_file = b.path("src/analysis.zig"),
+    });
+    analysis_mod.addImport("card", card_mod);
+
+    // Level 4: Draws module (depends on card)
+    const draws_mod = b.addModule("draws", .{
+        .root_source_file = b.path("src/draws.zig"),
+    });
+    draws_mod.addImport("card", card_mod);
+
     // Level 5: Main poker module (depends on all others)
     const poker_mod = b.addModule("poker", .{
         .root_source_file = b.path("src/poker.zig"),
@@ -47,6 +59,8 @@ pub fn build(b: *std.Build) void {
     poker_mod.addImport("hand", hand_mod);
     poker_mod.addImport("range", range_mod);
     poker_mod.addImport("equity", equity_mod);
+    poker_mod.addImport("analysis", analysis_mod);
+    poker_mod.addImport("draws", draws_mod);
 
     // Tools module (depends on poker for benchmarking)
     const tools_mod = b.addModule("tools", .{
@@ -192,6 +206,26 @@ pub fn build(b: *std.Build) void {
     const run_equity_tests = b.addRunArtifact(equity_tests);
     test_step.dependOn(&run_equity_tests.step);
 
+    // Analysis module tests (depends on card)
+    const analysis_tests = b.addTest(.{
+        .root_source_file = b.path("src/analysis.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    analysis_tests.root_module.addImport("card", card_mod);
+    const run_analysis_tests = b.addRunArtifact(analysis_tests);
+    test_step.dependOn(&run_analysis_tests.step);
+
+    // Draws module tests (depends on card)
+    const draws_tests = b.addTest(.{
+        .root_source_file = b.path("src/draws.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    draws_tests.root_module.addImport("card", card_mod);
+    const run_draws_tests = b.addRunArtifact(draws_tests);
+    test_step.dependOn(&run_draws_tests.step);
+
     // Main poker module tests (depends on all modules)
     const poker_tests = b.addTest(.{
         .root_source_file = b.path("src/poker.zig"),
@@ -203,6 +237,8 @@ pub fn build(b: *std.Build) void {
     poker_tests.root_module.addImport("hand", hand_mod);
     poker_tests.root_module.addImport("range", range_mod);
     poker_tests.root_module.addImport("equity", equity_mod);
+    poker_tests.root_module.addImport("analysis", analysis_mod);
+    poker_tests.root_module.addImport("draws", draws_mod);
     const run_poker_tests = b.addRunArtifact(poker_tests);
     test_step.dependOn(&run_poker_tests.step);
 }

@@ -20,6 +20,8 @@ const evaluator = @import("evaluator");
 const hand = @import("hand");
 const range_mod = @import("range");
 const equity = @import("equity");
+const analysis = @import("analysis");
+const draws = @import("draws");
 
 // === CORE TYPES ===
 
@@ -176,6 +178,55 @@ pub const getFlushPattern = evaluator.getFlushPattern;
 
 /// Direct hand-vs-hand comparison for showdowns
 pub const evaluateEquityShowdown = equity.evaluateEquityShowdown;
+
+// === BOARD ANALYSIS ===
+
+/// Board texture classification
+pub const BoardTexture = analysis.BoardTexture;
+
+/// Flush potential information
+pub const FlushInfo = analysis.FlushInfo;
+
+/// Straight potential information
+pub const StraightInfo = analysis.StraightInfo;
+
+/// Analyze how coordinated/dangerous a board is
+pub const analyzeBoardTexture = analysis.analyzeBoardTexture;
+
+/// Analyze flush potential on the board
+pub const analyzeFlushPotential = analysis.analyzeFlushPotential;
+
+/// Analyze straight potential on the board
+pub const analyzeStraightPotential = analysis.analyzeStraightPotential;
+
+/// Count pairs on the board
+pub const countBoardPairs = analysis.countBoardPairs;
+
+/// Check if board is monotone (all same suit)
+pub const isMonotone = analysis.isMonotone;
+
+/// Check if board is rainbow (all different suits)
+pub const isRainbow = analysis.isRainbow;
+
+/// Check if board has three or more to a flush
+pub const hasFlushDraw = analysis.hasFlushDraw;
+
+/// Check if board has three or more connected cards
+pub const hasStraightDraw = analysis.hasStraightDraw;
+
+/// Check if board is paired
+pub const isPairedBoard = analysis.isPairedBoard;
+
+// === DRAW DETECTION ===
+
+/// Types of draws a hand can have
+pub const DrawType = draws.DrawType;
+
+/// Information about draws in a hand
+pub const DrawInfo = draws.DrawInfo;
+
+/// Detect all draws in a hand (hole cards + community cards)
+pub const detectDraws = draws.detectDraws;
 
 // === INTERNAL/TESTING UTILITIES ===
 
