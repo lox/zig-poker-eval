@@ -6,6 +6,29 @@ const HandResult = packed struct {
     rank: u16,
 };
 
+// Pre-warm caches by evaluating a subset of hands
+fn warmupCaches(results: []const HandResult) void {
+    // Warm up by evaluating first 64K hands (or all if less)
+    const warmup_hands = @min(65536, results.len);
+
+    // Single hand warmup
+    for (0..@min(1024, warmup_hands)) |i| {
+        std.mem.doNotOptimizeAway(poker.evaluateHand(results[i].hand));
+    }
+
+    // Batch warmup
+    var i: usize = 0;
+    while (i + 4 <= warmup_hands) : (i += 4) {
+        const batch = @Vector(4, u64){
+            results[i].hand,
+            results[i + 1].hand,
+            results[i + 2].hand,
+            results[i + 3].hand,
+        };
+        std.mem.doNotOptimizeAway(poker.evaluateBatch4(batch));
+    }
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -30,14 +53,23 @@ pub fn main() !void {
     }
 
     const num_hands = try file.reader().readInt(u32, .little);
-    try stdout.print("Verifying {} hands from all_hands.dat...\n", .{num_hands});
+    try stdout.print("Loading {} hands from all_hands.dat...\n", .{num_hands});
 
-    // Read all hand results
+    // Read all hand results into memory first
     const results = try allocator.alloc(HandResult, num_hands);
     defer allocator.free(results);
 
     const bytes = std.mem.sliceAsBytes(results);
-    _ = try file.read(bytes);
+    const bytes_read = try file.read(bytes);
+    if (bytes_read != bytes.len) {
+        return error.IncompleteRead;
+    }
+
+    try stdout.print("Loaded all hands into memory ({d:.1} MB)\n", .{@as(f64, @floatFromInt(bytes.len)) / (1024.0 * 1024.0)});
+
+    // Pre-warm caches
+    try stdout.print("Warming up caches...\n", .{});
+    warmupCaches(results);
 
     // Start verification
     var timer = try std.time.Timer.start();
@@ -71,13 +103,11 @@ pub fn main() !void {
         }
 
         // Progress report
-        if (i % 1000000 == 0 and i > 0) {
+        if (i % 10000000 == 0 and i > 0) {
             const pct = @as(f64, @floatFromInt(i)) / @as(f64, @floatFromInt(num_hands)) * 100.0;
-            std.debug.print("\rBatch verification: {}/{} ({d:.1}%)", .{ i, num_hands, pct });
+            try stdout.print("Progress: {d:.1}% ({}/{})\n", .{ pct, i, num_hands });
         }
     }
-
-    std.debug.print("\rBatch verification: {}/{} (100.0%)\n", .{ num_hands, num_hands });
 
     // Verify remaining hands individually
     while (i < num_hands) : (i += 1) {
@@ -93,8 +123,9 @@ pub fn main() !void {
     const hands_per_sec = @as(f64, @floatFromInt(num_hands)) / elapsed_sec;
 
     try stdout.print("\nVerification complete!\n", .{});
-    try stdout.print("Time: {d:.2} seconds\n", .{elapsed_sec});
+    try stdout.print("Time: {d:.3} seconds (excluding I/O and warmup)\n", .{elapsed_sec});
     try stdout.print("Speed: {d:.0} hands/second\n", .{hands_per_sec});
+    try stdout.print("Throughput: {d:.2} ns/hand\n", .{1e9 / hands_per_sec});
 
     if (mismatches == 0 and batch_mismatches == 0) {
         try stdout.print("\n✅ ALL {} HANDS VERIFIED CORRECTLY!\n", .{num_hands});
@@ -102,27 +133,42 @@ pub fn main() !void {
         try stdout.print("\n❌ Found {} single mismatches and {} batch mismatches\n", .{ mismatches, batch_mismatches });
     }
 
-    // Also do a sampling test with random access
-    try stdout.print("\nDoing random sampling test...\n", .{});
-    var prng = std.Random.DefaultPrng.init(42);
-    var rng = prng.random();
+    // Run multiple timing passes for more rigorous measurement
+    if (mismatches == 0 and batch_mismatches == 0) {
+        try stdout.print("\nRunning performance benchmark (5 passes)...\n", .{});
 
-    var sample_errors: u32 = 0;
-    for (0..10000) |_| {
-        const idx = rng.intRangeAtMost(usize, 0, num_hands - 1);
-        const hand = results[idx].hand;
-        const expected = results[idx].rank;
-        const got = poker.evaluateHand(hand);
+        var times: [5]f64 = undefined;
+        for (0..5) |pass| {
+            const pass_start = timer.read();
 
-        if (got != expected) {
-            sample_errors += 1;
-            try stdout.print("Sample error at {}: hand=0x{X}, expected={}, got={}\n", .{ idx, hand, expected, got });
+            // Just measure the batch evaluation performance
+            var idx: usize = 0;
+            while (idx + 4 <= num_hands) : (idx += 4) {
+                const batch = @Vector(4, u64){
+                    results[idx].hand,
+                    results[idx + 1].hand,
+                    results[idx + 2].hand,
+                    results[idx + 3].hand,
+                };
+                const batch_results = poker.evaluateBatch4(batch);
+                std.mem.doNotOptimizeAway(batch_results);
+            }
+
+            const pass_elapsed = timer.read() - pass_start;
+            times[pass] = @as(f64, @floatFromInt(pass_elapsed)) / 1e9;
+
+            const pass_hands_per_sec = @as(f64, @floatFromInt(idx)) / times[pass];
+            try stdout.print("  Pass {}: {d:.3}s, {d:.0} hands/sec\n", .{ pass + 1, times[pass], pass_hands_per_sec });
         }
-    }
 
-    if (sample_errors == 0) {
-        try stdout.print("✅ Random sampling (10,000 hands) passed!\n", .{});
-    } else {
-        try stdout.print("❌ Random sampling found {} errors\n", .{sample_errors});
+        // Calculate statistics
+        std.mem.sort(f64, &times, {}, std.sort.asc(f64));
+        const median_time = times[2];
+        const median_hands_per_sec = @as(f64, @floatFromInt((num_hands / 4) * 4)) / median_time;
+
+        try stdout.print("\nMedian performance: {d:.0} hands/second ({d:.2} ns/hand)\n", .{
+            median_hands_per_sec,
+            1e9 / median_hands_per_sec,
+        });
     }
 }
