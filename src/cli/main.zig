@@ -312,6 +312,7 @@ const BenchCommand = struct {
         verbose: bool = false,
         show_comparison: bool = false,
         batch_sizes: bool = false,
+        equity: bool = false,
     };
 
     const meta = cli_lib.CommandMeta{
@@ -324,6 +325,7 @@ const BenchCommand = struct {
             "poker-eval bench --iterations 50000 --validate",
             "poker-eval bench --test_hand 0x1F00000000000",
             "poker-eval bench --batch_sizes",
+            "poker-eval bench --equity",
         },
     };
 
@@ -341,6 +343,7 @@ const BenchCommand = struct {
         if (std.mem.eql(u8, field_name, "verbose")) return "Show detailed information and statistics";
         if (std.mem.eql(u8, field_name, "show_comparison")) return "Show SIMD vs scalar performance comparison";
         if (std.mem.eql(u8, field_name, "batch_sizes")) return "Compare performance across different batch sizes";
+        if (std.mem.eql(u8, field_name, "equity")) return "Benchmark equity calculation performance";
         return "No description available";
     }
 
@@ -389,6 +392,12 @@ const BenchCommand = struct {
         // Run batch size comparison if requested
         if (opts.batch_sizes) {
             try benchmark.benchmarkBatchSizes(allocator);
+            return;
+        }
+
+        // Run equity benchmark if requested
+        if (opts.equity) {
+            try benchmark.benchmarkEquity(allocator, bench_options);
             return;
         }
 

@@ -285,6 +285,155 @@ pub fn testSingleHand(hand: u64) struct { slow: u16, fast: u16, match: bool } {
     };
 }
 
+// Equity benchmark for measuring Monte Carlo performance
+pub fn benchmarkEquity(allocator: std.mem.Allocator, options: BenchmarkOptions) !void {
+    const stdout = std.io.getStdOut().writer();
+
+    // Generate test hands for equity calculations
+    var prng = std.Random.DefaultPrng.init(42);
+    var rng = prng.random();
+
+    // Test different scenarios
+    const scenarios = [_]struct {
+        name: []const u8,
+        iterations: u32,
+    }{
+        .{ .name = "Preflop (no board)", .iterations = 10000 },
+        .{ .name = "Flop (3 cards)", .iterations = 5000 },
+        .{ .name = "Turn (4 cards)", .iterations = 2000 },
+        .{ .name = "River (5 cards)", .iterations = 1000 },
+    };
+
+    try stdout.print("\nEquity Calculation Performance\n", .{});
+    try stdout.print("==================================================================\n", .{});
+    try stdout.print("Scenario           | Simulations | Time (ms) | Sims/sec (millions)\n", .{});
+    try stdout.print("-------------------|-------------|-----------|--------------------\n", .{});
+
+    for (scenarios) |scenario| {
+        // Generate random hole cards for both players
+        var hero_cards: [2]u64 = undefined;
+        var villain_cards: [2]u64 = undefined;
+        var board_cards: [5]u64 = undefined;
+        var board_size: usize = 0;
+
+        // Generate non-conflicting cards
+        var used_cards: u64 = 0;
+
+        // Hero cards
+        for (&hero_cards) |*card| {
+            var new_card: u64 = undefined;
+            while (true) {
+                new_card = @as(u64, 1) << @intCast(rng.intRangeAtMost(u6, 0, 51));
+                if ((new_card & used_cards) == 0) break;
+            }
+            card.* = new_card;
+            used_cards |= new_card;
+        }
+
+        // Villain cards
+        for (&villain_cards) |*card| {
+            var new_card: u64 = undefined;
+            while (true) {
+                new_card = @as(u64, 1) << @intCast(rng.intRangeAtMost(u6, 0, 51));
+                if ((new_card & used_cards) == 0) break;
+            }
+            card.* = new_card;
+            used_cards |= new_card;
+        }
+
+        // Board cards based on scenario
+        if (std.mem.eql(u8, scenario.name, "Flop (3 cards)")) {
+            board_size = 3;
+        } else if (std.mem.eql(u8, scenario.name, "Turn (4 cards)")) {
+            board_size = 4;
+        } else if (std.mem.eql(u8, scenario.name, "River (5 cards)")) {
+            board_size = 5;
+        }
+
+        for (0..board_size) |i| {
+            var new_card: u64 = undefined;
+            while (true) {
+                new_card = @as(u64, 1) << @intCast(rng.intRangeAtMost(u6, 0, 51));
+                if ((new_card & used_cards) == 0) break;
+            }
+            board_cards[i] = new_card;
+            used_cards |= new_card;
+        }
+
+        // Run benchmark
+        const start = std.time.nanoTimestamp();
+
+        const result = try poker.monteCarlo(hero_cards, villain_cards, board_cards[0..board_size], scenario.iterations, rng, allocator);
+
+        const end = std.time.nanoTimestamp();
+        const elapsed_ns = @as(f64, @floatFromInt(end - start));
+        const elapsed_ms = elapsed_ns / 1_000_000.0;
+        const sims_per_sec = @as(f64, @floatFromInt(scenario.iterations)) / (elapsed_ns / 1_000_000_000.0);
+
+        try stdout.print("{s:<18} | {d:>11} | {d:>9.2} | {d:>18.2}\n", .{
+            scenario.name,
+            scenario.iterations,
+            elapsed_ms,
+            sims_per_sec / 1_000_000.0,
+        });
+
+        if (options.verbose) {
+            try stdout.print("  Hero equity: {d:.2}%\n", .{result.equity() * 100.0});
+        }
+    }
+
+    // Multi-way equity benchmark
+    try stdout.print("\nMulti-way Equity (3+ players)\n", .{});
+    try stdout.print("----------------------------------------------------------------\n", .{});
+
+    const player_counts = [_]usize{ 3, 4, 6, 9 };
+    const multiway_iterations = 5000;
+
+    for (player_counts) |num_players| {
+        // Generate hands for all players
+        const hands = try allocator.alloc([2]u64, num_players);
+        defer allocator.free(hands);
+
+        var used: u64 = 0;
+        for (hands) |*hand| {
+            for (&hand.*) |*card| {
+                var new_card: u64 = undefined;
+                while (true) {
+                    new_card = @as(u64, 1) << @intCast(rng.intRangeAtMost(u6, 0, 51));
+                    if ((new_card & used) == 0) break;
+                }
+                card.* = new_card;
+                used |= new_card;
+            }
+        }
+
+        const start = std.time.nanoTimestamp();
+
+        // Convert to slice of [2]u64 arrays
+        var hand_pairs = try allocator.alloc([2]u64, num_players);
+        defer allocator.free(hand_pairs);
+
+        for (hands, 0..) |hand, i| {
+            hand_pairs[i] = hand;
+        }
+
+        _ = try poker.multiway(hand_pairs, &.{}, // No board
+            multiway_iterations, rng, allocator);
+
+        const end = std.time.nanoTimestamp();
+        const elapsed_ns = @as(f64, @floatFromInt(end - start));
+        const elapsed_ms = elapsed_ns / 1_000_000.0;
+        const sims_per_sec = @as(f64, @floatFromInt(multiway_iterations)) / (elapsed_ns / 1_000_000_000.0);
+
+        try stdout.print("{d} players         | {d:>11} | {d:>9.2} | {d:>18.2}\n", .{
+            num_players,
+            multiway_iterations,
+            elapsed_ms,
+            sims_per_sec / 1_000_000.0,
+        });
+    }
+}
+
 // Benchmark different batch sizes
 pub fn benchmarkBatchSizes(allocator: std.mem.Allocator) !void {
     const stdout = std.io.getStdOut().writer();
