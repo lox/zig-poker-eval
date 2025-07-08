@@ -284,3 +284,87 @@ pub fn testSingleHand(hand: u64) struct { slow: u16, fast: u16, match: bool } {
         .match = slow_result == fast_result,
     };
 }
+
+// Benchmark different batch sizes
+pub fn benchmarkBatchSizes(allocator: std.mem.Allocator) !void {
+    const stdout = std.io.getStdOut().writer();
+
+    // Generate test hands
+    var prng = std.Random.DefaultPrng.init(42);
+    var rng = prng.random();
+
+    const num_test_hands = 1_600_000;
+    const test_hands = try allocator.alloc(u64, num_test_hands);
+    defer allocator.free(test_hands);
+
+    for (test_hands) |*hand| {
+        hand.* = poker.generateRandomHand(&rng);
+    }
+
+    // Warmup caches
+    try stdout.print("Warming up caches...\n", .{});
+    warmupCaches(test_hands);
+
+    try stdout.print("\nBatch Size Performance Comparison\n", .{});
+    try stdout.print("=================================\n", .{});
+    try stdout.print("Batch Size | ns/hand | Million hands/sec | Speedup vs single\n", .{});
+    try stdout.print("-----------|---------|-------------------|------------------\n", .{});
+
+    // Benchmark single hand for baseline
+    const single_time = benchmarkSingleHand(test_hands, 1000000);
+    try stdout.print("{:>10} | {:>7.2} | {:>17.1} | {:>16.2}x\n", .{ 1, single_time, 1000.0 / single_time, 1.0 });
+
+    // Test different batch sizes
+    const batch_sizes = [_]usize{ 2, 4, 6, 8, 10, 12, 16, 20 };
+
+    inline for (batch_sizes) |batch_size| {
+        const iterations = @max(100000, 1000000 / batch_size);
+        const time_per_hand = try benchmarkBatchSizeGeneric(batch_size, test_hands, iterations);
+        const speedup = single_time / time_per_hand;
+
+        try stdout.print("{:>10} | {:>7.2} | {:>17.1} | {:>16.2}x\n", .{ batch_size, time_per_hand, 1000.0 / time_per_hand, speedup });
+    }
+}
+
+fn benchmarkBatchSizeGeneric(comptime batchSize: usize, test_hands: []const u64, iterations: u32) !f64 {
+    var timer = try std.time.Timer.start();
+
+    // Create multiple batches from test hands to avoid cache artifacts
+    var checksum: u64 = 0;
+
+    // Run multiple times for more accurate measurement
+    var best_time: f64 = std.math.inf(f64);
+
+    for (0..3) |_| {
+        const start = timer.read();
+
+        for (0..iterations) |iter| {
+            // Use different hands for each iteration
+            const offset = (iter * batchSize) % (test_hands.len - batchSize);
+
+            var batch_array: [batchSize]u64 = undefined;
+            for (0..batchSize) |i| {
+                batch_array[i] = test_hands[offset + i];
+            }
+            const batch: @Vector(batchSize, u64) = batch_array;
+
+            const results = poker.evaluateBatch(batchSize, batch);
+
+            // Prevent optimization
+            inline for (0..batchSize) |i| {
+                checksum +%= results[i];
+            }
+        }
+
+        const elapsed = timer.read() - start;
+        const total_hands = iterations * batchSize;
+        const ns_per_hand = @as(f64, @floatFromInt(elapsed)) / @as(f64, @floatFromInt(total_hands));
+
+        if (ns_per_hand < best_time) {
+            best_time = ns_per_hand;
+        }
+    }
+
+    std.mem.doNotOptimizeAway(checksum);
+    return best_time;
+}

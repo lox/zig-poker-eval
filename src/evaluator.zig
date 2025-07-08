@@ -64,50 +64,63 @@ fn computeRpcFromHand(hand: u64) u32 {
 
 // === SIMD RPC Computation ===
 
-fn computeRpcSimd4(hands: [4]u64) [4]u32 {
-    // Extract suits for all 4 hands (structure-of-arrays)
-    var clubs: [4]u16 = undefined;
-    var diamonds: [4]u16 = undefined;
-    var hearts: [4]u16 = undefined;
-    var spades: [4]u16 = undefined;
+fn computeRpcSimd(comptime batchSize: usize, hands: *const [batchSize]u64) [batchSize]u32 {
+    var result: [batchSize]u32 = undefined;
 
-    for (hands, 0..) |hand, i| {
-        clubs[i] = @as(u16, @truncate((hand >> 0) & RANK_MASK));
-        diamonds[i] = @as(u16, @truncate((hand >> 13) & RANK_MASK));
-        hearts[i] = @as(u16, @truncate((hand >> 26) & RANK_MASK));
-        spades[i] = @as(u16, @truncate((hand >> 39) & RANK_MASK));
+    // For now, only SIMD-optimize batch size 4
+    if (batchSize == 4) {
+        // Extract suits for all 4 hands (structure-of-arrays)
+        var clubs: [4]u16 = undefined;
+        var diamonds: [4]u16 = undefined;
+        var hearts: [4]u16 = undefined;
+        var spades: [4]u16 = undefined;
+
+        for (hands, 0..) |hand, i| {
+            clubs[i] = @as(u16, @truncate((hand >> 0) & RANK_MASK));
+            diamonds[i] = @as(u16, @truncate((hand >> 13) & RANK_MASK));
+            hearts[i] = @as(u16, @truncate((hand >> 26) & RANK_MASK));
+            spades[i] = @as(u16, @truncate((hand >> 39) & RANK_MASK));
+        }
+
+        const clubs_v: @Vector(4, u16) = clubs;
+        const diamonds_v: @Vector(4, u16) = diamonds;
+        const hearts_v: @Vector(4, u16) = hearts;
+        const spades_v: @Vector(4, u16) = spades;
+
+        var rpc_vec: @Vector(4, u32) = @splat(0);
+
+        // Vectorized rank counting for all 13 ranks
+        inline for (0..13) |rank| {
+            const rank_bit: @Vector(4, u16) = @splat(@as(u16, 1) << @intCast(rank));
+            const zero_vec: @Vector(4, u16) = @splat(0);
+
+            // Count rank occurrences across all suits (vectorized)
+            const one_vec: @Vector(4, u8) = @splat(1);
+            const zero_u8_vec: @Vector(4, u8) = @splat(0);
+
+            const clubs_has = @select(u8, (clubs_v & rank_bit) != zero_vec, one_vec, zero_u8_vec);
+            const diamonds_has = @select(u8, (diamonds_v & rank_bit) != zero_vec, one_vec, zero_u8_vec);
+            const hearts_has = @select(u8, (hearts_v & rank_bit) != zero_vec, one_vec, zero_u8_vec);
+            const spades_has = @select(u8, (spades_v & rank_bit) != zero_vec, one_vec, zero_u8_vec);
+
+            // Sum to get rank count for each hand
+            const rank_count_vec = clubs_has + diamonds_has + hearts_has + spades_has;
+
+            // Vectorized base-5 encoding: rpc = rpc * 5 + count
+            const five_vec: @Vector(4, u32) = @splat(5);
+            rpc_vec = rpc_vec * five_vec + @as(@Vector(4, u32), rank_count_vec);
+        }
+
+        const rpc_array: [4]u32 = @as([4]u32, rpc_vec);
+        @memcpy(&result, &rpc_array);
+    } else {
+        // Fallback to scalar computation for other batch sizes
+        for (hands, 0..) |hand, i| {
+            result[i] = computeRpcFromHand(hand);
+        }
     }
 
-    const clubs_v: @Vector(4, u16) = clubs;
-    const diamonds_v: @Vector(4, u16) = diamonds;
-    const hearts_v: @Vector(4, u16) = hearts;
-    const spades_v: @Vector(4, u16) = spades;
-
-    var rpc_vec: @Vector(4, u32) = @splat(0);
-
-    // Vectorized rank counting for all 13 ranks
-    inline for (0..13) |rank| {
-        const rank_bit: @Vector(4, u16) = @splat(@as(u16, 1) << @intCast(rank));
-        const zero_vec: @Vector(4, u16) = @splat(0);
-
-        // Count rank occurrences across all suits (vectorized)
-        const one_vec: @Vector(4, u8) = @splat(1);
-        const zero_u8_vec: @Vector(4, u8) = @splat(0);
-
-        const clubs_has = @select(u8, (clubs_v & rank_bit) != zero_vec, one_vec, zero_u8_vec);
-        const diamonds_has = @select(u8, (diamonds_v & rank_bit) != zero_vec, one_vec, zero_u8_vec);
-        const hearts_has = @select(u8, (hearts_v & rank_bit) != zero_vec, one_vec, zero_u8_vec);
-        const spades_has = @select(u8, (spades_v & rank_bit) != zero_vec, one_vec, zero_u8_vec);
-
-        // Sum to get rank count for each hand
-        const rank_count_vec = clubs_has + diamonds_has + hearts_has + spades_has;
-
-        // Vectorized base-5 encoding: rpc = rpc * 5 + count
-        const five_vec: @Vector(4, u32) = @splat(5);
-        rpc_vec = rpc_vec * five_vec + @as(@Vector(4, u32), rank_count_vec);
-    }
-
-    return @as([4]u32, rpc_vec);
+    return result;
 }
 
 fn chdLookupScalar(rpc: u32) u16 {
@@ -189,42 +202,34 @@ pub fn evaluateHand(hand: card.Hand) HandRank {
     return chdLookupScalar(rpc);
 }
 
-/// Evaluate a batch of 4 hands using SIMD for optimal performance
-pub fn evaluateBatch4(hands: @Vector(4, u64)) @Vector(4, u16) {
-    const hands_array = [4]u64{ hands[0], hands[1], hands[2], hands[3] };
+/// Evaluate a batch of hands with configurable batch size
+/// batchSize must be known at compile time for optimal performance
+pub fn evaluateBatch(comptime batchSize: usize, hands: @Vector(batchSize, u64)) @Vector(batchSize, u16) {
+    // Convert vector to array for processing
+    var hands_array: [batchSize]u64 = undefined;
+    inline for (0..batchSize) |i| {
+        hands_array[i] = hands[i];
+    }
 
-    // Compute RPC for all 4 hands using SIMD (this is where the real speedup comes from)
-    const rpc_results = computeRpcSimd4(hands_array);
+    // Compute RPC for all hands (SIMD-optimized for batchSize=4)
+    const rpc_results = computeRpcSimd(batchSize, &hands_array);
 
-    // Simple per-hand evaluation - compiler vectorizes this effectively
-    return @Vector(4, u16){
-        if (isFlushHand(hands_array[0])) tables.flushLookup(getFlushPattern(hands_array[0])) else chdLookupScalar(rpc_results[0]),
-        if (isFlushHand(hands_array[1])) tables.flushLookup(getFlushPattern(hands_array[1])) else chdLookupScalar(rpc_results[1]),
-        if (isFlushHand(hands_array[2])) tables.flushLookup(getFlushPattern(hands_array[2])) else chdLookupScalar(rpc_results[2]),
-        if (isFlushHand(hands_array[3])) tables.flushLookup(getFlushPattern(hands_array[3])) else chdLookupScalar(rpc_results[3]),
-    };
+    // Evaluate each hand
+    var results: [batchSize]u16 = undefined;
+    inline for (0..batchSize) |i| {
+        if (isFlushHand(hands_array[i])) {
+            results[i] = tables.flushLookup(getFlushPattern(hands_array[i]));
+        } else {
+            results[i] = chdLookupScalar(rpc_results[i]);
+        }
+    }
+
+    return @as(@Vector(batchSize, u16), results);
 }
 
-/// Process a dynamic number of hands in optimal 4-hand SIMD batches
-pub fn evaluateBatchDynamic(hands: []const u64, results: []u16) void {
-    std.debug.assert(hands.len == results.len);
-
-    // Process in chunks of 4 (optimal for SIMD)
-    var i: usize = 0;
-    while (i + 4 <= hands.len) : (i += 4) {
-        const batch_hands = @Vector(4, u64){ hands[i], hands[i + 1], hands[i + 2], hands[i + 3] };
-        const batch_results = evaluateBatch4(batch_hands);
-
-        results[i] = batch_results[0];
-        results[i + 1] = batch_results[1];
-        results[i + 2] = batch_results[2];
-        results[i + 3] = batch_results[3];
-    }
-
-    // Handle remainder
-    while (i < hands.len) : (i += 1) {
-        results[i] = evaluateHand(hands[i]);
-    }
+/// Legacy function for backward compatibility - evaluate 4 hands
+pub fn evaluateBatch4(hands: @Vector(4, u64)) @Vector(4, u16) {
+    return evaluateBatch(4, hands);
 }
 
 // === Benchmarking Functions ===
@@ -247,6 +252,29 @@ pub fn benchmarkBatch(iterations: u32) u64 {
     for (0..iterations) |_| {
         const results = evaluateBatch4(test_hands);
         sum +%= results[0] + results[1] + results[2] + results[3];
+    }
+
+    return sum;
+}
+
+/// Benchmark different batch sizes
+pub fn benchmarkBatchSize(comptime batchSize: usize, iterations: u32) u64 {
+    var sum: u64 = 0;
+
+    // Generate test hands
+    var test_hands_array: [batchSize]u64 = undefined;
+    for (0..batchSize) |i| {
+        test_hands_array[i] = 0x123456789ABCD +% (i * 0x1000);
+    }
+    const test_hands: @Vector(batchSize, u64) = test_hands_array;
+
+    for (0..iterations) |_| {
+        const results = evaluateBatch(batchSize, test_hands);
+
+        // Sum all results
+        inline for (0..batchSize) |i| {
+            sum +%= results[i];
+        }
     }
 
     return sum;
@@ -371,6 +399,35 @@ test "batch evaluation" {
     }
 
     try testing.expectEqual(@as(u32, @intCast(batch_size)), matches);
+}
+
+test "variable batch sizes" {
+    var prng = std.Random.DefaultPrng.init(123);
+    var rng = prng.random();
+
+    // Test batch sizes 1, 2, 4, 8
+    inline for ([_]usize{ 1, 2, 4, 8 }) |batchSize| {
+        // Generate random hands
+        var hands_array: [batchSize]u64 = undefined;
+        for (&hands_array) |*hand| {
+            hand.* = generateRandomHand(&rng);
+        }
+        const hands: @Vector(batchSize, u64) = hands_array;
+
+        // Evaluate using batch function
+        const batch_results = evaluateBatch(batchSize, hands);
+
+        // Verify each result
+        for (0..batchSize) |i| {
+            const expected = slow_eval.evaluateHand(hands_array[i]);
+            const actual = batch_results[i];
+
+            if (expected != actual) {
+                std.debug.print("Batch size {} FAIL at index {}: expected={}, actual={}\n", .{ batchSize, i, expected, actual });
+            }
+            try testing.expectEqual(expected, actual);
+        }
+    }
 }
 
 test "two trips makes full house" {

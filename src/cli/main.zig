@@ -311,6 +311,7 @@ const BenchCommand = struct {
         test_hand: ?u64 = null,
         verbose: bool = false,
         show_comparison: bool = false,
+        batch_sizes: bool = false,
     };
 
     const meta = cli_lib.CommandMeta{
@@ -322,6 +323,7 @@ const BenchCommand = struct {
             "poker-eval bench --quick",
             "poker-eval bench --iterations 50000 --validate",
             "poker-eval bench --test_hand 0x1F00000000000",
+            "poker-eval bench --batch_sizes",
         },
     };
 
@@ -338,6 +340,7 @@ const BenchCommand = struct {
         if (std.mem.eql(u8, field_name, "test_hand")) return "Test specific hand (hex format, e.g., 0x1F00000000000)";
         if (std.mem.eql(u8, field_name, "verbose")) return "Show detailed information and statistics";
         if (std.mem.eql(u8, field_name, "show_comparison")) return "Show SIMD vs scalar performance comparison";
+        if (std.mem.eql(u8, field_name, "batch_sizes")) return "Compare performance across different batch sizes";
         return "No description available";
     }
 
@@ -381,6 +384,12 @@ const BenchCommand = struct {
             };
             ansi.printGreen("✅ Evaluator test passed\n", .{});
             print("\n", .{});
+        }
+
+        // Run batch size comparison if requested
+        if (opts.batch_sizes) {
+            try benchmark.benchmarkBatchSizes(allocator);
+            return;
         }
 
         // Run main benchmark

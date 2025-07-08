@@ -83,8 +83,9 @@ pub const getHandCategory = evaluator.getHandCategory;
 /// Provides significant speedup for batch processing
 pub const evaluateBatch4 = evaluator.evaluateBatch4;
 
-/// Process dynamic number of hands in optimal batches
-pub const evaluateBatchDynamic = evaluator.evaluateBatchDynamic;
+/// Evaluate a batch of hands with configurable batch size
+/// batchSize must be known at compile time for optimal performance
+pub const evaluateBatch = evaluator.evaluateBatch;
 
 // === HAND COMBINATIONS ===
 
