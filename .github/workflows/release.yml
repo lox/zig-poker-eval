@@ -15,9 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.14.0
+      - uses: cashapp/activate-hermit@v1
 
       - name: Run tests
         run: zig build test
@@ -31,225 +29,74 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Full history for conventional commits
+          fetch-depth: 0  # Full history for svu
 
-      - name: Get current version from build.zig.zon
-        id: current_version
+      - uses: cashapp/activate-hermit@v1
+
+      - name: Calculate next version
+        id: version
         run: |
-          VERSION=$(grep -oP '\.version = "\K[^"]+' build.zig.zon || echo "0.0.0")
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Current version: $VERSION"
+          # Get next version using svu
+          NEXT_VERSION=$(svu next)
+          CURRENT_VERSION=$(svu current)
 
-      - name: Analyze commits for version bump
-        id: analyze_commits
-        run: |
-          # Get commits since last tag
-          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          echo "current=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "next=$NEXT_VERSION" >> $GITHUB_OUTPUT
 
-          if [ -z "$LAST_TAG" ]; then
-            echo "No previous tags found, analyzing all commits"
-            COMMITS=$(git log --pretty=format:"%s")
-          else
-            echo "Analyzing commits since $LAST_TAG"
-            COMMITS=$(git log $LAST_TAG..HEAD --pretty=format:"%s")
-          fi
-
-          # Check for version bump indicators
-          MAJOR=false
-          MINOR=false
-          PATCH=false
-
-          while IFS= read -r commit; do
-            echo "Analyzing: $commit"
-
-            # Check for BREAKING CHANGE or ! after type
-            if [[ "$commit" =~ BREAKING[[:space:]]CHANGE ]] || [[ "$commit" =~ ^[a-z]+(\([^)]+\))?!: ]]; then
-              MAJOR=true
-              echo "  -> Major version bump (breaking change)"
-            # Check for feat:
-            elif [[ "$commit" =~ ^feat(\([^)]+\))?: ]]; then
-              MINOR=true
-              echo "  -> Minor version bump (feature)"
-            # Check for fix:
-            elif [[ "$commit" =~ ^fix(\([^)]+\))?: ]]; then
-              PATCH=true
-              echo "  -> Patch version bump (fix)"
-            fi
-          done <<< "$COMMITS"
-
-          # Determine bump type
-          if [ "$MAJOR" = true ]; then
-            BUMP_TYPE="major"
-          elif [ "$MINOR" = true ]; then
-            BUMP_TYPE="minor"
-          elif [ "$PATCH" = true ]; then
-            BUMP_TYPE="patch"
-          else
-            BUMP_TYPE="none"
-          fi
-
-          echo "bump_type=$BUMP_TYPE" >> $GITHUB_OUTPUT
-          echo "Determined bump type: $BUMP_TYPE"
-
-      - name: Calculate new version
-        id: new_version
-        run: |
-          CURRENT_VERSION="${{ steps.current_version.outputs.version }}"
-          BUMP_TYPE="${{ steps.analyze_commits.outputs.bump_type }}"
-
-          if [ "$BUMP_TYPE" = "none" ]; then
-            echo "No version bump needed"
-            echo "new_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          # Check if version needs bumping
+          if [ "$CURRENT_VERSION" = "$NEXT_VERSION" ]; then
             echo "should_release=false" >> $GITHUB_OUTPUT
-            exit 0
+            echo "No version bump needed"
+          else
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "Version bump: $CURRENT_VERSION -> $NEXT_VERSION"
           fi
-
-          # Parse current version
-          IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
-          MAJOR="${VERSION_PARTS[0]:-0}"
-          MINOR="${VERSION_PARTS[1]:-0}"
-          PATCH="${VERSION_PARTS[2]:-0}"
-
-          # Calculate new version
-          case "$BUMP_TYPE" in
-            major)
-              MAJOR=$((MAJOR + 1))
-              MINOR=0
-              PATCH=0
-              ;;
-            minor)
-              MINOR=$((MINOR + 1))
-              PATCH=0
-              ;;
-            patch)
-              PATCH=$((PATCH + 1))
-              ;;
-          esac
-
-          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
-          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "should_release=true" >> $GITHUB_OUTPUT
-          echo "New version: $NEW_VERSION"
 
       - name: Update version in build.zig.zon
-        if: steps.new_version.outputs.should_release == 'true'
+        if: steps.version.outputs.should_release == 'true'
         run: |
-          NEW_VERSION="${{ steps.new_version.outputs.new_version }}"
+          NEW_VERSION="${{ steps.version.outputs.next }}"
           sed -i "s/\.version = \".*\"/\.version = \"$NEW_VERSION\"/" build.zig.zon
 
-          # Check if version was updated
-          if git diff --quiet; then
-            echo "Version in build.zig.zon is already up to date"
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add build.zig.zon
-            git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
-            git push
-          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add build.zig.zon
+          git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
+          git push
 
       - name: Generate release notes
-        if: steps.new_version.outputs.should_release == 'true'
+        if: steps.version.outputs.should_release == 'true'
         id: release_notes
         run: |
-          NEW_VERSION="${{ steps.new_version.outputs.new_version }}"
-
-          # Get last tag
+          # Use git-cliff or simple git log for release notes
           LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          NEW_VERSION="${{ steps.version.outputs.next }}"
 
-          # Generate release notes
           {
             echo "## What's Changed"
             echo ""
 
-            # Group commits by type
-            if [ -z "$LAST_TAG" ]; then
-              COMMITS=$(git log --pretty=format:"%s|%h|%an" --reverse)
+            if [ -n "$LAST_TAG" ]; then
+              git log $LAST_TAG..HEAD --pretty=format:"- %s (%h)" --reverse
             else
-              COMMITS=$(git log $LAST_TAG..HEAD --pretty=format:"%s|%h|%an" --reverse)
+              git log --pretty=format:"- %s (%h)" --reverse | head -20
             fi
 
-            # Features
-            FEATURES=$(echo "$COMMITS" | grep -E "^feat(\([^)]+\))?:" || true)
-            if [ -n "$FEATURES" ]; then
-              echo "### 🚀 Features"
-              echo "$FEATURES" | while IFS='|' read -r msg hash author; do
-                # Extract commit message without type prefix
-                clean_msg=$(echo "$msg" | sed -E 's/^feat(\([^)]+\))?: //')
-                echo "- $clean_msg ($hash) @$author"
-              done
-              echo ""
-            fi
-
-            # Bug Fixes
-            FIXES=$(echo "$COMMITS" | grep -E "^fix(\([^)]+\))?:" || true)
-            if [ -n "$FIXES" ]; then
-              echo "### 🐛 Bug Fixes"
-              echo "$FIXES" | while IFS='|' read -r msg hash author; do
-                clean_msg=$(echo "$msg" | sed -E 's/^fix(\([^)]+\))?: //')
-                echo "- $clean_msg ($hash) @$author"
-              done
-              echo ""
-            fi
-
-            # Breaking Changes
-            BREAKING=$(echo "$COMMITS" | grep -E "(^[a-z]+(\([^)]+\))?!:|BREAKING CHANGE)" || true)
-            if [ -n "$BREAKING" ]; then
-              echo "### ⚠️ Breaking Changes"
-              echo "$BREAKING" | while IFS='|' read -r msg hash author; do
-                clean_msg=$(echo "$msg" | sed -E 's/^[a-z]+(\([^)]+\))?!?: //')
-                echo "- $clean_msg ($hash) @$author"
-              done
-              echo ""
-            fi
-
-            # Other Changes
-            OTHERS=$(echo "$COMMITS" | grep -E -v "^(feat|fix)(\([^)]+\))?:" | grep -E "^(chore|docs|style|refactor|perf|test|build|ci)(\([^)]+\))?:" || true)
-            if [ -n "$OTHERS" ]; then
-              echo "### 🔧 Other Changes"
-              echo "$OTHERS" | while IFS='|' read -r msg hash author; do
-                clean_msg=$(echo "$msg" | sed -E 's/^[a-z]+(\([^)]+\))?: //')
-                echo "- $clean_msg ($hash) @$author"
-              done
-              echo ""
-            fi
-
-            echo "**Full Changelog**: "
-            if [ -z "$LAST_TAG" ]; then
-              echo "https://github.com/${{ github.repository }}/commits/v$NEW_VERSION"
-            else
-              echo "https://github.com/${{ github.repository }}/compare/$LAST_TAG...v$NEW_VERSION"
-            fi
+            echo ""
+            echo ""
+            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${LAST_TAG:-}...v$NEW_VERSION"
           } > release_notes.md
 
-          # Output for debugging
-          echo "Release notes:"
-          cat release_notes.md
-
-          # Save to output
           echo "RELEASE_NOTES<<EOF" >> $GITHUB_OUTPUT
           cat release_notes.md >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Create GitHub Release
-        if: steps.new_version.outputs.should_release == 'true'
+        if: steps.version.outputs.should_release == 'true'
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: v${{ steps.new_version.outputs.new_version }}
-          name: v${{ steps.new_version.outputs.new_version }}
+          tag_name: v${{ steps.version.outputs.next }}
+          name: v${{ steps.version.outputs.next }}
           body: ${{ steps.release_notes.outputs.RELEASE_NOTES }}
           draft: false
           prerelease: false
-
-      - name: Summary
-        run: |
-          if [ "${{ steps.new_version.outputs.should_release }}" = "true" ]; then
-            echo "### 🎉 Release Created!" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Version**: v${{ steps.new_version.outputs.new_version }}" >> $GITHUB_STEP_SUMMARY
-            echo "**Bump Type**: ${{ steps.analyze_commits.outputs.bump_type }}" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "### ℹ️ No Release Needed" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "No conventional commits found that require a version bump." >> $GITHUB_STEP_SUMMARY
-          fi
