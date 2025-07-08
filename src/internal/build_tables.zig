@@ -47,13 +47,13 @@ test "CHD hash function" {
 test "RPC computation" {
     // Test a simple hand: AsKsQsJsTs (royal flush in spades)
     const hand: evaluator.Hand =
-        evaluator.makeCard(0, 12) | // As
-        evaluator.makeCard(0, 11) | // Ks
-        evaluator.makeCard(0, 10) | // Qs
-        evaluator.makeCard(0, 9) | // Js
-        evaluator.makeCard(0, 8) | // Ts
-        evaluator.makeCard(1, 7) | // 8h
-        evaluator.makeCard(2, 6); // 7d
+        evaluator.makeCard(.clubs, .ace) | // Ac
+        evaluator.makeCard(.clubs, .king) | // Kc
+        evaluator.makeCard(.clubs, .queen) | // Qc
+        evaluator.makeCard(.clubs, .jack) | // Jc
+        evaluator.makeCard(.clubs, .ten) | // Tc
+        evaluator.makeCard(.diamonds, .nine) | // 9d
+        evaluator.makeCard(.hearts, .eight); // 8h
 
     const rpc = computeRPC(hand);
 
@@ -442,7 +442,9 @@ const HandIterator = struct {
 
         var hand: evaluator.Hand = 0;
         for (self.combination) |card_idx| {
-            hand |= evaluator.makeCard(card_idx / 13, card_idx % 13);
+            const suit: evaluator.Suit = @enumFromInt(card_idx / 13);
+            const rank: evaluator.Rank = @enumFromInt(card_idx % 13);
+            hand |= evaluator.makeCard(suit, rank);
         }
 
         if (!self.nextCombination()) self.finished = true;

@@ -10,8 +10,8 @@
 /// Basic usage:
 /// ```zig
 /// const poker = @import("poker");
-/// const hole = poker.mustParseHand("AsKd");
-/// const board = poker.mustParseHand("AhKsQc");
+/// const hole = poker.parseHand("AsKd");
+/// const board = poker.parseHand("AhKsQc");
 /// const final_hand = hole | board;
 /// const rank = poker.evaluateHand(final_hand);
 /// ```
@@ -42,23 +42,28 @@ pub const HandCategory = evaluator.HandCategory;
 
 // === CARD CREATION AND PARSING ===
 
-/// Create a single card using numeric suit/rank
-/// Example: makeCard(3, 12) creates Ace of Spades
+/// Create a single card using enum types for safety
+/// Example: makeCard(.spades, .ace) creates Ace of Spades
 pub const makeCard = card.makeCard;
 
-/// Create a card using enum types for safety
-/// Example: makeCardFromEnums(.spades, .ace)
-pub const makeCardFromEnums = card.makeCardFromEnums;
+/// Format a single card to poker notation
+/// Example: formatCard(makeCard(.spades, .ace)) -> "As"
+pub const formatCard = card.formatCard;
 
-/// Parse a single card from string notation
+/// Parse a single card from string notation at compile time
 /// Example: parseCard("As") -> Ace of Spades
-pub const parseCard = hand.parseCard;
+pub const parseCard = card.parseCard;
+
+/// Parse a single card from string notation at runtime
+/// Example: try maybeParseCard("As") -> Ace of Spades
+pub const maybeParseCard = card.maybeParseCard;
 
 /// Compile-time parsing of any card string into a Hand (CardSet)
-/// Example: mustParseHand("AsKdQh") -> Hand with 3 cards
-/// Example: mustParseHand("AsKd") -> Hand with 2 cards (hole cards)
-/// Example: mustParseHand("AsKdQhJsTs5h2d") -> Hand with 7 cards (full hand)
-pub const mustParseHand = hand.mustParseHand;
+/// Example: parseHand("AsKdQh") -> Hand with 3 cards
+/// Example: parseHand("AsKd") -> Hand with 2 cards (hole cards)
+/// Example: parseHand("AsKdQhJsTs5h2d") -> Hand with 7 cards (full hand)
+pub const parseHand = hand.parseHand;
+pub const maybeParseHand = hand.maybeParseHand;
 
 // === HAND OPERATIONS ===
 
@@ -187,18 +192,18 @@ const testing = std.testing;
 
 test "public API basic usage" {
     // Test card creation and parsing
-    const ace_spades = makeCardFromEnums(.spades, .ace);
-    const parsed_ace = try parseCard("As");
+    const ace_spades = makeCard(.spades, .ace);
+    const parsed_ace = parseCard("As");
     try testing.expect(ace_spades == parsed_ace);
 
     // Test hand evaluation
-    const royal_flush = mustParseHand("AsKsQsJsTs5h2d");
+    const royal_flush = parseHand("AsKsQsJsTs5h2d");
     const rank = evaluateHand(royal_flush);
     const category = getHandCategory(rank);
     try testing.expect(category == .straight_flush);
 
     // Test hole cards
-    const hole = mustParseHand("AsKd");
+    const hole = parseHand("AsKd");
     try testing.expect(hasCard(hole, .spades, .ace));
     try testing.expect(hasCard(hole, .diamonds, .king));
     try testing.expect(countCards(hole) == 2);
@@ -213,8 +218,8 @@ test "equity calculation API" {
     const rng = prng.random();
 
     // Test basic equity calculation
-    const aa = [_]Hand{ makeCard(0, 12), makeCard(1, 12) }; // Pocket aces
-    const kk = [_]Hand{ makeCard(2, 11), makeCard(3, 11) }; // Pocket kings
+    const aa = makeCard(.clubs, .ace) | makeCard(.diamonds, .ace); // Pocket aces
+    const kk = makeCard(.hearts, .king) | makeCard(.spades, .king); // Pocket kings
 
     const result = try monteCarlo(aa, kk, &.{}, 10000, rng, allocator);
 

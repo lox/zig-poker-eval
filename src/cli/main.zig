@@ -53,22 +53,24 @@ const EquityCommand = struct {
         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
 
         // Parse hands - try specific cards first, then range notation
-        var hand1_cards: [2]poker.Hand = undefined;
-        var hand2_cards: [2]poker.Hand = undefined;
+        var hand1_cards: poker.Hand = undefined;
+        var hand2_cards: poker.Hand = undefined;
         const is_range_vs_range = false;
         _ = is_range_vs_range; // Future use for range vs range calculations
 
         // Try parsing as specific hole cards (e.g., "AhAs")
         if (opts.hand1.len == 4 and opts.hand2.len == 4) {
-            hand1_cards = parseHoleCards(opts.hand1) catch |err| {
+            const hole1 = parseHoleCards(opts.hand1) catch |err| {
                 print("Error parsing hand1 '{s}': {}\n", .{ opts.hand1, err });
                 return;
             };
+            hand1_cards = hole1[0] | hole1[1];
 
-            hand2_cards = parseHoleCards(opts.hand2) catch |err| {
+            const hole2 = parseHoleCards(opts.hand2) catch |err| {
                 print("Error parsing hand2 '{s}': {}\n", .{ opts.hand2, err });
                 return;
             };
+            hand2_cards = hole2[0] | hole2[1];
         } else {
             // Try range notation (AA, KK, AKs, etc.)
             print("Error: Range notation not yet implemented. Use specific cards like \"AhAs\" \"KdKc\"\n", .{});
@@ -102,7 +104,7 @@ const EquityCommand = struct {
         }
 
         // Check for card conflicts
-        const all_cards = hand1_cards[0] | hand1_cards[1] | hand2_cards[0] | hand2_cards[1] | board_hand;
+        const all_cards = hand1_cards | hand2_cards | board_hand;
         const total_cards = poker.countCards(all_cards);
         const expected_cards = 4 + poker.countCards(board_hand);
 
@@ -604,9 +606,7 @@ fn printHandCategories(categories: anytype) void {
 }
 
 fn formatCard(card: poker.Hand) [2]u8 {
-    _ = card;
-    // TODO: Implement card formatting when needed
-    return [2]u8{ 'A', 'h' };
+    return poker.formatCard(card);
 }
 
 /// Parse hole cards from string (e.g., "AsKd" -> [As, Kd])
@@ -615,8 +615,8 @@ fn parseHoleCards(cards_str: []const u8) ![2]poker.Hand {
         return error.InvalidHoleCardFormat;
     }
 
-    const card1 = poker.parseCard(cards_str[0..2]) catch return error.InvalidCard1;
-    const card2 = poker.parseCard(cards_str[2..4]) catch return error.InvalidCard2;
+    const card1 = poker.maybeParseCard(cards_str[0..2]) catch return error.InvalidCard1;
+    const card2 = poker.maybeParseCard(cards_str[2..4]) catch return error.InvalidCard2;
     return [2]poker.Hand{ card1, card2 };
 }
 
@@ -629,7 +629,7 @@ fn parseBoardCards(board_str: []const u8) !poker.Hand {
     var board: poker.Hand = 0;
     var i: usize = 0;
     while (i < board_str.len) : (i += 2) {
-        const card = poker.parseCard(board_str[i .. i + 2]) catch return error.InvalidBoardCard;
+        const card = poker.maybeParseCard(board_str[i .. i + 2]) catch return error.InvalidBoardCard;
         board |= card;
     }
     return board;
@@ -644,7 +644,7 @@ fn parse7CardHand(cards_str: []const u8) !poker.Hand {
     var hand: poker.Hand = 0;
     var i: usize = 0;
     while (i < cards_str.len) : (i += 2) {
-        const card = poker.parseCard(cards_str[i .. i + 2]) catch return error.InvalidCard;
+        const card = poker.maybeParseCard(cards_str[i .. i + 2]) catch return error.InvalidCard;
         hand |= card;
     }
     return hand;

@@ -23,13 +23,6 @@ pub fn build(b: *std.Build) void {
     });
     hand_mod.addImport("card", card_mod);
 
-    // Level 3: Range module (depends on card, hand)
-    const range_mod = b.addModule("range", .{
-        .root_source_file = b.path("src/range.zig"),
-    });
-    range_mod.addImport("card", card_mod);
-    range_mod.addImport("hand", hand_mod);
-
     // Level 3: Equity module (depends on card, evaluator)
     const equity_mod = b.addModule("equity", .{
         .root_source_file = b.path("src/equity.zig"),
@@ -37,7 +30,15 @@ pub fn build(b: *std.Build) void {
     equity_mod.addImport("card", card_mod);
     equity_mod.addImport("evaluator", evaluator_mod);
 
-    // Level 4: Main poker module (depends on all others)
+    // Level 4: Range module (depends on card, hand, equity)
+    const range_mod = b.addModule("range", .{
+        .root_source_file = b.path("src/range.zig"),
+    });
+    range_mod.addImport("card", card_mod);
+    range_mod.addImport("hand", hand_mod);
+    range_mod.addImport("equity", equity_mod);
+
+    // Level 5: Main poker module (depends on all others)
     const poker_mod = b.addModule("poker", .{
         .root_source_file = b.path("src/poker.zig"),
     });
@@ -168,7 +169,7 @@ pub fn build(b: *std.Build) void {
     const run_hand_tests = b.addRunArtifact(hand_tests);
     test_step.dependOn(&run_hand_tests.step);
 
-    // Range module tests (depends on card, hand)
+    // Range module tests (depends on card, hand, equity)
     const range_tests = b.addTest(.{
         .root_source_file = b.path("src/range.zig"),
         .target = target,
@@ -176,6 +177,7 @@ pub fn build(b: *std.Build) void {
     });
     range_tests.root_module.addImport("card", card_mod);
     range_tests.root_module.addImport("hand", hand_mod);
+    range_tests.root_module.addImport("equity", equity_mod);
     const run_range_tests = b.addRunArtifact(range_tests);
     test_step.dependOn(&run_range_tests.step);
 

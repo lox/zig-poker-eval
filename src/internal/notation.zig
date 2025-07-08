@@ -1,6 +1,5 @@
 const std = @import("std");
-const card = @import("card");
-const poker = @import("poker.zig");
+const card = @import("../card.zig");
 
 // ✅ IMPLEMENTED:
 // AsAh       specific cards (ace of spades and ace of hearts)
@@ -308,7 +307,6 @@ test "parse and pick random (user pattern)" {
     defer allocator.free(range_combos);
     const random_pair = range_combos[rng.intRangeLessThan(usize, 0, range_combos.len)];
     const rank = getSingleCardRank(random_pair[0]);
-    const ace_value = @intFromEnum(card.Rank.ace) + 2; // 14
     const king_value = @intFromEnum(card.Rank.king) + 2; // 13
     const queen_value = @intFromEnum(card.Rank.queen) + 2; // 12
     try std.testing.expect(rank == ace_value or rank == king_value or rank == queen_value);

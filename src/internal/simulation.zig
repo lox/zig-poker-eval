@@ -1,12 +1,8 @@
 const std = @import("std");
-const card = @import("card");
-const hand = @import("hand");
-const poker = @import("poker.zig");
-const evaluator = @import("evaluator");
 
 pub const MultiplayerShowdownResult = struct {
     winners: []u8,
-    winning_rank: poker.HandRank,
+    winning_rank: evaluator.HandRank,
 
     pub fn deinit(self: MultiplayerShowdownResult, allocator: std.mem.Allocator) void {
         allocator.free(self.winners);
@@ -31,8 +27,8 @@ fn bitmaskToCardSlice(bitmask: u64, allocator: std.mem.Allocator) ![]card.Hand {
     for (0..52) |i| {
         const card_bit = @as(u64, 1) << @intCast(i);
         if ((bitmask & card_bit) != 0) {
-            const rank: u8 = @intCast(i / 4); // card rank format (0-12)
-            const suit: u2 = @intCast(i % 4);
+            const suit: card.Suit = @enumFromInt(i / 13); // Suit from bit position
+            const rank: card.Rank = @enumFromInt(i % 13); // Rank from bit position
             try cards.append(card.makeCard(suit, rank));
         }
     }
@@ -46,13 +42,13 @@ pub fn evaluateShowdown(hands: []const card.Hand, allocator: std.mem.Allocator) 
     if (hands.len > MAX_PLAYERS) return error.TooManyPlayers;
 
     // Use stack allocation for ranks (no heap allocation!)
-    var ranks: [MAX_PLAYERS]poker.HandRank = undefined;
-    var best_rank: poker.HandRank = .high_card;
+    var ranks: [MAX_PLAYERS]evaluator.HandRank = undefined;
+    var best_rank: evaluator.HandRank = 65535; // Worst possible rank
 
     // Evaluate all hands and find best rank in single pass
-    for (hands, 0..) |hand, i| {
-        ranks[i] = poker.convertEvaluatorRank(evaluator.evaluateHand(hand));
-        if (@intFromEnum(ranks[i]) > @intFromEnum(best_rank)) {
+    for (hands, 0..) |h, i| {
+        ranks[i] = evaluator.evaluateHand(h);
+        if (ranks[i] < best_rank) {
             best_rank = ranks[i];
         }
     }
@@ -178,26 +174,26 @@ test "showdown evaluation" {
 
     // Let's debug this step by step
     // First, let's create a simple pair of aces hand and check it
-    const ace_hearts = card.makeCard(2, 12); // Ah (hearts=2, ace=12)
-    const ace_spades = card.makeCard(3, 12); // As (spades=3, ace=12)
-    const king_diamonds = card.makeCard(1, 11); // Kd
-    const queen_clubs = card.makeCard(0, 10); // Qc
-    const jack_hearts = card.makeCard(2, 9); // Jh
-    const two_spades = card.makeCard(3, 0); // 2s
-    const three_diamonds = card.makeCard(1, 1); // 3d
+    const ace_hearts = card.makeCard(.hearts, .ace); // Ah
+    const ace_spades = card.makeCard(.spades, .ace); // As
+    const king_diamonds = card.makeCard(.diamonds, .king); // Kd
+    const queen_clubs = card.makeCard(.clubs, .queen); // Qc
+    const jack_hearts = card.makeCard(.hearts, .jack); // Jh
+    const two_spades = card.makeCard(.spades, .two); // 2s
+    const three_diamonds = card.makeCard(.diamonds, .three); // 3d
 
     // Create the 7-card hand: Ah As Kd Qc Jh 2s 3d
     const hand_with_pair = ace_hearts | ace_spades | king_diamonds | queen_clubs | jack_hearts | two_spades | three_diamonds;
 
     // Test with the evaluator
     const raw_rank = evaluator.evaluateHand(hand_with_pair);
-    const converted_rank = poker.convertEvaluatorRank(raw_rank);
+    const category = evaluator.getHandCategory(raw_rank);
 
     // This should be ONE PAIR, not two pair - should pass now with corrected boundaries
-    try testing.expect(converted_rank == .pair);
+    try testing.expect(category == .pair);
 
     const hand1 = hand_with_pair;
-    const hand2 = king_diamonds | queen_clubs | jack_hearts | two_spades | three_diamonds | card.makeCard(0, 6) | card.makeCard(3, 5); // High card hand
+    const hand2 = king_diamonds | queen_clubs | jack_hearts | two_spades | three_diamonds | card.makeCard(.clubs, .eight) | card.makeCard(.spades, .seven); // High card hand
 
     const hands = [_]card.Hand{ hand1, hand2 };
     const result = try evaluateShowdown(hands[0..], allocator);
@@ -205,19 +201,20 @@ test "showdown evaluation" {
 
     try testing.expect(result.winners.len == 1);
     try testing.expect(result.winners[0] == 0); // Pair wins over high card
-    try testing.expect(result.winning_rank == .pair);
+    const winning_category = evaluator.getHandCategory(result.winning_rank);
+    try testing.expect(winning_category == .pair);
 }
 
 test "card sampling" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    _ = gpa.allocator();
 
     var prng = std.Random.DefaultPrng.init(42);
     const rng = prng.random();
 
     // Use AA as hole cards (CardSet approach)
-    const used_cards = hand.mustParseHand("AhAs");
+    const used_cards = hand.parseHand("AhAs");
     const sampled = sampleRemainingCards(used_cards, 5, rng);
 
     // Should have exactly 5 cards
@@ -229,8 +226,8 @@ test "card sampling" {
 
 test "card combination" {
     // Use comptime parsing with CardSet approach
-    const hole_cards = hand.mustParseHand("AhAs");
-    const board_cards = hand.mustParseHand("KdQcJh2s3d");
+    const hole_cards = hand.parseHand("AhAs");
+    const board_cards = hand.parseHand("KdQcJh2s3d");
 
     const combined = hole_cards | board_cards;
 
@@ -243,7 +240,7 @@ test "card combination" {
 }
 
 test "enumerate remaining cards" {
-    const used_cards = hand.mustParseHand("AhAs");
+    const used_cards = hand.parseHand("AhAs");
     const remaining = enumerateRemainingCards(used_cards);
 
     try testing.expect(card.countCards(remaining) == 50); // 52 - 2 used cards

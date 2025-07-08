@@ -57,7 +57,7 @@ const results = poker.evaluateBatch(32, batch);
 const poker = @import("poker");
 
 // Parse and evaluate a 7-card hand
-const hand = poker.mustParseHand("AhAsKhQhJhTh2c");
+const hand = poker.parseHand("AhAsKhQhJhTh2c");
 const rank = poker.evaluateHand(hand); // Returns 1 (royal flush)
 const category = poker.getHandCategory(rank); // .straight_flush
 
@@ -73,16 +73,16 @@ const ace_spades = poker.makeCard(.spades, .ace);
 const poker = @import("poker");
 
 // Calculate preflop equity
-const aa = poker.mustParseHand("AhAs");
-const kk = poker.mustParseHand("KdKc");
+const aa = poker.parseHand("AhAs");
+const kk = poker.parseHand("KdKc");
 
 var prng = std.Random.DefaultPrng.init(42);
 const result = try poker.monteCarlo(aa, kk, 0, 100000, prng.random(), allocator);
 // result.equity() ≈ 0.80 (80% equity for AA vs KK preflop)
 
 // Multi-way equity with board
-const qq = poker.mustParseHand("QhQs");
-const board = poker.mustParseHand("AdKh7s");
+const qq = poker.parseHand("QhQs");
+const board = poker.parseHand("AdKh7s");
 
 const hands = [_]poker.Hand{ aa, kk, qq };
 const results = try poker.multiway(&hands, board, 50000, prng.random(), allocator);
@@ -272,8 +272,8 @@ bin/                    # Hermit-managed Zig installation
 ### Hand Creation & Parsing
 ```zig
 // Parse hands and cards
-const hand = poker.mustParseHand("AhKsQdJcTh9s8c");  // 7-card hand
-const cards = poker.mustParseHand("AhKs");           // Any number of cards
+const hand = poker.parseHand("AhKsQdJcTh9s8c");  // 7-card hand
+const cards = poker.parseHand("AhKs");           // Any number of cards
 
 // Create individual cards
 const card = poker.makeCard(.hearts, .ace);          // Using enums

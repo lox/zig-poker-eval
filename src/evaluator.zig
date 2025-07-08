@@ -305,9 +305,9 @@ pub fn generateRandomHand(rng: *std.Random) u64 {
     var cards_dealt: u8 = 0;
 
     while (cards_dealt < 7) {
-        const suit = rng.intRangeAtMost(u8, 0, 3);
-        const rank = rng.intRangeAtMost(u8, 0, 12);
-        const card_bits = slow_eval.makeCard(suit, rank);
+        const suit: card.Suit = @enumFromInt(rng.intRangeAtMost(u8, 0, 3));
+        const rank: card.Rank = @enumFromInt(rng.intRangeAtMost(u8, 0, 12));
+        const card_bits = card.makeCard(suit, rank);
 
         if ((hand & card_bits) == 0) {
             hand |= card_bits;
@@ -434,17 +434,17 @@ test "variable batch sizes" {
 }
 
 test "two trips makes full house" {
-    // Test case: AAAKKK7 - two trips should be a full house
-    const hand = card.makeCard(0, 12) | // A♣
-        card.makeCard(1, 12) | // A♦
-        card.makeCard(2, 12) | // A♥
-        card.makeCard(0, 11) | // K♣
-        card.makeCard(1, 11) | // K♦
-        card.makeCard(2, 11) | // K♥
-        card.makeCard(0, 6); // 7♣
+    // Test case: AAAKKK8 - two trips should be a full house
+    const test_hand = card.parseCard("Ac") |
+        card.parseCard("Ad") |
+        card.parseCard("Ah") |
+        card.parseCard("Kc") |
+        card.parseCard("Kd") |
+        card.parseCard("Kh") |
+        card.parseCard("8c");
 
-    const slow_rank = slow_eval.evaluateHand(hand);
-    const fast_rank = evaluateHand(hand);
+    const slow_rank = slow_eval.evaluateHand(test_hand);
+    const fast_rank = evaluateHand(test_hand);
 
     // Should be a full house (rank 166-321)
     try testing.expect(slow_rank >= 166 and slow_rank <= 321);
@@ -452,49 +452,48 @@ test "two trips makes full house" {
 
     // Fast and slow should match
     if (slow_rank != fast_rank) {
-        std.debug.print("Two trips FAIL: hand=0x{X}, slow={}, fast={}\n", .{ hand, slow_rank, fast_rank });
+        std.debug.print("Two trips FAIL: hand=0x{X}, slow={}, fast={}\n", .{ test_hand, slow_rank, fast_rank });
     }
     try testing.expectEqual(slow_rank, fast_rank);
 }
 
 test "two trips edge cases" {
-    // First, let's verify the hand encoding
-    const correct_aaakkk7 = card.makeCard(0, 12) | // A♣
-        card.makeCard(1, 12) | // A♦
-        card.makeCard(2, 12) | // A♥
-        card.makeCard(0, 11) | // K♣
-        card.makeCard(1, 11) | // K♦
-        card.makeCard(2, 11) | // K♥
-        card.makeCard(0, 5); // 7♣
+    // Test multiple two-trips scenarios using clear string notation
+    const aaakkk8 = card.parseCard("Ac") |
+        card.parseCard("Ad") |
+        card.parseCard("Ah") |
+        card.parseCard("Kc") |
+        card.parseCard("Kd") |
+        card.parseCard("Kh") |
+        card.parseCard("8c");
 
-    // Build other test hands correctly
-    const trips_222_333_a = card.makeCard(0, 0) | // 2♣
-        card.makeCard(1, 0) | // 2♦
-        card.makeCard(2, 0) | // 2♥
-        card.makeCard(0, 1) | // 3♣
-        card.makeCard(1, 1) | // 3♦
-        card.makeCard(2, 1) | // 3♥
-        card.makeCard(0, 12); // A♣
+    const trips_222_333_a = card.parseCard("2c") |
+        card.parseCard("2d") |
+        card.parseCard("2h") |
+        card.parseCard("3c") |
+        card.parseCard("3d") |
+        card.parseCard("3h") |
+        card.parseCard("Ac");
 
-    const trips_qqq_jjj_5 = card.makeCard(0, 10) | // Q♣
-        card.makeCard(1, 10) | // Q♦
-        card.makeCard(2, 10) | // Q♥
-        card.makeCard(0, 9) | // J♣
-        card.makeCard(1, 9) | // J♦
-        card.makeCard(2, 9) | // J♥
-        card.makeCard(0, 3); // 5♣
+    const trips_qqq_jjj_5 = card.parseCard("Qc") |
+        card.parseCard("Qd") |
+        card.parseCard("Qh") |
+        card.parseCard("Jc") |
+        card.parseCard("Jd") |
+        card.parseCard("Jh") |
+        card.parseCard("5c");
 
-    const trips_777_666_k = card.makeCard(0, 5) | // 7♣
-        card.makeCard(1, 5) | // 7♦
-        card.makeCard(2, 5) | // 7♥
-        card.makeCard(0, 4) | // 6♣
-        card.makeCard(1, 4) | // 6♦
-        card.makeCard(2, 4) | // 6♥
-        card.makeCard(0, 11); // K♣
+    const trips_777_666_k = card.parseCard("7c") |
+        card.parseCard("7d") |
+        card.parseCard("7h") |
+        card.parseCard("6c") |
+        card.parseCard("6d") |
+        card.parseCard("6h") |
+        card.parseCard("Kc");
 
     // Test multiple two-trips scenarios
     const test_cases = [_]struct { hand: u64, desc: []const u8 }{
-        .{ .hand = correct_aaakkk7, .desc = "AAA KKK 7" },
+        .{ .hand = aaakkk8, .desc = "AAA KKK 8" },
         .{ .hand = trips_222_333_a, .desc = "222 333 A" },
         .{ .hand = trips_qqq_jjj_5, .desc = "QQQ JJJ 5" },
         .{ .hand = trips_777_666_k, .desc = "777 666 K" },

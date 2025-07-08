@@ -313,33 +313,33 @@ pub fn benchmarkEquity(allocator: std.mem.Allocator, options: BenchmarkOptions) 
 
     for (scenarios) |scenario| {
         // Generate random hole cards for both players
-        var hero_cards: [2]u64 = undefined;
-        var villain_cards: [2]u64 = undefined;
+        var hero_cards: u64 = 0;
+        var villain_cards: u64 = 0;
         var board_cards: [5]u64 = undefined;
         var board_size: usize = 0;
 
         // Generate non-conflicting cards
         var used_cards: u64 = 0;
 
-        // Hero cards
-        for (&hero_cards) |*card| {
+        // Hero cards (2 cards)
+        for (0..2) |_| {
             var new_card: u64 = undefined;
             while (true) {
                 new_card = @as(u64, 1) << @intCast(rng.intRangeAtMost(u6, 0, 51));
                 if ((new_card & used_cards) == 0) break;
             }
-            card.* = new_card;
+            hero_cards |= new_card;
             used_cards |= new_card;
         }
 
-        // Villain cards
-        for (&villain_cards) |*card| {
+        // Villain cards (2 cards)
+        for (0..2) |_| {
             var new_card: u64 = undefined;
             while (true) {
                 new_card = @as(u64, 1) << @intCast(rng.intRangeAtMost(u6, 0, 51));
                 if ((new_card & used_cards) == 0) break;
             }
-            card.* = new_card;
+            villain_cards |= new_card;
             used_cards |= new_card;
         }
 
@@ -392,33 +392,27 @@ pub fn benchmarkEquity(allocator: std.mem.Allocator, options: BenchmarkOptions) 
 
     for (player_counts) |num_players| {
         // Generate hands for all players
-        const hands = try allocator.alloc([2]u64, num_players);
+        const hands = try allocator.alloc(u64, num_players);
         defer allocator.free(hands);
 
         var used: u64 = 0;
         for (hands) |*hand| {
-            for (&hand.*) |*card| {
+            hand.* = 0; // Initialize to empty
+            // Generate 2 cards for this player
+            for (0..2) |_| {
                 var new_card: u64 = undefined;
                 while (true) {
                     new_card = @as(u64, 1) << @intCast(rng.intRangeAtMost(u6, 0, 51));
                     if ((new_card & used) == 0) break;
                 }
-                card.* = new_card;
+                hand.* |= new_card;
                 used |= new_card;
             }
         }
 
         const start = std.time.nanoTimestamp();
 
-        // Convert to slice of [2]u64 arrays
-        var hand_pairs = try allocator.alloc([2]u64, num_players);
-        defer allocator.free(hand_pairs);
-
-        for (hands, 0..) |hand, i| {
-            hand_pairs[i] = hand;
-        }
-
-        _ = try poker.multiway(hand_pairs, &.{}, // No board
+        _ = try poker.multiway(hands, &.{}, // No board
             multiway_iterations, rng, allocator);
 
         const end = std.time.nanoTimestamp();

@@ -1,9 +1,9 @@
 const std = @import("std");
 const card = @import("card");
 const hand = @import("hand");
-
-// TODO: Will need to import notation parser once internal module is created
-// const notation_parser = @import("poker/notation.zig");
+// Note: notation parsing is implemented inline to avoid circular dependencies
+// TODO: Consider refactoring to share notation parsing logic
+const equity = @import("equity");
 
 /// Range representation and poker notation parsing
 /// Handles range strings like "AA,KK,AKs,AKo" and converts them to hand combinations
@@ -61,51 +61,73 @@ pub const Range = struct {
     /// For suited/offsuit like "AKs"/"AKo", this adds all combinations
     /// For unpaired notation like "AK", adds all combinations (16 total)
     pub fn addHandNotation(self: *Range, notation: []const u8, probability: f32) !void {
-        if (notation.len == 2 and notation[0] == notation[1]) {
-            // Pocket pair - add all combinations
-            try self.addAllPocketPairCombinations(notation, probability);
-        } else if (notation.len == 2 and notation[0] != notation[1]) {
-            // Unpaired hand without modifier (e.g., "AK") - generate all combinations manually
-            const rank1 = parseRank(notation[0]) orelse return error.InvalidRank;
-            const rank2 = parseRank(notation[1]) orelse return error.InvalidRank;
+        if (notation.len < 2 or notation.len > 3) return error.InvalidNotation;
 
-            // Add all 16 combinations (4 suits x 4 suits)
-            const suits = [4]u2{ 0, 1, 2, 3 };
-            for (suits) |suit1| {
-                for (suits) |suit2| {
-                    const hole_hand = [2]Hand{
-                        card.makeCard(suit1, rank1 - 2),
-                        card.makeCard(suit2, rank2 - 2),
-                    };
-                    try self.addHand(hole_hand, probability);
+        const rank1 = parseRank(notation[0]) orelse return error.InvalidRank;
+        const rank2 = parseRank(notation[1]) orelse return error.InvalidRank;
+        const rank1_idx = @as(u8, @intCast(rank1 - 2)); // Convert poker rank to card rank (0-12)
+        const rank2_idx = @as(u8, @intCast(rank2 - 2));
+
+        if (notation.len == 2) {
+            if (rank1 == rank2) {
+                // Pocket pair - add all 6 combinations
+                const combinations = try hand.generatePocketPair(@enumFromInt(rank1_idx), self.allocator);
+                defer self.allocator.free(combinations);
+
+                for (combinations) |combo| {
+                    try self.addHand(combo, probability);
+                }
+            } else {
+                // Unpaired hand without modifier - add all 16 combinations (suited + offsuit)
+                const combinations = try hand.generateAllCombinations(
+                    @enumFromInt(rank1_idx),
+                    @enumFromInt(rank2_idx),
+                    self.allocator,
+                );
+                defer self.allocator.free(combinations);
+
+                for (combinations) |combo| {
+                    try self.addHand(combo, probability);
                 }
             }
         } else {
-            // Suited/offsuit - handle manually for now
-            const hole_hand = try parseHandNotation(notation);
-            try self.addHand(hole_hand, probability);
-        }
-    }
+            // Suited or offsuit (e.g., "AKs", "AKo")
+            const modifier = notation[2];
+            if (rank1 == rank2) return error.CannotBeSuited;
 
-    /// Add all combinations of a pocket pair (e.g., "AA" adds all 6 AA combinations)
-    fn addAllPocketPairCombinations(self: *Range, notation: []const u8, probability: f32) !void {
-        if (notation.len != 2 or notation[0] != notation[1]) return error.NotAPocketPair;
+            switch (modifier) {
+                's' => {
+                    // Suited - add 4 combinations
+                    const combinations = try hand.generateSuitedCombinations(
+                        @enumFromInt(rank1_idx),
+                        @enumFromInt(rank2_idx),
+                        self.allocator,
+                    );
+                    defer self.allocator.free(combinations);
 
-        const rank = parseRank(notation[0]) orelse return error.InvalidRank;
+                    for (combinations) |combo| {
+                        try self.addHand(combo, probability);
+                    }
+                },
+                'o' => {
+                    // Offsuit - add 12 combinations
+                    const combinations = try hand.generateOffsuitCombinations(
+                        @enumFromInt(rank1_idx),
+                        @enumFromInt(rank2_idx),
+                        self.allocator,
+                    );
+                    defer self.allocator.free(combinations);
 
-        // Add all 6 combinations: 4 choose 2 = 6 combinations
-        const suits = [4]u2{ 0, 1, 2, 3 }; // h, s, d, c
-
-        for (suits, 0..) |suit1, i| {
-            for (suits[i + 1 ..]) |suit2| {
-                const hole_hand = [2]Hand{
-                    card.makeCard(suit1, rank - 2), // Convert poker rank to card rank
-                    card.makeCard(suit2, rank - 2),
-                };
-                try self.addHand(hole_hand, probability);
+                    for (combinations) |combo| {
+                        try self.addHand(combo, probability);
+                    }
+                },
+                else => return error.InvalidModifier,
             }
         }
     }
+
+    // Note: parseRank helper function is defined below
 
     /// Add multiple hands with same probability using poker notation
     pub fn addHands(self: *Range, notations: []const []const u8, probability: f32) !void {
@@ -144,38 +166,6 @@ pub const Range = struct {
         return Iterator{ .inner = self.hands.iterator() };
     }
 };
-
-/// Parse range hand notation (e.g., "AA", "AKs", "AKo") into representative hand
-/// This is used internally by parseRange() and addHandNotation()
-fn parseHandNotation(notation: []const u8) ![2]Hand {
-    if (notation.len < 2 or notation.len > 3) return error.InvalidNotation;
-
-    const rank1 = parseRank(notation[0]) orelse return error.InvalidRank;
-    const rank2 = parseRank(notation[1]) orelse return error.InvalidRank;
-
-    if (notation.len == 2) {
-        if (rank1 == rank2) {
-            // Pocket pair (e.g., "AA", "KK")
-            return [2]Hand{
-                card.makeCard(0, rank1 - 2), // Convert poker rank to card rank
-                card.makeCard(1, rank2 - 2),
-            };
-        } else {
-            // Unpaired hand without modifier - this is ambiguous, so we need to handle it at range level
-            return error.AmbiguousNotation;
-        }
-    } else {
-        // Suited or offsuit (e.g., "AKs", "AKo")
-        const modifier = notation[2];
-        if (rank1 == rank2) return error.CannotBeSuited;
-
-        switch (modifier) {
-            's' => return [2]Hand{ card.makeCard(0, rank1 - 2), card.makeCard(0, rank2 - 2) }, // Same suit
-            'o' => return [2]Hand{ card.makeCard(0, rank1 - 2), card.makeCard(1, rank2 - 2) }, // Different suits
-            else => return error.InvalidModifier,
-        }
-    }
-}
 
 /// Parse single rank character to numeric value
 fn parseRank(char: u8) ?u8 {
@@ -259,14 +249,20 @@ pub fn calculateRangeEquityExact(hero_range: *const Range, villain_range: *const
                 continue;
             }
 
-            // TODO: Calculate exact equity for this hand combination
-            // This will need to import equity module once it's created
-            _ = allocator; // Suppress unused variable warning for now
-            const equity_result_placeholder: f64 = 0.5; // Placeholder
+            // Calculate exact equity for this hand combination
+            const hero_combined = hero_entry.hand[0] | hero_entry.hand[1];
+            const villain_combined = villain_entry.hand[0] | villain_entry.hand[1];
+            const equity_result = try equity.exact(
+                hero_combined,
+                villain_combined,
+                board,
+                allocator,
+            );
+            const hero_win_rate = equity_result.equity();
 
             // Weight by probabilities of both hands
             const weight = hero_entry.probability * villain_entry.probability;
-            total_hero_equity += equity_result_placeholder * weight;
+            total_hero_equity += hero_win_rate * weight;
             total_weight += weight;
             total_combinations += 1;
         }
@@ -282,19 +278,84 @@ pub fn calculateRangeEquityExact(hero_range: *const Range, villain_range: *const
     };
 }
 
+/// Sample a hand from a range with weighted probability
+fn sampleHandFromRange(range: *const Range, total_weight: f64, rng: std.Random) [2]Hand {
+    const target = rng.float(f64) * total_weight;
+    var cumulative: f64 = 0;
+
+    var iter = range.iterator();
+    while (iter.next()) |entry| {
+        cumulative += entry.probability;
+        if (cumulative >= target) {
+            return entry.hand;
+        }
+    }
+
+    // Fallback - return first hand found (should not happen with proper weights)
+    var fallback_iter = range.iterator();
+    if (fallback_iter.next()) |entry| {
+        return entry.hand;
+    }
+    // This should never happen
+    unreachable;
+}
+
 /// Calculate range vs range equity using Monte Carlo simulation
 /// Note: This function will need to import equity module once it's created
 pub fn calculateRangeEquityMonteCarlo(hero_range: *const Range, villain_range: *const Range, board: []const Hand, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) !RangeEquityResult {
-    _ = hero_range;
-    _ = villain_range;
-    _ = board;
-    _ = rng;
-    _ = allocator;
+    // Sample hands from ranges and run Monte Carlo simulations
+    var hero_wins: u32 = 0;
+    var ties: u32 = 0;
 
-    // TODO: Implement once equity module is created
+    // Pre-calculate total weights for weighted sampling
+    var hero_total_weight: f64 = 0;
+    var hero_iter = hero_range.iterator();
+    while (hero_iter.next()) |entry| {
+        hero_total_weight += entry.probability;
+    }
+
+    var villain_total_weight: f64 = 0;
+    var villain_iter = villain_range.iterator();
+    while (villain_iter.next()) |entry| {
+        villain_total_weight += entry.probability;
+    }
+
+    var i: u32 = 0;
+    while (i < simulations) : (i += 1) {
+        // Sample hero hand from range
+        const hero_hand = sampleHandFromRange(hero_range, hero_total_weight, rng);
+        const villain_hand = sampleHandFromRange(villain_range, villain_total_weight, rng);
+
+        // Skip if hands conflict
+        if (hasCardConflict(hero_hand, villain_hand, board)) {
+            continue;
+        }
+
+        // Run Monte Carlo simulation for this matchup
+        const hero_combined = hero_hand[0] | hero_hand[1];
+        const villain_combined = villain_hand[0] | villain_hand[1];
+        const result = try equity.monteCarlo(
+            hero_combined,
+            villain_combined,
+            board,
+            1, // Single simulation since we're already sampling
+            rng,
+            allocator,
+        );
+
+        if (result.wins > 0) {
+            hero_wins += 1;
+        } else if (result.ties > 0) {
+            ties += 1;
+        }
+    }
+
+    const total = hero_wins + ties + (simulations - hero_wins - ties);
+    const hero_equity = (@as(f64, @floatFromInt(hero_wins)) + @as(f64, @floatFromInt(ties)) * 0.5) / @as(f64, @floatFromInt(total));
+
     return RangeEquityResult{
-        .hero_equity = 0.5,
-        .villain_equity = 0.5,
+        .hero_equity = hero_equity,
+        .villain_equity = 1.0 - hero_equity,
         .total_simulations = simulations,
     };
 }
@@ -349,8 +410,8 @@ test "range basic operations" {
     defer range.deinit();
 
     const hole_hand = [2]Hand{
-        card.makeCard(0, 12), // Ace of clubs
-        card.makeCard(1, 12), // Ace of diamonds
+        card.makeCard(.clubs, .ace), // Ace of clubs
+        card.makeCard(.diamonds, .ace), // Ace of diamonds
     };
     try range.addHand(hole_hand, 1.0);
 
@@ -360,8 +421,8 @@ test "range basic operations" {
 
 test "hand key conversion" {
     const hand1 = [2]Hand{
-        card.makeCard(2, 12), // Ace of hearts
-        card.makeCard(3, 12), // Ace of spades
+        card.makeCard(.hearts, .ace), // Ace of hearts
+        card.makeCard(.spades, .ace), // Ace of spades
     };
 
     const hand_key = HandKey.init(hand1);
@@ -374,22 +435,31 @@ test "hand key conversion" {
 }
 
 test "range notation parsing" {
-    // Test pocket pairs
-    const aa = try parseHandNotation("AA");
-    try testing.expect(card.getSuitMask(aa[0], .clubs) != 0 or card.getSuitMask(aa[0], .diamonds) != 0 or card.getSuitMask(aa[0], .hearts) != 0 or card.getSuitMask(aa[0], .spades) != 0);
-    try testing.expect(card.getSuitMask(aa[1], .clubs) != 0 or card.getSuitMask(aa[1], .diamonds) != 0 or card.getSuitMask(aa[1], .hearts) != 0 or card.getSuitMask(aa[1], .spades) != 0);
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
 
-    const kk = try parseHandNotation("KK");
-    try testing.expect(card.getSuitMask(kk[0], .clubs) != 0 or card.getSuitMask(kk[0], .diamonds) != 0 or card.getSuitMask(kk[0], .hearts) != 0 or card.getSuitMask(kk[0], .spades) != 0);
-    try testing.expect(card.getSuitMask(kk[1], .clubs) != 0 or card.getSuitMask(kk[1], .diamonds) != 0 or card.getSuitMask(kk[1], .hearts) != 0 or card.getSuitMask(kk[1], .spades) != 0);
+    // Test parseRank function
+    try testing.expectEqual(@as(?u8, 2), parseRank('2'));
+    try testing.expectEqual(@as(?u8, 10), parseRank('T'));
+    try testing.expectEqual(@as(?u8, 14), parseRank('A'));
+    try testing.expectEqual(@as(?u8, null), parseRank('X'));
 
-    // Test suited hands
-    const aks = try parseHandNotation("AKs");
-    try testing.expect((aks[0] & aks[1]) == 0); // Different ranks
+    // Test range with different notations
+    var range = Range.init(allocator);
+    defer range.deinit();
 
-    // Test offsuit hands
-    const ako = try parseHandNotation("AKo");
-    try testing.expect((ako[0] & ako[1]) == 0); // Different ranks
+    // Add pocket pairs
+    try range.addHandNotation("AA", 1.0);
+    try testing.expect(range.handCount() == 6); // 6 combinations for AA
+
+    // Add suited hand
+    try range.addHandNotation("AKs", 1.0);
+    try testing.expect(range.handCount() == 10); // 6 + 4 = 10
+
+    // Add offsuit hand
+    try range.addHandNotation("QJo", 1.0);
+    try testing.expect(range.handCount() == 22); // 6 + 4 + 12 = 22
 }
 
 test "range with notation" {
@@ -434,12 +504,12 @@ test "parseRange function" {
 }
 
 test "range delegation to hand parsing" {
-    // Test that we properly use hand.mustParseHand (CardSet approach)
-    const single_card = hand.mustParseHand("As");
+    // Test that we properly use hand.parseHand (CardSet approach)
+    const single_card = hand.parseHand("As");
     try testing.expect(card.countCards(single_card) == 1);
     try testing.expect(card.hasCard(single_card, .spades, .ace));
 
-    const hole_cards = hand.mustParseHand("AhAs");
+    const hole_cards = hand.parseHand("AhAs");
     try testing.expect(card.countCards(hole_cards) == 2);
     try testing.expect(card.hasCard(hole_cards, .hearts, .ace));
     try testing.expect(card.hasCard(hole_cards, .spades, .ace));

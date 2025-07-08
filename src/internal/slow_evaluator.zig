@@ -279,8 +279,8 @@ pub fn getHandCategory(hand: Hand) u16 {
 
 // Tests
 test "royal flush" {
-    const royal_flush = makeCard(3, 12) | makeCard(3, 11) | makeCard(3, 10) | makeCard(3, 9) | makeCard(3, 8) |
-        makeCard(0, 0) | makeCard(1, 1); // Add two random cards
+    const royal_flush = makeCard(.spades, .ace) | makeCard(.spades, .king) | makeCard(.spades, .queen) | makeCard(.spades, .jack) | makeCard(.spades, .ten) |
+        makeCard(.clubs, .two) | makeCard(.diamonds, .three); // Add two random cards
 
     const rank = evaluateHand(royal_flush);
     try std.testing.expect(rank == 0); // Royal flush = rank 0 (best possible)
@@ -293,90 +293,90 @@ test "royal flush clubs 0x1F00" {
 }
 
 test "straight flush" {
-    const straight_flush = makeCard(2, 8) | makeCard(2, 7) | makeCard(2, 6) | makeCard(2, 5) | makeCard(2, 4) |
-        makeCard(0, 0) | makeCard(1, 1); // Add two random cards (9-high straight flush)
+    const straight_flush = makeCard(.hearts, .ten) | makeCard(.hearts, .nine) | makeCard(.hearts, .eight) | makeCard(.hearts, .seven) | makeCard(.hearts, .six) |
+        makeCard(.clubs, .two) | makeCard(.diamonds, .three); // Add two random cards (9-high straight flush)
 
     const rank = evaluateHand(straight_flush);
     try std.testing.expect(rank >= 1 and rank <= 9); // Straight flush range 1-9
 }
 
 test "four of a kind" {
-    const four_aces = makeCard(0, 12) | makeCard(1, 12) | makeCard(2, 12) | makeCard(3, 12) |
-        makeCard(0, 11) | makeCard(1, 10) | makeCard(2, 9);
+    const four_aces = makeCard(.clubs, .ace) | makeCard(.diamonds, .ace) | makeCard(.hearts, .ace) | makeCard(.spades, .ace) |
+        makeCard(.clubs, .king) | makeCard(.diamonds, .queen) | makeCard(.hearts, .jack);
 
     const rank = evaluateHand(four_aces);
     try std.testing.expect(rank >= 10 and rank <= 165); // Four of a kind range
 }
 
 test "full house" {
-    const full_house = makeCard(0, 10) | makeCard(1, 10) | makeCard(2, 10) |
-        makeCard(0, 9) | makeCard(1, 9) | makeCard(2, 8) | makeCard(3, 7);
+    const full_house = makeCard(.clubs, .queen) | makeCard(.diamonds, .queen) | makeCard(.hearts, .queen) |
+        makeCard(.clubs, .jack) | makeCard(.diamonds, .jack) | makeCard(.hearts, .ten) | makeCard(.spades, .nine);
 
     const rank = evaluateHand(full_house);
     try std.testing.expect(rank >= 166 and rank <= 321); // Full house range
 }
 
 test "flush" {
-    const flush = makeCard(2, 12) | makeCard(2, 10) | makeCard(2, 8) | makeCard(2, 6) | makeCard(2, 4) |
-        makeCard(0, 11) | makeCard(1, 9); // Add two random cards
+    const flush = makeCard(.hearts, .ace) | makeCard(.hearts, .queen) | makeCard(.hearts, .ten) | makeCard(.hearts, .eight) | makeCard(.hearts, .six) |
+        makeCard(.clubs, .king) | makeCard(.diamonds, .jack); // Add two random cards
 
     const rank = evaluateHand(flush);
     try std.testing.expect(rank >= 322 and rank <= 1598); // Flush range
 }
 
 test "straight" {
-    const straight = makeCard(0, 8) | makeCard(1, 7) | makeCard(2, 6) | makeCard(3, 5) | makeCard(0, 4) |
-        makeCard(1, 2) | makeCard(2, 0); // Add two random cards (9-high straight)
+    const straight = makeCard(.clubs, .ten) | makeCard(.diamonds, .nine) | makeCard(.hearts, .eight) | makeCard(.spades, .seven) | makeCard(.clubs, .six) |
+        makeCard(.diamonds, .four) | makeCard(.hearts, .two); // Add two random cards (9-high straight)
 
     const rank = evaluateHand(straight);
     try std.testing.expect(rank >= 1599 and rank <= 1608); // Straight range
 }
 
 test "wheel straight (A-2-3-4-5)" {
-    const wheel = makeCard(0, 12) | makeCard(1, 3) | makeCard(2, 2) | makeCard(3, 1) | makeCard(0, 0) |
-        makeCard(1, 11) | makeCard(2, 10); // Add two random cards
+    const wheel = makeCard(.clubs, .ace) | makeCard(.diamonds, .five) | makeCard(.hearts, .four) | makeCard(.spades, .three) | makeCard(.clubs, .two) |
+        makeCard(.diamonds, .king) | makeCard(.hearts, .queen); // Add two random cards
 
     const rank = evaluateHand(wheel);
     try std.testing.expect(rank == 1608); // Wheel is worst straight
 }
 
 test "three of a kind" {
-    const three_kings = makeCard(0, 11) | makeCard(1, 11) | makeCard(2, 11) |
-        makeCard(0, 9) | makeCard(1, 7) | makeCard(2, 5) | makeCard(3, 2);
+    const three_kings = makeCard(.clubs, .king) | makeCard(.diamonds, .king) | makeCard(.hearts, .king) |
+        makeCard(.clubs, .jack) | makeCard(.diamonds, .nine) | makeCard(.hearts, .seven) | makeCard(.spades, .four);
 
     const rank = evaluateHand(three_kings);
     try std.testing.expect(rank >= 1609 and rank <= 2466); // Three of a kind range
 }
 
 test "two pair" {
-    const two_pair = makeCard(0, 10) | makeCard(1, 10) | makeCard(2, 8) | makeCard(3, 8) |
-        makeCard(0, 6) | makeCard(1, 4) | makeCard(2, 2);
+    const two_pair = makeCard(.clubs, .queen) | makeCard(.diamonds, .queen) | makeCard(.hearts, .ten) | makeCard(.spades, .ten) |
+        makeCard(.clubs, .eight) | makeCard(.diamonds, .six) | makeCard(.hearts, .four);
 
     const rank = evaluateHand(two_pair);
     try std.testing.expect(rank >= 2467 and rank <= 3324); // Two pair range
 }
 
 test "one pair" {
-    const one_pair = makeCard(0, 10) | makeCard(1, 10) | makeCard(2, 8) | makeCard(3, 6) |
-        makeCard(0, 4) | makeCard(1, 2) | makeCard(2, 0);
+    const one_pair = makeCard(.clubs, .queen) | makeCard(.diamonds, .queen) | makeCard(.hearts, .ten) | makeCard(.spades, .eight) |
+        makeCard(.clubs, .six) | makeCard(.diamonds, .four) | makeCard(.hearts, .two);
 
     const rank = evaluateHand(one_pair);
     try std.testing.expect(rank >= 3325 and rank <= 6184); // One pair range
 }
 
 test "high card" {
-    const high_card = makeCard(0, 12) | makeCard(1, 10) | makeCard(2, 8) | makeCard(3, 6) |
-        makeCard(0, 4) | makeCard(1, 2) | makeCard(2, 0);
+    const high_card = makeCard(.clubs, .ace) | makeCard(.diamonds, .queen) | makeCard(.hearts, .ten) | makeCard(.spades, .eight) |
+        makeCard(.clubs, .six) | makeCard(.diamonds, .four) | makeCard(.hearts, .two);
 
     const rank = evaluateHand(high_card);
     try std.testing.expect(rank >= 6185 and rank <= 7461); // High card range (worst hands)
 }
 
 test "card utilities" {
-    const ace_spades = makeCard(3, 12);
+    const ace_spades = makeCard(.spades, .ace);
     try std.testing.expect(ace_spades == (@as(Hand, 1) << (39 + 12)));
 
-    const hand = makeCard(0, 12) | makeCard(1, 10) | makeCard(2, 8);
+    const hand = makeCard(.clubs, .ace) | makeCard(.diamonds, .queen) | makeCard(.hearts, .ten);
     const rank_mask = getRankMask(hand);
     try std.testing.expect((rank_mask & (1 << 12)) != 0); // Has ace
     try std.testing.expect((rank_mask & (1 << 10)) != 0); // Has jack
@@ -384,18 +384,18 @@ test "card utilities" {
 }
 
 test "flush detection" {
-    const flush_hand = makeCard(2, 12) | makeCard(2, 10) | makeCard(2, 8) | makeCard(2, 6) | makeCard(2, 4);
+    const flush_hand = makeCard(.hearts, .ace) | makeCard(.hearts, .queen) | makeCard(.hearts, .ten) | makeCard(.hearts, .eight) | makeCard(.hearts, .six);
     try std.testing.expect(hasFlush(flush_hand));
 
-    const no_flush = makeCard(0, 12) | makeCard(1, 10) | makeCard(2, 8) | makeCard(3, 6);
+    const no_flush = makeCard(.clubs, .ace) | makeCard(.diamonds, .queen) | makeCard(.hearts, .ten) | makeCard(.spades, .eight);
     try std.testing.expect(!hasFlush(no_flush));
 }
 
 test "wheel straight flush (A-5-4-3-2)" {
     // Wheel straight flush: A,2,3,4,5 all clubs + 2 off-suit cards
     // Ranks: A=12, 2=0, 3=1, 4=2, 5=3 → pattern 0x100F
-    const wheel_sf = makeCard(0, 12) | makeCard(0, 0) | makeCard(0, 1) | makeCard(0, 2) | makeCard(0, 3) |
-        makeCard(1, 10) | makeCard(2, 8); // Add two off-suit cards
+    const wheel_sf = makeCard(.clubs, .ace) | makeCard(.clubs, .two) | makeCard(.clubs, .three) | makeCard(.clubs, .four) | makeCard(.clubs, .five) |
+        makeCard(.diamonds, .queen) | makeCard(.hearts, .ten); // Add two off-suit cards
 
     const rank = evaluateHand(wheel_sf);
 
@@ -447,13 +447,13 @@ test "overlapping straights edge case - hand 2" {
 test "two trips makes full house" {
     // Test case: AAAKKK7 - two trips should be a full house
     // AAA = A♠A♥A♦, KKK = K♠K♥K♦, 7 = 7♣
-    const hand = makeCard(0, 12) | // A♣
-        makeCard(1, 12) | // A♦
-        makeCard(2, 12) | // A♥
-        makeCard(0, 11) | // K♣
-        makeCard(1, 11) | // K♦
-        makeCard(2, 11) | // K♥
-        makeCard(0, 6); // 7♣
+    const hand = makeCard(.clubs, .ace) | // A♣
+        makeCard(.diamonds, .ace) | // A♦
+        makeCard(.hearts, .ace) | // A♥
+        makeCard(.clubs, .king) | // K♣
+        makeCard(.diamonds, .king) | // K♦
+        makeCard(.hearts, .king) | // K♥
+        makeCard(.clubs, .eight); // 7♣
 
     const rank = evaluateHand(hand);
 

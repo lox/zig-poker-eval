@@ -9,42 +9,17 @@ pub const Hand = card.Hand;
 pub const Suit = card.Suit;
 pub const Rank = card.Rank;
 
-/// Parse card string like "As" into a card
-/// rank: '2'-'9', 'T', 'J', 'Q', 'K', 'A'
-/// suit: 'c'=clubs, 'd'=diamonds, 'h'=hearts, 's'=spades
-pub fn parseCard(card_str: []const u8) !Hand {
-    if (card_str.len != 2) return error.InvalidCardString;
-
-    // Parse rank
-    const rank: u8 = switch (card_str[0]) {
-        '2'...'9' => card_str[0] - '2',
-        'T' => 8,
-        'J' => 9,
-        'Q' => 10,
-        'K' => 11,
-        'A' => 12,
-        else => return error.InvalidRank,
-    };
-
-    // Parse suit
-    const suit: u8 = switch (card_str[1]) {
-        'c' => 0, // clubs
-        'd' => 1, // diamonds
-        'h' => 2, // hearts
-        's' => 3, // spades
-        else => return error.InvalidSuit,
-    };
-
-    return card.makeCard(suit, rank);
-}
+// Note: parseCard functionality moved to card.zig module
+// Use card.parseCard for compile-time parsing
+// Use card.maybeParseCard for runtime parsing with error handling
 
 /// Compile-time parsing of any card string into a Hand (CardSet)
 /// Examples:
-///   mustParseHand("As") → Hand with 1 card
-///   mustParseHand("AsKd") → Hand with 2 cards (hole cards)
-///   mustParseHand("AsKdQh") → Hand with 3 cards (flop)
-///   mustParseHand("AsKdQhJsTs5h2c") → Hand with 7 cards (full hand)
-pub fn mustParseHand(comptime card_string: []const u8) Hand {
+///   parseHand("As") → Hand with 1 card
+///   parseHand("AsKd") → Hand with 2 cards (hole cards)
+///   parseHand("AsKdQh") → Hand with 3 cards (flop)
+///   parseHand("AsKdQhJsTs5h2c") → Hand with 7 cards (full hand)
+pub fn parseHand(comptime card_string: []const u8) Hand {
     if (card_string.len % 2 != 0) {
         @compileError("Invalid card string length: " ++ card_string);
     }
@@ -52,42 +27,30 @@ pub fn mustParseHand(comptime card_string: []const u8) Hand {
     var hand: Hand = 0;
     comptime var i: usize = 0;
     inline while (i < card_string.len) : (i += 2) {
-        const single_card = mustParseCard(card_string[i .. i + 2]);
+        const single_card = card.parseCard(card_string[i .. i + 2]);
         hand |= single_card;
     }
     return hand;
 }
 
-/// Compile-time single card parsing helper
-fn mustParseCard(comptime card_str: []const u8) Hand {
-    if (card_str.len != 2) {
-        @compileError("Card must be exactly 2 characters: " ++ card_str);
+/// Runtime parsing of any card string into a Hand (CardSet)
+/// Returns an error if the card string is invalid
+/// Examples:
+///   try maybeParseHand("As") → Hand with 1 card
+///   try maybeParseHand("AsKd") → Hand with 2 cards (hole cards)
+///   try maybeParseHand("AsKdQhJsTs5h2c") → Hand with 7 cards (full hand)
+pub fn maybeParseHand(card_string: []const u8) !Hand {
+    if (card_string.len % 2 != 0) {
+        return error.InvalidCardStringLength;
     }
 
-    const rank_char = card_str[0];
-    const suit_char = card_str[1];
-
-    // Parse rank
-    const rank: u8 = switch (rank_char) {
-        '2'...'9' => rank_char - '2',
-        'T' => 8,
-        'J' => 9,
-        'Q' => 10,
-        'K' => 11,
-        'A' => 12,
-        else => @compileError("Invalid rank: " ++ [_]u8{rank_char}),
-    };
-
-    // Parse suit
-    const suit: u8 = switch (suit_char) {
-        'c' => 0, // clubs
-        'd' => 1, // diamonds
-        'h' => 2, // hearts
-        's' => 3, // spades
-        else => @compileError("Invalid suit: " ++ [_]u8{suit_char}),
-    };
-
-    return card.makeCard(suit, rank);
+    var hand: Hand = 0;
+    var i: usize = 0;
+    while (i < card_string.len) : (i += 2) {
+        const single_card = try card.maybeParseCard(card_string[i .. i + 2]);
+        hand |= single_card;
+    }
+    return hand;
 }
 
 /// Generate all suited combinations for a rank pair (4 combinations)
@@ -97,8 +60,8 @@ pub fn generateSuitedCombinations(rank1: Rank, rank2: Rank, allocator: std.mem.A
 
     for (suits, 0..) |suit, i| {
         combinations[i] = [2]Hand{
-            card.makeCardFromEnums(suit, rank1),
-            card.makeCardFromEnums(suit, rank2),
+            card.makeCard(suit, rank1),
+            card.makeCard(suit, rank2),
         };
     }
 
@@ -115,8 +78,8 @@ pub fn generateOffsuitCombinations(rank1: Rank, rank2: Rank, allocator: std.mem.
         for (suits) |suit2| {
             if (suit1 != suit2) {
                 combinations[idx] = [2]Hand{
-                    card.makeCardFromEnums(suit1, rank1),
-                    card.makeCardFromEnums(suit2, rank2),
+                    card.makeCard(suit1, rank1),
+                    card.makeCard(suit2, rank2),
                 };
                 idx += 1;
             }
@@ -135,8 +98,8 @@ pub fn generateAllCombinations(rank1: Rank, rank2: Rank, allocator: std.mem.Allo
     for (suits) |suit1| {
         for (suits) |suit2| {
             combinations[idx] = [2]Hand{
-                card.makeCardFromEnums(suit1, rank1),
-                card.makeCardFromEnums(suit2, rank2),
+                card.makeCard(suit1, rank1),
+                card.makeCard(suit2, rank2),
             };
             idx += 1;
         }
@@ -154,8 +117,8 @@ pub fn generatePocketPair(rank: Rank, allocator: std.mem.Allocator) ![]const [2]
     for (suits, 0..) |suit1, i| {
         for (suits[i + 1 ..]) |suit2| {
             combinations[idx] = [2]Hand{
-                card.makeCardFromEnums(suit1, rank),
-                card.makeCardFromEnums(suit2, rank),
+                card.makeCard(suit1, rank),
+                card.makeCard(suit2, rank),
             };
             idx += 1;
         }
@@ -168,7 +131,7 @@ pub fn generatePocketPair(rank: Rank, allocator: std.mem.Allocator) ![]const [2]
 pub fn createHand(cards: []const struct { Suit, Rank }) Hand {
     var hand: Hand = 0;
     for (cards) |card_info| {
-        const card_bits = card.makeCardFromEnums(card_info[0], card_info[1]);
+        const card_bits = card.makeCard(card_info[0], card_info[1]);
         hand |= card_bits;
     }
     return hand;
@@ -178,22 +141,22 @@ pub fn createHand(cards: []const struct { Suit, Rank }) Hand {
 const testing = std.testing;
 
 test "card parsing" {
-    const ace_spades = try parseCard("As");
-    const two_clubs = try parseCard("2c");
+    const ace_spades = try card.maybeParseCard("As");
+    const two_clubs = try card.maybeParseCard("2c");
 
-    try testing.expect(ace_spades == card.makeCardFromEnums(.spades, .ace));
-    try testing.expect(two_clubs == card.makeCardFromEnums(.clubs, .two));
+    try testing.expect(ace_spades == card.makeCard(.spades, .ace));
+    try testing.expect(two_clubs == card.makeCard(.clubs, .two));
 }
 
 test "runtime single card parsing" {
     // Test individual card parsing for user input
-    const ace = try parseCard("As");
-    const king = try parseCard("Kh");
-    const queen = try parseCard("Qd");
+    const ace = try card.maybeParseCard("As");
+    const king = try card.maybeParseCard("Kh");
+    const queen = try card.maybeParseCard("Qd");
 
-    try testing.expect(ace == card.makeCardFromEnums(.spades, .ace));
-    try testing.expect(king == card.makeCardFromEnums(.hearts, .king));
-    try testing.expect(queen == card.makeCardFromEnums(.diamonds, .queen));
+    try testing.expect(ace == card.makeCard(.spades, .ace));
+    try testing.expect(king == card.makeCard(.hearts, .king));
+    try testing.expect(queen == card.makeCard(.diamonds, .queen));
 
     // Test that individual cards can be combined into hands
     const combined = ace | king | queen;
@@ -205,26 +168,57 @@ test "runtime single card parsing" {
 
 test "compile-time hand parsing" {
     // Test single card
-    const single_card = mustParseHand("As");
+    const single_card = parseHand("As");
     try testing.expect(card.hasCard(single_card, .spades, .ace));
     try testing.expect(card.countCards(single_card) == 1);
 
     // Test multiple cards
-    const three_cards = mustParseHand("AsKhQd");
+    const three_cards = parseHand("AsKhQd");
     try testing.expect(card.hasCard(three_cards, .spades, .ace));
     try testing.expect(card.hasCard(three_cards, .hearts, .king));
     try testing.expect(card.hasCard(three_cards, .diamonds, .queen));
     try testing.expect(card.countCards(three_cards) == 3);
 
     // Test hole cards
-    const hole = mustParseHand("AsKh");
+    const hole = parseHand("AsKh");
     try testing.expect(card.hasCard(hole, .spades, .ace));
     try testing.expect(card.hasCard(hole, .hearts, .king));
     try testing.expect(card.countCards(hole) == 2);
 
     // Test full hand
-    const full_hand = mustParseHand("AsKhQdJcTs5h2d");
+    const full_hand = parseHand("AsKhQdJcTs5h2d");
     try testing.expect(card.countCards(full_hand) == 7);
+}
+
+test "runtime hand parsing" {
+    // Test single card
+    const single_card = try maybeParseHand("As");
+    try testing.expect(card.hasCard(single_card, .spades, .ace));
+    try testing.expect(card.countCards(single_card) == 1);
+
+    // Test multiple cards
+    const three_cards = try maybeParseHand("AsKhQd");
+    try testing.expect(card.hasCard(three_cards, .spades, .ace));
+    try testing.expect(card.hasCard(three_cards, .hearts, .king));
+    try testing.expect(card.hasCard(three_cards, .diamonds, .queen));
+    try testing.expect(card.countCards(three_cards) == 3);
+
+    // Test hole cards
+    const hole = try maybeParseHand("AsKh");
+    try testing.expect(card.hasCard(hole, .spades, .ace));
+    try testing.expect(card.hasCard(hole, .hearts, .king));
+    try testing.expect(card.countCards(hole) == 2);
+
+    // Test full hand
+    const full_hand = try maybeParseHand("AsKhQdJcTs5h2d");
+    try testing.expect(card.countCards(full_hand) == 7);
+
+    // Test error cases
+    const invalid_length = maybeParseHand("AsK");
+    try testing.expectError(error.InvalidCardStringLength, invalid_length);
+
+    const invalid_card = maybeParseHand("AsXx");
+    try testing.expectError(error.InvalidRank, invalid_card);
 }
 
 test "suited combinations generation" {
@@ -273,8 +267,8 @@ test "pocket pair generation" {
 }
 
 test "convenience functions" {
-    const ace_spades = card.makeCardFromEnums(.spades, .ace);
-    try testing.expect(ace_spades == card.makeCardFromEnums(.spades, .ace));
+    const ace_spades = card.makeCard(.spades, .ace);
+    try testing.expect(ace_spades == card.makeCard(.spades, .ace));
 
     const hand = createHand(&.{
         .{ .spades, .ace },
