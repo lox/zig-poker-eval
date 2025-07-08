@@ -77,6 +77,12 @@ pub fn buildChd(allocator: std.mem.Allocator, patterns: []const Pattern, num_buc
 
         for (patterns) |pattern| {
             const h = hashKey(pattern.key, magic_constant);
+
+            // Debug tracking for problem RPCs
+            if (pattern.key == 742203275 or pattern.key == 60953155) {
+                std.debug.print("CHD bucket assignment: RPC {} -> bucket {} (base_index {})\n", .{ pattern.key, h.bucket, h.base_index });
+            }
+
             try buckets[h.bucket].append(pattern);
         }
 
@@ -110,6 +116,15 @@ pub fn buildChd(allocator: std.mem.Allocator, patterns: []const Pattern, num_buc
             for (bucket.items) |pattern| {
                 const h = hashKey(pattern.key, magic_constant);
                 const slot = (h.base_index + displacement) & (table_size - 1);
+
+                // Debug tracking for problem RPC
+                if (pattern.key == 742203275) {
+                    std.debug.print("CHD: Placing RPC {} (value {}) at slot {} (bucket {}, base_index {}, displacement {})\n", .{ pattern.key, pattern.value, slot, h.bucket, h.base_index, displacement });
+                }
+                if (slot == 93133) {
+                    std.debug.print("CHD: Writing value {} to slot 93133 (RPC {})\n", .{ pattern.value, pattern.key });
+                }
+
                 occupied[slot] = true;
                 value_table[slot] = pattern.value;
             }
@@ -132,13 +147,24 @@ pub fn buildChd(allocator: std.mem.Allocator, patterns: []const Pattern, num_buc
 fn findDisplacement(patterns: []const Pattern, occupied: []bool, magic_constant: u64, table_size: u32) ?u32 {
     for (0..256) |d| {
         var collision = false;
+        var slots_to_check = std.AutoHashMap(u32, void).init(std.heap.page_allocator);
+        defer slots_to_check.deinit();
+
         for (patterns) |pattern| {
             const h = hashKey(pattern.key, magic_constant);
-            const slot = (h.base_index + d) & (table_size - 1);
-            if (occupied[slot]) {
+            const slot = (h.base_index + @as(u32, @intCast(d))) & (table_size - 1);
+
+            // Check if slot is already occupied OR if we've already seen this slot in this bucket
+            if (occupied[slot] or slots_to_check.contains(slot)) {
                 collision = true;
+
+                // Debug for our problem case
+                if (pattern.key == 742203275 or pattern.key == 60953155) {
+                    std.debug.print("CHD findDisplacement: RPC {} collides at slot {} with displacement {}\n", .{ pattern.key, slot, d });
+                }
                 break;
             }
+            slots_to_check.put(slot, {}) catch {};
         }
         if (!collision) return @intCast(d);
     }

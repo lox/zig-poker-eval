@@ -45,7 +45,7 @@ pub fn main() !void {
 
     var mismatches: u32 = 0;
     var batch_mismatches: u32 = 0;
-    const batch_size = 8;
+    const batch_size = 4;
 
     // Verify in batches
     var i: usize = 0;
@@ -60,7 +60,7 @@ pub fn main() !void {
 
         // Evaluate batch
         const batch = @as(@Vector(batch_size, u64), hands);
-        const batch_results = poker.evaluateBatch8(batch);
+        const batch_results = poker.evaluateBatch4(batch);
 
         // Check results
         for (0..batch_size) |j| {

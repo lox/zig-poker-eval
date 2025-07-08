@@ -373,6 +373,121 @@ test "batch evaluation" {
     try testing.expectEqual(@as(u32, @intCast(batch_size)), matches);
 }
 
+test "two trips makes full house" {
+    // Test case: AAAKKK7 - two trips should be a full house
+    const hand = card.makeCard(0, 12) | // A♣
+        card.makeCard(1, 12) | // A♦
+        card.makeCard(2, 12) | // A♥
+        card.makeCard(0, 11) | // K♣
+        card.makeCard(1, 11) | // K♦
+        card.makeCard(2, 11) | // K♥
+        card.makeCard(0, 6); // 7♣
+
+    const slow_rank = slow_eval.evaluateHand(hand);
+    const fast_rank = evaluateHand(hand);
+
+    // Should be a full house (rank 166-321)
+    try testing.expect(slow_rank >= 166 and slow_rank <= 321);
+    try testing.expect(fast_rank >= 166 and fast_rank <= 321);
+
+    // Fast and slow should match
+    if (slow_rank != fast_rank) {
+        std.debug.print("Two trips FAIL: hand=0x{X}, slow={}, fast={}\n", .{ hand, slow_rank, fast_rank });
+    }
+    try testing.expectEqual(slow_rank, fast_rank);
+}
+
+test "two trips edge cases" {
+    // First, let's verify the hand encoding
+    const correct_aaakkk7 = card.makeCard(0, 12) | // A♣
+        card.makeCard(1, 12) | // A♦
+        card.makeCard(2, 12) | // A♥
+        card.makeCard(0, 11) | // K♣
+        card.makeCard(1, 11) | // K♦
+        card.makeCard(2, 11) | // K♥
+        card.makeCard(0, 5); // 7♣
+
+    // Build other test hands correctly
+    const trips_222_333_a = card.makeCard(0, 0) | // 2♣
+        card.makeCard(1, 0) | // 2♦
+        card.makeCard(2, 0) | // 2♥
+        card.makeCard(0, 1) | // 3♣
+        card.makeCard(1, 1) | // 3♦
+        card.makeCard(2, 1) | // 3♥
+        card.makeCard(0, 12); // A♣
+
+    const trips_qqq_jjj_5 = card.makeCard(0, 10) | // Q♣
+        card.makeCard(1, 10) | // Q♦
+        card.makeCard(2, 10) | // Q♥
+        card.makeCard(0, 9) | // J♣
+        card.makeCard(1, 9) | // J♦
+        card.makeCard(2, 9) | // J♥
+        card.makeCard(0, 3); // 5♣
+
+    const trips_777_666_k = card.makeCard(0, 5) | // 7♣
+        card.makeCard(1, 5) | // 7♦
+        card.makeCard(2, 5) | // 7♥
+        card.makeCard(0, 4) | // 6♣
+        card.makeCard(1, 4) | // 6♦
+        card.makeCard(2, 4) | // 6♥
+        card.makeCard(0, 11); // K♣
+
+    // Test multiple two-trips scenarios
+    const test_cases = [_]struct { hand: u64, desc: []const u8 }{
+        .{ .hand = correct_aaakkk7, .desc = "AAA KKK 7" },
+        .{ .hand = trips_222_333_a, .desc = "222 333 A" },
+        .{ .hand = trips_qqq_jjj_5, .desc = "QQQ JJJ 5" },
+        .{ .hand = trips_777_666_k, .desc = "777 666 K" },
+    };
+
+    for (test_cases) |tc| {
+        const slow_rank = slow_eval.evaluateHand(tc.hand);
+        const fast_rank = evaluateHand(tc.hand);
+
+        // All should be full houses (rank 166-321)
+        try testing.expect(slow_rank >= 166 and slow_rank <= 321);
+
+        if (slow_rank != fast_rank) {
+            std.debug.print("Two trips edge case FAIL ({s}): hand=0x{X}, slow={}, fast={}\n", .{ tc.desc, tc.hand, slow_rank, fast_rank });
+        }
+        try testing.expectEqual(slow_rank, fast_rank);
+    }
+}
+
+test "verify problem hands from verify-all" {
+    // These are actual failing hands from the verify-all output
+    const problem_hands = [_]u64{
+        0x4802245, // First failing hand
+        0x8000802245, // Second failing hand
+        0x1004002245, // Third failing hand
+        0x4402445, // Another pattern
+        0x4C02045, // Another pattern
+    };
+
+    for (problem_hands, 0..) |hand, i| {
+        const slow_rank = slow_eval.evaluateHand(hand);
+        const fast_rank = evaluateHand(hand);
+        const category = getHandCategory(fast_rank);
+
+        std.debug.print("Problem hand {}: 0x{X}\n", .{ i, hand });
+        std.debug.print("  Slow rank: {} (category: {})\n", .{ slow_rank, getHandCategory(slow_rank) });
+        std.debug.print("  Fast rank: {} (category: {})\n", .{ fast_rank, category });
+
+        if (slow_rank != fast_rank) {
+            // Let's decode the hand to understand what cards it has
+            std.debug.print("  Hand breakdown:\n", .{});
+            for (0..4) |suit| {
+                const suit_mask = card.getSuitMask(hand, @enumFromInt(suit));
+                if (suit_mask != 0) {
+                    std.debug.print("    Suit {}: 0x{X}\n", .{ suit, suit_mask });
+                }
+            }
+        }
+
+        try testing.expectEqual(slow_rank, fast_rank);
+    }
+}
+
 // Ensure all tests in this module are discovered
 test {
     std.testing.refAllDecls(@This());

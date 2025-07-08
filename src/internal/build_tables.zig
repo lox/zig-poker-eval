@@ -128,11 +128,90 @@ fn buildTables(allocator: std.mem.Allocator) !void {
 
     print("Enumerating all 7-card hands...\n", .{});
 
+    // Debug: Track specific problem hands
+    const problem_hands = [_]u64{
+        0x4802245,
+        0x8000802245,
+        0x1004002245,
+        0x4402445,
+        0x4C02045,
+    };
+
     var iterator = HandIterator.init();
     var total_hands: usize = 0;
 
     while (iterator.next()) |hand| {
         total_hands += 1;
+
+        // Debug: Check if this is one of our problem hands
+        for (problem_hands) |ph| {
+            if (hand == ph) {
+                print("\n=== FOUND PROBLEM HAND 0x{X} ===\n", .{hand});
+
+                // Analyze the hand
+                const suits = evaluator.getSuitMasks(hand);
+                var rank_counts = [_]u8{0} ** 13;
+                for (0..13) |rank| {
+                    const rank_bit = @as(u16, 1) << @intCast(rank);
+                    for (suits) |suit| {
+                        if ((suit & rank_bit) != 0) rank_counts[rank] += 1;
+                    }
+                }
+
+                print("  Suits: C=0x{X} D=0x{X} H=0x{X} S=0x{X}\n", .{ suits[0], suits[1], suits[2], suits[3] });
+                print("  Rank counts: ", .{});
+                for (rank_counts, 0..) |count, rank| {
+                    if (count > 0) {
+                        const rank_str = switch (rank) {
+                            0 => "2",
+                            1 => "3",
+                            2 => "4",
+                            3 => "5",
+                            4 => "6",
+                            5 => "7",
+                            6 => "8",
+                            7 => "9",
+                            8 => "T",
+                            9 => "J",
+                            10 => "Q",
+                            11 => "K",
+                            12 => "A",
+                            else => "?",
+                        };
+                        print("{s}:{} ", .{ rank_str, count });
+                    }
+                }
+                print("\n", .{});
+
+                const has_flush = evaluator.hasFlush(hand);
+                const rpc = computeRPC(hand);
+                const rank = evaluator.evaluateHand(hand);
+
+                print("  Has flush: {}\n", .{has_flush});
+                print("  RPC: {}\n", .{rpc});
+                print("  Slow evaluator rank: {}\n", .{rank});
+
+                // Check hand type
+                var pairs: u8 = 0;
+                var trips: u8 = 0;
+                for (rank_counts) |count| {
+                    switch (count) {
+                        2 => pairs += 1,
+                        3 => trips += 1,
+                        else => {},
+                    }
+                }
+
+                if (trips == 2) {
+                    print("  *** TWO TRIPS - should be FULL HOUSE (rank 166-321) ***\n", .{});
+                } else if (trips == 1 and pairs >= 1) {
+                    print("  *** TRIPS + PAIR = FULL HOUSE ***\n", .{});
+                } else if (trips == 1) {
+                    print("  *** THREE OF A KIND (rank 1609-2466) ***\n", .{});
+                }
+                print("=================================\n\n", .{});
+            }
+        }
 
         if (evaluator.hasFlush(hand)) {
             // Handle flush pattern
@@ -172,6 +251,24 @@ fn buildTables(allocator: std.mem.Allocator) !void {
     print("Building CHD table...\n", .{});
     chd_result = try mphf.buildChd(allocator, non_flush_patterns.items, mphf.DEFAULT_NUM_BUCKETS, mphf.DEFAULT_TABLE_SIZE);
     print("  CHD built successfully\n", .{});
+
+    // Verify CHD lookup works for our problem RPC
+    print("Verifying CHD lookup...\n", .{});
+    const test_rpc: u32 = 742203275;
+    const expected_rank: u16 = 2389;
+    const actual_rank = mphf.lookup(test_rpc, chd_result.magic_constant, chd_result.g_array, chd_result.value_table, mphf.DEFAULT_TABLE_SIZE);
+    print("  RPC {} -> expected rank {}, got rank {}\n", .{ test_rpc, expected_rank, actual_rank });
+    if (actual_rank != expected_rank) {
+        print("  *** CHD LOOKUP VERIFICATION FAILED! ***\n", .{});
+
+        // Debug the hash
+        const h = mphf.hashKey(test_rpc, chd_result.magic_constant);
+        print("  Hash result: bucket={}, base_index={}\n", .{ h.bucket, h.base_index });
+        const displacement = chd_result.g_array[h.bucket];
+        const final_index = (h.base_index + displacement) & (mphf.DEFAULT_TABLE_SIZE - 1);
+        print("  Displacement={}, final_index={}\n", .{ displacement, final_index });
+        print("  Value at final_index: {}\n", .{chd_result.value_table[final_index]});
+    }
 
     // Build direct lookup for flush
     print("Building flush lookup table...\n", .{});
