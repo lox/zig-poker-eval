@@ -84,7 +84,7 @@ jobs:
 
             echo ""
             echo ""
-            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${LAST_TAG:-}...v$NEW_VERSION"
+            echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${LAST_TAG:-}...$NEW_VERSION"
           } > release_notes.md
 
           echo "RELEASE_NOTES<<EOF" >> $GITHUB_OUTPUT
@@ -95,8 +95,8 @@ jobs:
         if: steps.version.outputs.should_release == 'true'
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: v${{ steps.version.outputs.next }}
-          name: v${{ steps.version.outputs.next }}
+          tag_name: ${{ steps.version.outputs.next }}
+          name: ${{ steps.version.outputs.next }}
           body: ${{ steps.release_notes.outputs.RELEASE_NOTES }}
           draft: false
           prerelease: false
