@@ -1,30 +1,39 @@
-# AGENT.md - Zig Poker Hand Evaluator
+# CLAUDE.md - Zig Poker Hand Evaluator
 
 **CRITICAL**: Runtime performance is absolutely critical. Use `-Doptimize=ReleaseFast` for real speed testing.
-See [DESIGN.md](DESIGN.md) for complete design specification.
-
-**IMPORTANT**: If you cannot implement the exact design specified, DO NOT fall back to simpler solutions. The design must be followed precisely to achieve 2-5ns performance targets.
+Achieved performance: ~4.5ns per hand on Apple M1.
 
 ## Build Commands (Zig 0.14.0)
+
 - `zig build` - Build main executable
 - `zig build run` - Run main poker evaluator
-- `zig build test` - Run all unit tests (63 tests across all modules)
+- `zig build test` - Run all unit tests (82 tests across all modules)
 - `zig build test --summary all` - Run tests with detailed summary of all modules
-- `zig build bench -Doptimize=ReleaseFast` - Run performance benchmark (target: 2-5ns/hand)
-- `zig build build-tables -Doptimize=ReleaseFast` - Generate lookup tables (manual use only, creates src/tables.zig)
+- `zig build bench -Doptimize=ReleaseFast` - Run performance benchmark (~4.5ns/hand on M1)
+- `zig build build-tables -Doptimize=ReleaseFast` - Generate lookup tables (manual use only, creates src/internal/tables.zig)
 
 ## Architecture
-High-performance 7-card poker hand evaluator using SIMD and perfect hashing:
-- **Main components**: `evaluator.zig` (scalar), `simd_evaluator.zig` (SIMD batched), `chd.zig` (perfect hash)
-- **Table generation**: `build_tables.zig` builds perfect hash tables, outputs to `tables.zig` (pre-compiled)
-- **Memory footprint**: 120KB total (16KB bucket descriptors + 96KB RankPattern + 8KB FlushRank)
-- **Target performance**: 2-5ns per hand, 450M hands/sec single-thread on 3.5GHz CPU
+
+High-performance 7-card poker hand evaluator using SIMD batch processing and CHD perfect hash tables:
+
+- **Main components**: `src/evaluator.zig` (single + SIMD batch evaluation), `src/internal/mphf.zig` (CHD perfect hash)
+- **Table generation**: `src/internal/build_tables.zig` generates lookup tables, outputs to `src/internal/tables.zig`
+- **Memory footprint**: ~267KB total (8KB displacement array + 256KB value table + 3KB flush table)
+- **Measured performance**: ~4.5ns per hand, 224M+ hands/sec on Apple M1
+
+See documentation:
+
+- [docs/design.md](docs/design.md) - Implementation architecture and algorithms
+- [docs/benchmarking.md](docs/benchmarking.md) - Performance measurement methodology
+- [docs/profiling.md](docs/profiling.md) - Profiling tools and techniques
+- [docs/experiments.md](docs/experiments.md) - Optimization experiments and learnings
 
 ## Code Style
+
 - **Zig version**: 0.14.0 syntax (print requires `.{}` parameter: `print("text", .{});`)
 - **Naming**: camelCase for functions, snake_case for variables, PascalCase for types (idiomatic Zig)
 - **Imports**: `const std = @import("std");` first, then local imports
 - **Error handling**: Use Zig's error unions `!T`, propagate with `try`
-- **SIMD**: Use `@Vector(16, u64)` for AVX-512, fallback to 8-lane AVX2
-- **Testing**: Unit tests in each file, comprehensive tests in `test_evaluator.zig`
+- **SIMD**: Use `@Vector(batchSize, T)` with optimal batch size 32 for best performance
+- **Testing**: Unit tests in each file using Zig's built-in test framework
 - **Constants**: `const` for lookup tables, prefer compile-time known values

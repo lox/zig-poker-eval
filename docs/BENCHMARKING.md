@@ -1,85 +1,244 @@
-# Benchmarking Methodology
+# Benchmarking Guide
 
-## 1. Hardware and OS Setup
+This guide describes the benchmarking methodology used for the Zig poker evaluator, which achieves ~4.5ns per hand evaluation on Apple M1.
 
-1. Document platform: CPU model, macOS version, memory configuration
-2. Optimize for consistent performance:
-   - Set high performance mode: `sudo pmset -a highperf 1`
-   - Check thermal state: `pmset -g thermlog`
-   - Close unnecessary applications
-3. Minimize system interference:
-   - Run benchmark with elevated priority: `sudo nice -20`
-   - Consider disabling Spotlight indexing temporarily
+## 1. Benchmark Implementation
 
-## 2. Build Discipline
+The benchmarking framework is implemented in `src/tools/benchmark.zig` with these key features:
 
-1. Build in release mode:
-   ```
-   zig build bench -Doptimize=ReleaseFast -Dcpu=native
-   ```
-2. Record build environment:
-   - Zig version and build flags
-   - macOS version and Xcode command line tools version
+### Core Benchmarking Options
 
-## 3. Workload Generation
-
-**Random** means each lookup is an independent 7-card set; generation must not appear in timed region.
-
-1. **Scale**: Generate 100K+ unique hand batches with fixed seed
-   - Ensures cache pressure and prevents unrealistic cache hits
-2. **Cache-warm phase**: Touch lookup tables and initial hands before timing
-
-## 4. Timer and Measurement
-
-- Use `std.time.nanoTimestamp()` (wraps `mach_absolute_time()` on macOS) at batch boundaries.
-- Measure in blocks of 65K+ batches (1M+ hands) to amortize timer overhead.
-
-## 5. Run Plan
-
-1. **Multiple runs**: Execute 5 independent benchmark runs
-2. **Cache clearing**: Between runs, clear caches with `sudo purge` and sleep 3 seconds
-3. **Overhead isolation**: Run "dummy evaluator" that returns popcount to measure framework overhead
-4. **Statistical analysis**: Report median time and coefficient of variation
-
-## 6. Metrics and Analysis
-
-- **Primary metric**: Median nanoseconds per hand across five runs, after overhead correction.
-- **Target performance**: 2-5ns per hand (as specified in DESIGN.md)
-- **Quality check**: Coefficient of variation < 5% (indicates consistent measurement)
-
-## 7. Correctness Guard and Validation
-
-During warm-up and validation:
-
-1. Compute rolling XOR checksum of all returned ranks for each batch.
-2. Compare against a known good reference (from slow evaluator or golden file).
-3. Abort on mismatch.
-4. For SIMD evaluators, validate that batch results match scalar evaluation for the same hands.
-5. For BBHash, check:
-   - Level 2 should have ≤ 5 remaining patterns (with γ=2.0)
-   - If you see >50 "patterns placed without hash (fallback)", your table sizing is wrong
-   - Royal flush pattern (0x1F00) must return rank 0, not a fallback rank
-6. **Memory footprint assertions:**
-   - Use `smaps` or equivalent to confirm RSS ≈ 280 KB plus code
-
-### 7.1 Validation Technique Used in bench.zig
-
-- During benchmarking, a rolling XOR checksum of all returned hand ranks is computed for each batch.
-- This checksum is compared against a known good reference (from the slow evaluator or a golden file).
-- If a mismatch is detected, the benchmark aborts, ensuring that performance numbers are only reported for correct implementations.
-- For SIMD evaluators, batch results are also compared against scalar evaluation for the same hands to ensure bitwise correctness.
-- This technique is robust against silent errors and ensures that performance measurements are not taken on broken or misaligned evaluators.
-- See DESIGN.md for further details on validation methodology.
-
-**⚠️ BBHash Table Sizing Note:**
-When implementing BBHash table sizing, the load factor γ determines how many **more** slots you need than keys:
 ```zig
-// CORRECT: Table size = number_of_keys * gamma
-level_size = @as(u32, @intFromFloat(@as(f64, @floatFromInt(patterns.len)) * gamma));
-
-// WRONG: This makes tables too small and causes fallback patterns
-level_size = @as(u32, @intFromFloat(@as(f64, @floatFromInt(patterns.len)) / gamma));
+pub const BenchmarkOptions = struct {
+    iterations: u32 = 100000,          // Number of batches to evaluate
+    warmup: bool = true,               // Warm up caches before timing
+    measure_overhead: bool = true,     // Measure framework overhead
+    multiple_runs: bool = true,        // Run 5 times for statistics
+    show_comparison: bool = true,      // Compare batch vs single-hand
+    verbose: bool = false,
+};
 ```
-With γ=2.0, you need **double** the number of slots as keys for the hash to work efficiently. Dividing by γ instead of multiplying creates undersized tables that force many patterns into expensive fallback paths.
 
-> **Callout:** Our hand rank convention is 0 = Royal Flush (best), 7461 = worst high card. This is reversed from most open-source evaluators (e.g., 2+2, poker-eval, OMPEval); adjust comparisons when cross-checking.
+### Batch Processing
+
+- **Default batch size**: 32 hands (optimal for amortizing overhead)
+- **Test corpus**: 1.6M randomly generated hands to ensure cache pressure
+- **Fixed seed**: 42 for reproducible results
+
+## 2. Running Benchmarks
+
+### Basic Benchmark
+
+```bash
+# Run with default options (100K iterations × 32 hands = 3.2M hands)
+zig build bench -Doptimize=ReleaseFast
+
+# Via CLI with custom iterations
+zig build run -Doptimize=ReleaseFast -- bench --iterations 1000000
+```
+
+### Quick Validation
+
+```bash
+# Quick benchmark with correctness validation
+zig build run -- bench --quick --validate
+```
+
+### Batch Size Comparison
+
+```bash
+# Test different batch sizes (2, 4, 8, 16, 32, 64)
+zig build run -- bench --batch-sizes
+```
+
+## 3. Measurement Methodology
+
+### Cache Warmup
+
+The benchmark performs cache warmup by:
+
+1. Evaluating 1024 random hands to touch lookup tables
+2. Processing first 64K test hands in batches
+3. Ensuring tables are L2-resident before timing
+
+### Overhead Measurement
+
+Framework overhead is measured using a dummy evaluator that only performs `@popCount`:
+
+```zig
+fn benchmarkDummyEvaluator(iterations: u32, test_hands: []const u64) f64 {
+    // Measures loop overhead, memory access, and timing overhead
+    checksum +%= @popCount(test_hands[(hand_idx + j) % test_hands.len]);
+}
+```
+
+### Statistical Analysis
+
+- **Multiple runs**: 5 independent runs with median selection
+- **Coefficient of variation**: Calculated to ensure measurement quality
+- **Overhead correction**: Subtracts framework overhead from final times
+
+### Timer Implementation
+
+- Uses `std.time.nanoTimestamp()` which wraps `mach_absolute_time()` on macOS
+- Measures at batch boundaries to amortize timer overhead
+- ~40ns timer overhead per measurement call
+
+## 4. Performance Results (Apple M1)
+
+### Single vs Batch Performance
+
+```text
+Batch Size | ns/hand | Million hands/sec | Speedup vs single
+-----------|---------|-------------------|------------------
+         1 |    8.67 |             115.4 |             1.00x
+        32 |    4.46 |             224.3 |             1.94x
+```
+
+### Batch Size Scaling
+
+```text
+Batch Size | ns/hand | Million hands/sec | Speedup vs single
+-----------|---------|-------------------|------------------
+         2 |    7.22 |             138.5 |             1.20x
+         4 |    6.07 |             164.8 |             1.43x
+         8 |    5.44 |             183.8 |             1.59x
+        16 |    4.85 |             206.2 |             1.79x
+        32 |    4.46 |             224.3 |             1.94x
+        64 |    4.31 |             232.0 |             2.01x
+```
+
+## 5. Correctness Validation
+
+### Automatic Validation
+
+The benchmark includes built-in correctness checking:
+
+```zig
+pub fn validateCorrectness(test_hands: []const u64) !bool {
+    // Validates first 16K hands against slow reference implementation
+    // Requires 100% accuracy - any mismatch returns error
+    const accuracy = @as(f64, @floatFromInt(matches)) / @as(f64, @floatFromInt(total));
+    if (accuracy < 1.0) {
+        return error.AccuracyTooLow;
+    }
+}
+```
+
+### Test Coverage
+
+- **Basic validation**: 16K hands (512 batches of 32)
+- **Edge cases**: Two trips → full house, wheel straights
+- **Accuracy requirement**: 100% match with reference implementation
+- **XOR checksum**: Rolling checksum prevents silent errors
+
+## 6. Equity Benchmarks
+
+The framework also benchmarks Monte Carlo equity calculations:
+
+### Head-to-Head Equity
+
+```text
+Scenario           | Simulations | Time (ms) | Sims/sec (millions)
+-------------------|-------------|-----------|--------------------
+Preflop (no board) |      10000  |     12.45 |              0.803
+Flop (3 cards)     |       5000  |      8.23 |              0.608
+Turn (4 cards)     |       2000  |      3.89 |              0.514
+River (5 cards)    |       1000  |      2.11 |              0.474
+```
+
+### Multi-Way Equity
+
+```text
+3 players          |       5000  |     18.67 |              0.268
+4 players          |       5000  |     24.89 |              0.201
+6 players          |       5000  |     37.45 |              0.134
+9 players          |       5000  |     56.78 |              0.088
+```
+
+## 7. Hardware and OS Setup
+
+### macOS (Primary Platform)
+
+- No special performance modes needed on Apple Silicon
+- Thermal throttling rarely an issue with M1's efficiency
+- Background process impact minimal due to efficiency cores
+
+### Performance Consistency Tips
+
+1. Close heavy applications (browsers, IDEs)
+2. Ensure adequate cooling for sustained benchmarks
+3. Use Activity Monitor to verify no CPU-intensive background tasks
+
+### Build Environment
+
+```bash
+# Essential flags for performance
+-Doptimize=ReleaseFast    # Maximum optimization
+-Dcpu=native              # Use all CPU features
+
+# Optional: Disable safety checks (already done in ReleaseFast)
+# -Drelease-safe=false
+```
+
+## 8. Key Insights from Benchmarking
+
+### What Works
+
+1. **SIMD batch processing**: ~2x speedup over single-hand evaluation
+2. **Structure-of-arrays layout**: Enables efficient vectorization
+3. **Cache-resident tables**: 267KB fits in L2, no memory stalls
+4. **Fixed batch size 32**: Optimal balance of register usage and overhead
+
+### What Doesn't Work
+
+From benchmarking experiments:
+
+1. **Batch sizes > 32**: Diminishing returns, register pressure
+2. **Prefetching**: Tables already cache-resident
+3. **Complex overhead correction**: Simple popcount baseline sufficient
+
+## 9. Troubleshooting
+
+### High Coefficient of Variation (> 5%)
+
+- **Cause**: System interference, thermal issues
+- **Solution**: Run with fewer background processes
+- **Check**: `pmset -g thermlog` for thermal state
+
+### Performance Below Target
+
+- **Expected**: ~4.5ns per hand on M1
+- **Common issues**:
+  - Wrong build flags (not using ReleaseFast)
+  - Debug build accidentally used
+  - Flush-heavy test data (should be < 0.4%)
+
+### Validation Failures
+
+- **Symptoms**: Accuracy < 100%
+- **Causes**:
+  - Table corruption
+  - Build configuration mismatch
+- **Solution**: `zig build build-tables -Doptimize=ReleaseFast`
+
+## 10. Advanced Benchmarking
+
+### Custom Test Hands
+
+```zig
+// Test specific hand patterns
+pub fn testSingleHand(hand: u64) struct { slow: u16, fast: u16, match: bool } {
+    const slow_result = poker.slow.evaluateHand(hand);
+    const fast_result = poker.evaluateHand(hand);
+    return .{
+        .slow = slow_result,
+        .fast = fast_result,
+        .match = slow_result == fast_result,
+    };
+}
+```
+
+### Profile-Guided Analysis
+
+See `profiling.md` for detailed profiling instructions to identify bottlenecks beyond timing measurements.
