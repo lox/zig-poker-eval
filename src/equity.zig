@@ -529,8 +529,10 @@ fn sampleRemainingCardsForEquityDirect(hero_hole_cards: Hand, villain_hole_cards
 
 /// Evaluate equity showdown between two hands
 pub fn evaluateEquityShowdown(hero_hand: Hand, villain_hand: Hand) i8 {
-    const hero_rank = evaluator.evaluateHand(hero_hand);
-    const villain_rank = evaluator.evaluateHand(villain_hand);
+    const hands = @Vector(2, u64){ hero_hand, villain_hand };
+    const ranks = evaluator.evaluateBatch(2, hands);
+    const hero_rank = ranks[0];
+    const villain_rank = ranks[1];
     // Lower rank numbers are better (0 = royal flush, 7461 = worst high card)
     return if (hero_rank < villain_rank) 1 else if (hero_rank > villain_rank) -1 else 0;
 }

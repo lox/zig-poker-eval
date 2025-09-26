@@ -20,8 +20,20 @@ pub const BenchmarkResult = struct {
     total_hands: u64,
 };
 
+pub const ShowdownBenchmarkResult = struct {
+    iterations: u32,
+    scalar_ns_per_eval: f64,
+    showdown_ns_per_eval: f64,
+    speedup: f64,
+};
+
 // Helper functions for rigorous benchmarking
 const BATCH_SIZE = 32;
+
+const ShowdownCase = struct {
+    hero: u64,
+    villain: u64,
+};
 
 // Helper to create batches from hand arrays
 fn createBatch(hands: []const u64, start_idx: usize) @Vector(BATCH_SIZE, u64) {
@@ -137,6 +149,78 @@ fn benchmarkSingleHand(test_hands: []const u64, count: u32) f64 {
     return total_ns / @as(f64, @floatFromInt(count));
 }
 
+fn drawUniqueCard(rng: std.Random, used: *u64) u64 {
+    while (true) {
+        const idx = rng.uintLessThan(u6, 52);
+        const card_bit = @as(u64, 1) << @intCast(idx);
+        if ((used.* & card_bit) == 0) {
+            used.* |= card_bit;
+            return card_bit;
+        }
+    }
+}
+
+fn generateShowdownCases(allocator: std.mem.Allocator, iterations: u32, rng: std.Random) ![]ShowdownCase {
+    const cases = try allocator.alloc(ShowdownCase, iterations);
+    errdefer allocator.free(cases);
+
+    for (cases) |*case| {
+        var used: u64 = 0;
+
+        var hero_hole: u64 = 0;
+        for (0..2) |_| {
+            hero_hole |= drawUniqueCard(rng, &used);
+        }
+
+        var villain_hole: u64 = 0;
+        for (0..2) |_| {
+            villain_hole |= drawUniqueCard(rng, &used);
+        }
+
+        var board: u64 = 0;
+        for (0..5) |_| {
+            board |= drawUniqueCard(rng, &used);
+        }
+
+        case.* = .{
+            .hero = hero_hole | board,
+            .villain = villain_hole | board,
+        };
+    }
+
+    return cases;
+}
+
+fn scalarShowdownEval(hero: u64, villain: u64) i8 {
+    const hero_rank = poker.evaluateHand(hero);
+    const villain_rank = poker.evaluateHand(villain);
+    return if (hero_rank < villain_rank) 1 else if (hero_rank > villain_rank) -1 else 0;
+}
+
+fn timeScalarShowdown(cases: []const ShowdownCase) f64 {
+    var checksum: i32 = 0;
+    const start = std.time.nanoTimestamp();
+    for (cases) |case| {
+        checksum += scalarShowdownEval(case.hero, case.villain);
+    }
+    const end = std.time.nanoTimestamp();
+    std.mem.doNotOptimizeAway(checksum);
+    const total_ns = @as(f64, @floatFromInt(end - start));
+    return total_ns / @as(f64, @floatFromInt(cases.len));
+}
+
+fn timeBatchedShowdown(cases: []const ShowdownCase) f64 {
+    var checksum: i32 = 0;
+    const start = std.time.nanoTimestamp();
+    for (cases) |case| {
+        checksum += poker.evaluateEquityShowdown(case.hero, case.villain);
+    }
+    const end = std.time.nanoTimestamp();
+    std.mem.doNotOptimizeAway(checksum);
+    const total_ns = @as(f64, @floatFromInt(end - start));
+    return total_ns / @as(f64, @floatFromInt(cases.len));
+}
+
 pub fn runBenchmark(options: BenchmarkOptions, allocator: std.mem.Allocator) !BenchmarkResult {
     // Generate test hands
     var prng = std.Random.DefaultPrng.init(42);
@@ -244,6 +328,28 @@ pub fn validateCorrectness(test_hands: []const u64) !bool {
     }
 
     return true;
+}
+
+pub fn benchmarkShowdown(allocator: std.mem.Allocator, iterations: u32) !ShowdownBenchmarkResult {
+    var prng = std.Random.DefaultPrng.init(99);
+    const rng = prng.random();
+
+    const cases = try generateShowdownCases(allocator, iterations, rng);
+    defer allocator.free(cases);
+
+    // Warm cache by running each path once before timing
+    std.mem.doNotOptimizeAway(timeScalarShowdown(cases));
+    std.mem.doNotOptimizeAway(timeBatchedShowdown(cases));
+
+    const scalar_ns = timeScalarShowdown(cases);
+    const showdown_ns = timeBatchedShowdown(cases);
+
+    return ShowdownBenchmarkResult{
+        .iterations = iterations,
+        .scalar_ns_per_eval = scalar_ns,
+        .showdown_ns_per_eval = showdown_ns,
+        .speedup = scalar_ns / showdown_ns,
+    };
 }
 
 // Test the evaluator with a specific test batch

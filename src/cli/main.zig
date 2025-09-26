@@ -315,6 +315,7 @@ const BenchCommand = struct {
         show_comparison: bool = false,
         batch_sizes: bool = false,
         equity: bool = false,
+        showdown: bool = false,
     };
 
     const meta = cli_lib.CommandMeta{
@@ -328,6 +329,7 @@ const BenchCommand = struct {
             "poker-eval bench --test_hand 0x1F00000000000",
             "poker-eval bench --batch_sizes",
             "poker-eval bench --equity",
+            "poker-eval bench --showdown",
         },
     };
 
@@ -346,6 +348,7 @@ const BenchCommand = struct {
         if (std.mem.eql(u8, field_name, "show_comparison")) return "Show SIMD vs scalar performance comparison";
         if (std.mem.eql(u8, field_name, "batch_sizes")) return "Compare performance across different batch sizes";
         if (std.mem.eql(u8, field_name, "equity")) return "Benchmark equity calculation performance";
+        if (std.mem.eql(u8, field_name, "showdown")) return "Benchmark showdown evaluation (scalar vs batched)";
         return "No description available";
     }
 
@@ -400,6 +403,17 @@ const BenchCommand = struct {
         // Run equity benchmark if requested
         if (opts.equity) {
             try benchmark.benchmarkEquity(allocator, bench_options);
+            return;
+        }
+
+        if (opts.showdown) {
+            const iterations = opts.iterations;
+            const showdown_result = try benchmark.benchmarkShowdown(allocator, iterations);
+            ansi.printBold("\n🤺 Showdown Benchmark\n", .{});
+            print("  Iterations:             {}\n", .{showdown_result.iterations});
+            print("  Scalar path:            {d:.2} ns/eval\n", .{showdown_result.scalar_ns_per_eval});
+            print("  evaluateEquityShowdown: {d:.2} ns/eval\n", .{showdown_result.showdown_ns_per_eval});
+            print("  Speedup:                {d:.2}x\n", .{showdown_result.speedup});
             return;
         }
 
