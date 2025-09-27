@@ -22,8 +22,8 @@ pub const BenchmarkResult = struct {
 
 pub const ShowdownBenchmarkResult = struct {
     iterations: u32,
-    scalar_ns_per_eval: f64,
-    showdown_ns_per_eval: f64,
+    context_ns_per_eval: f64,
+    batch_ns_per_eval: f64,
     speedup: f64,
 };
 
@@ -31,8 +31,9 @@ pub const ShowdownBenchmarkResult = struct {
 const BATCH_SIZE = 32;
 
 const ShowdownCase = struct {
-    hero: u64,
-    villain: u64,
+    ctx: poker.BoardContext,
+    hero_hole: u64,
+    villain_hole: u64,
 };
 
 // Helper to create batches from hand arrays
@@ -164,44 +165,50 @@ fn generateShowdownCases(allocator: std.mem.Allocator, iterations: u32, rng: std
     const cases = try allocator.alloc(ShowdownCase, iterations);
     errdefer allocator.free(cases);
 
-    for (cases) |*case| {
-        var used: u64 = 0;
+    var index: usize = 0;
+    while (index < cases.len) {
+        const remaining = cases.len - index;
+        const group_size = @min(BATCH_SIZE, remaining);
 
-        var hero_hole: u64 = 0;
-        for (0..2) |_| {
-            hero_hole |= drawUniqueCard(rng, &used);
-        }
-
-        var villain_hole: u64 = 0;
-        for (0..2) |_| {
-            villain_hole |= drawUniqueCard(rng, &used);
-        }
-
+        var board_used: u64 = 0;
         var board: u64 = 0;
-        for (0..5) |_| {
-            board |= drawUniqueCard(rng, &used);
+        while (@popCount(board) < 5) {
+            board |= drawUniqueCard(rng, &board_used);
+        }
+        const ctx = poker.initBoardContext(board);
+
+        var pair: usize = 0;
+        while (pair < group_size) : (pair += 1) {
+            var used: u64 = board;
+
+            var hero_hole: u64 = 0;
+            while (@popCount(hero_hole) < 2) {
+                hero_hole |= drawUniqueCard(rng, &used);
+            }
+
+            var villain_hole: u64 = 0;
+            while (@popCount(villain_hole) < 2) {
+                villain_hole |= drawUniqueCard(rng, &used);
+            }
+
+            cases[index + pair] = .{
+                .ctx = ctx,
+                .hero_hole = hero_hole,
+                .villain_hole = villain_hole,
+            };
         }
 
-        case.* = .{
-            .hero = hero_hole | board,
-            .villain = villain_hole | board,
-        };
+        index += group_size;
     }
 
     return cases;
-}
-
-fn scalarShowdownEval(hero: u64, villain: u64) i8 {
-    const hero_rank = poker.evaluateHand(hero);
-    const villain_rank = poker.evaluateHand(villain);
-    return if (hero_rank < villain_rank) 1 else if (hero_rank > villain_rank) -1 else 0;
 }
 
 fn timeScalarShowdown(cases: []const ShowdownCase) f64 {
     var checksum: i32 = 0;
     const start = std.time.nanoTimestamp();
     for (cases) |case| {
-        checksum += scalarShowdownEval(case.hero, case.villain);
+        checksum += poker.evaluateShowdownWithContext(&case.ctx, case.hero_hole, case.villain_hole);
     }
     const end = std.time.nanoTimestamp();
     std.mem.doNotOptimizeAway(checksum);
@@ -212,8 +219,30 @@ fn timeScalarShowdown(cases: []const ShowdownCase) f64 {
 fn timeBatchedShowdown(cases: []const ShowdownCase) f64 {
     var checksum: i32 = 0;
     const start = std.time.nanoTimestamp();
-    for (cases) |case| {
-        checksum += poker.evaluateEquityShowdown(case.hero, case.villain);
+    var index: usize = 0;
+    var results_buffer: [BATCH_SIZE]i8 = undefined;
+    var hero_buffer: [BATCH_SIZE]poker.Hand = undefined;
+    var villain_buffer: [BATCH_SIZE]poker.Hand = undefined;
+
+    while (index < cases.len) {
+        const remaining = cases.len - index;
+        const chunk = @min(BATCH_SIZE, remaining);
+
+        inline for (0..BATCH_SIZE) |i| {
+            if (i < chunk) {
+                const case_ref = cases[index + i];
+                std.debug.assert(case_ref.ctx.board == cases[index].ctx.board);
+                hero_buffer[i] = case_ref.hero_hole;
+                villain_buffer[i] = case_ref.villain_hole;
+            }
+        }
+
+        poker.evaluateShowdownBatch(&cases[index].ctx, hero_buffer[0..chunk], villain_buffer[0..chunk], results_buffer[0..chunk]);
+        for (results_buffer[0..chunk]) |res| {
+            checksum += res;
+        }
+
+        index += chunk;
     }
     const end = std.time.nanoTimestamp();
     std.mem.doNotOptimizeAway(checksum);
@@ -341,14 +370,14 @@ pub fn benchmarkShowdown(allocator: std.mem.Allocator, iterations: u32) !Showdow
     std.mem.doNotOptimizeAway(timeScalarShowdown(cases));
     std.mem.doNotOptimizeAway(timeBatchedShowdown(cases));
 
-    const scalar_ns = timeScalarShowdown(cases);
-    const showdown_ns = timeBatchedShowdown(cases);
+    const context_ns = timeScalarShowdown(cases);
+    const batch_ns = timeBatchedShowdown(cases);
 
     return ShowdownBenchmarkResult{
         .iterations = iterations,
-        .scalar_ns_per_eval = scalar_ns,
-        .showdown_ns_per_eval = showdown_ns,
-        .speedup = scalar_ns / showdown_ns,
+        .context_ns_per_eval = context_ns,
+        .batch_ns_per_eval = batch_ns,
+        .speedup = context_ns / batch_ns,
     };
 }
 

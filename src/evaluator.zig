@@ -40,6 +40,177 @@ pub fn getHandCategory(rank: HandRank) HandCategory {
 
 const RANK_MASK = 0x1FFF; // 13 bits for ranks
 
+/// Cached board analysis for reusing evaluation work across multiple hole cards
+pub const BoardContext = struct {
+    board: card.Hand,
+    suit_masks: [4]u16,
+    suit_counts: [4]u8,
+    rank_counts: [13]u8,
+};
+
+fn initSuitMasks(board: card.Hand) [4]u16 {
+    var suits: [4]u16 = undefined;
+    inline for (0..4) |suit| {
+        const offset: u6 = @intCast(suit * 13);
+        suits[suit] = @as(u16, @truncate((board >> offset) & RANK_MASK));
+    }
+    return suits;
+}
+
+fn computeBoardRankCounts(suit_masks: [4]u16) [13]u8 {
+    var counts = [_]u8{0} ** 13;
+    inline for (0..13) |rank| {
+        var total: u8 = 0;
+        inline for (0..4) |suit| {
+            if ((suit_masks[suit] & (@as(u16, 1) << @intCast(rank))) != 0) {
+                total += 1;
+            }
+        }
+        counts[rank] = total;
+    }
+    return counts;
+}
+
+/// Pre-compute board state for fast showdown reuse
+pub fn initBoardContext(board: card.Hand) BoardContext {
+    const suit_masks = initSuitMasks(board);
+    var suit_counts: [4]u8 = undefined;
+    inline for (0..4) |suit| {
+        suit_counts[suit] = @intCast(@popCount(suit_masks[suit]));
+    }
+
+    const rank_counts = computeBoardRankCounts(suit_masks);
+
+    return .{
+        .board = board,
+        .suit_masks = suit_masks,
+        .suit_counts = suit_counts,
+        .rank_counts = rank_counts,
+    };
+}
+
+fn evaluateHoleWithContextImpl(ctx: *const BoardContext, hole: card.Hand) HandRank {
+    std.debug.assert((hole & ctx.board) == 0);
+
+    var suit_masks = ctx.suit_masks;
+    var suit_counts = ctx.suit_counts;
+    var rank_counts = ctx.rank_counts;
+
+    var remaining = hole;
+    while (remaining != 0) {
+        const bit_index: u6 = @intCast(@ctz(remaining));
+        remaining &= remaining - 1;
+        const suit_index: usize = @intCast(bit_index / 13);
+        const rank_index: usize = @intCast(bit_index % 13);
+
+        suit_masks[suit_index] |= @as(u16, 1) << @intCast(rank_index);
+        suit_counts[suit_index] += 1;
+        rank_counts[rank_index] += 1;
+    }
+
+    inline for (0..4) |suit| {
+        if (suit_counts[suit] >= 5) {
+            const pattern = getTop5Ranks(suit_masks[suit]);
+            return tables.flushLookup(pattern);
+        }
+    }
+
+    var rpc: u32 = 0;
+    for (rank_counts) |count| {
+        rpc = rpc * 5 + count;
+    }
+    return tables.lookup(rpc);
+}
+
+/// Evaluate a pair of hole cards using a precomputed board context
+pub fn evaluateHoleWithContext(ctx: *const BoardContext, hole: card.Hand) HandRank {
+    return evaluateHoleWithContextImpl(ctx, hole);
+}
+
+/// Evaluate a showdown using shared board context
+pub fn evaluateShowdownWithContext(ctx: *const BoardContext, hero_hole: card.Hand, villain_hole: card.Hand) i8 {
+    std.debug.assert((hero_hole & villain_hole) == 0);
+    std.debug.assert((hero_hole & ctx.board) == 0);
+    std.debug.assert((villain_hole & ctx.board) == 0);
+
+    const hero_rank = evaluateHoleWithContextImpl(ctx, hero_hole);
+    const villain_rank = evaluateHoleWithContextImpl(ctx, villain_hole);
+    return if (hero_rank < villain_rank) 1 else if (hero_rank > villain_rank) -1 else 0;
+}
+
+fn showdownChunk(comptime batch_size: usize, ctx: *const BoardContext, hero_holes: []const card.Hand, villain_holes: []const card.Hand, results: []i8) void {
+    var hero_array: [batch_size]u64 = undefined;
+    var villain_array: [batch_size]u64 = undefined;
+
+    inline for (0..batch_size) |i| {
+        const hero_hole = hero_holes[i];
+        const villain_hole = villain_holes[i];
+        std.debug.assert((hero_hole & villain_hole) == 0);
+        std.debug.assert((hero_hole & ctx.board) == 0);
+        std.debug.assert((villain_hole & ctx.board) == 0);
+
+        hero_array[i] = ctx.board | hero_hole;
+        villain_array[i] = ctx.board | villain_hole;
+    }
+
+    const hero_vec: @Vector(batch_size, u64) = hero_array;
+    const villain_vec: @Vector(batch_size, u64) = villain_array;
+
+    const hero_ranks = evaluateBatch(batch_size, hero_vec);
+    const villain_ranks = evaluateBatch(batch_size, villain_vec);
+
+    inline for (0..batch_size) |i| {
+        results[i] = if (hero_ranks[i] < villain_ranks[i])
+            @as(i8, 1)
+        else if (hero_ranks[i] > villain_ranks[i])
+            @as(i8, -1)
+        else
+            @as(i8, 0);
+    }
+}
+
+/// Evaluate many hero/villain pairs that share the same board context.
+///
+/// `hero_holes` and `villain_holes` must have the same length and represent
+/// disjoint two-card combinations relative to the board. Results are stored as
+/// -1 (villain wins), 0 (tie), 1 (hero wins).
+pub fn evaluateShowdownBatch(
+    ctx: *const BoardContext,
+    hero_holes: []const card.Hand,
+    villain_holes: []const card.Hand,
+    results: []i8,
+) void {
+    std.debug.assert(hero_holes.len == villain_holes.len);
+    std.debug.assert(results.len >= hero_holes.len);
+
+    var index: usize = 0;
+    const total = hero_holes.len;
+
+    while (index + 32 <= total) {
+        showdownChunk(32, ctx, hero_holes[index .. index + 32], villain_holes[index .. index + 32], results[index .. index + 32]);
+        index += 32;
+    }
+    if (index + 16 <= total) {
+        showdownChunk(16, ctx, hero_holes[index .. index + 16], villain_holes[index .. index + 16], results[index .. index + 16]);
+        index += 16;
+    }
+    if (index + 8 <= total) {
+        showdownChunk(8, ctx, hero_holes[index .. index + 8], villain_holes[index .. index + 8], results[index .. index + 8]);
+        index += 8;
+    }
+    if (index + 4 <= total) {
+        showdownChunk(4, ctx, hero_holes[index .. index + 4], villain_holes[index .. index + 4], results[index .. index + 4]);
+        index += 4;
+    }
+    if (index + 2 <= total) {
+        showdownChunk(2, ctx, hero_holes[index .. index + 2], villain_holes[index .. index + 2], results[index .. index + 2]);
+        index += 2;
+    }
+    if (index < total) {
+        showdownChunk(1, ctx, hero_holes[index .. index + 1], villain_holes[index .. index + 1], results[index .. index + 1]);
+    }
+}
+
 // === Scalar RPC Computation ===
 
 fn computeRpcFromHand(hand: u64) u32 {
@@ -547,6 +718,96 @@ test "verify problem hands from verify-all" {
         }
 
         try testing.expectEqual(slow_rank, fast_rank);
+    }
+}
+
+test "board context showdown matches evaluate" {
+    const board = card.makeCard(.hearts, .ace) |
+        card.makeCard(.hearts, .king) |
+        card.makeCard(.hearts, .queen);
+    const hero_hole = card.makeCard(.spades, .jack) | card.makeCard(.clubs, .jack);
+    const villain_hole = card.makeCard(.diamonds, .ace) | card.makeCard(.diamonds, .king);
+
+    const ctx = initBoardContext(board);
+
+    const hero_rank_ctx = evaluateHoleWithContext(&ctx, hero_hole);
+    const villain_rank_ctx = evaluateHoleWithContext(&ctx, villain_hole);
+    const showdown_ctx = evaluateShowdownWithContext(&ctx, hero_hole, villain_hole);
+
+    const hero_final = board | hero_hole;
+    const villain_final = board | villain_hole;
+    const hero_rank = evaluateHand(hero_final);
+    const villain_rank = evaluateHand(villain_final);
+    const showdown: i8 = if (hero_rank < villain_rank)
+        @as(i8, 1)
+    else if (hero_rank > villain_rank)
+        @as(i8, -1)
+    else
+        @as(i8, 0);
+
+    try testing.expectEqual(hero_rank, hero_rank_ctx);
+    try testing.expectEqual(villain_rank, villain_rank_ctx);
+    try testing.expectEqual(showdown, showdown_ctx);
+}
+
+test "board context batch showdown matches single" {
+    const PairCount = 37;
+    const board = card.makeCard(.hearts, .ace) |
+        card.makeCard(.hearts, .king) |
+        card.makeCard(.hearts, .queen) |
+        card.makeCard(.diamonds, .two) |
+        card.makeCard(.clubs, .three);
+    const ctx = initBoardContext(board);
+
+    var hero_holes: [PairCount]card.Hand = undefined;
+    var villain_holes: [PairCount]card.Hand = undefined;
+
+    const Picker = struct {
+        fn pick(base_suit: card.Suit, base_rank_hint: usize, used: *card.Hand) card.Hand {
+            var suit = base_suit;
+            var rank_index: usize = base_rank_hint % 13;
+            var attempts: usize = 0;
+            while (attempts < 52) : (attempts += 1) {
+                const rank: card.Rank = @enumFromInt(rank_index % 13);
+                const card_bit = card.makeCard(suit, rank);
+                if ((used.* & card_bit) == 0) {
+                    used.* |= card_bit;
+                    return card_bit;
+                }
+                rank_index = (rank_index + 3) % 13;
+                suit = switch (suit) {
+                    .clubs => .diamonds,
+                    .diamonds => .spades,
+                    .spades => .hearts,
+                    .hearts => .clubs,
+                };
+            }
+            @panic("unable to pick distinct card");
+        }
+    };
+
+    var idx: usize = 0;
+    while (idx < PairCount) : (idx += 1) {
+        var used = board;
+        const hero_card1 = Picker.pick(.clubs, idx * 2, &used);
+        const hero_card2 = Picker.pick(.diamonds, idx * 2 + 5, &used);
+        const hero_hole = hero_card1 | hero_card2;
+
+        const villain_card1 = Picker.pick(.spades, idx * 3 + 2, &used);
+        const villain_card2 = Picker.pick(.hearts, idx * 5 + 7, &used);
+        const villain_hole = villain_card1 | villain_card2;
+        std.debug.assert((hero_hole & villain_hole) == 0);
+
+        hero_holes[idx] = hero_hole;
+        villain_holes[idx] = villain_hole;
+    }
+
+    var results = [_]i8{0} ** PairCount;
+    evaluateShowdownBatch(&ctx, hero_holes[0..], villain_holes[0..], results[0..]);
+
+    for (hero_holes, 0..) |hero_hole, j| {
+        const expected = evaluateShowdownWithContext(&ctx, hero_hole, villain_holes[j]);
+        try testing.expectEqual(expected, results[j]);
     }
 }
 

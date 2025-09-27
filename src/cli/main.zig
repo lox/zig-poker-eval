@@ -411,9 +411,9 @@ const BenchCommand = struct {
             const showdown_result = try benchmark.benchmarkShowdown(allocator, iterations);
             ansi.printBold("\n🤺 Showdown Benchmark\n", .{});
             print("  Iterations:             {}\n", .{showdown_result.iterations});
-            print("  Scalar path:            {d:.2} ns/eval\n", .{showdown_result.scalar_ns_per_eval});
-            print("  evaluateEquityShowdown: {d:.2} ns/eval\n", .{showdown_result.showdown_ns_per_eval});
-            print("  Speedup:                {d:.2}x\n", .{showdown_result.speedup});
+            print("  Context path:          {d:.2} ns/eval\n", .{showdown_result.context_ns_per_eval});
+            print("  Batched path:          {d:.2} ns/eval\n", .{showdown_result.batch_ns_per_eval});
+            print("  Speedup:               {d:.2}x\n", .{showdown_result.speedup});
             return;
         }
 

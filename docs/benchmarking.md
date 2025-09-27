@@ -108,6 +108,19 @@ Batch Size | ns/hand | Million hands/sec | Speedup vs single
         64 |    4.31 |             232.0 |             2.01x
 ```
 
+### Showdown Benchmark (BoardContext)
+
+Context-aware batching now measures directly via `poker-eval bench --showdown`. On Apple M1 with 320K hero/villain comparisons sharing the same board, batching delivers a ~3.1× speedup over the context-only path:
+
+```text
+Scenario         | ns/eval | Comparisons/sec | Speedup vs context
+-----------------|---------|-----------------|-------------------
+Context path     |  41.92  |       23.9M     | 1.00x
+Batched (32 max) |  13.42  |       74.5M     | 3.12x
+```
+
+The benchmark generates board-coherent workloads (groups of up to 32 hero/villain pairs per board), reuses `BoardContext`, and feeds each chunk into the SIMD evaluator. Use `--iterations N` to scale the sample size; each iteration represents one hero/villain pair.
+
 ## 5. Correctness Validation
 
 ### Automatic Validation

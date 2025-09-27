@@ -97,6 +97,21 @@ pub const DEFAULT_BATCH_SIZE = evaluator.DEFAULT_BATCH_SIZE;
 /// Achieves ~4.1 ns/hand on modern CPUs
 pub const evaluateBatch32 = evaluator.evaluateBatch32;
 
+/// Cached board metadata for repeated showdown evaluations
+pub const BoardContext = evaluator.BoardContext;
+
+/// Initialize a board context from a board bitmask
+pub const initBoardContext = evaluator.initBoardContext;
+
+/// Evaluate hero/villain hole cards using a shared board context
+pub const evaluateHoleWithContext = evaluator.evaluateHoleWithContext;
+
+/// Evaluate a showdown using a shared board context
+pub const evaluateShowdownWithContext = evaluator.evaluateShowdownWithContext;
+
+/// Evaluate many showdowns sharing the same board context
+pub const evaluateShowdownBatch = evaluator.evaluateShowdownBatch;
+
 // === HAND COMBINATIONS ===
 
 /// Generate all suited combinations for two ranks

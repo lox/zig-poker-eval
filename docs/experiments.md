@@ -2,6 +2,8 @@
 
 **Baseline**: 11.95 ns/hand (83.7M hands/s) - Simple direct u16 table lookup
 **Current**: ~4.5 ns/hand (224M+ hands/s) - SIMD batching with flush fallback elimination
+**Showdown Baseline**: 41.9 ns/eval (context path, 5-card board + two holes)
+**Showdown Current**: 13.4 ns/eval (batched, board context + SIMD), ~3.1× faster
 
 ## Experiment 1: Packed ARM64 Tables
 
@@ -294,6 +296,31 @@ inline for (0..4) |i| {
 5. **Profile-guided is better**: All experiments were theory-driven; real profiling might reveal different bottlenecks
 6. **Algorithmic parallelism wins**: True SIMD batching succeeds where single-hand optimizations fail
 7. **Measurement methodology is critical**: Heavy instrumentation can cause 3x overhead, completely misleading results
+
+## Experiment 10: Context-Aware Showdown Batching
+
+**Performance Impact**: 3.1× faster (41.9 → 13.4 ns/eval) on 320K hero/villain comparisons sharing the same board
+**Complexity**: Medium
+**Status**: ✅ Success
+
+**Approach**: Reuse board metadata and evaluate many hero/villain pairs at once. Instead of reassembling full 7-card hands per pair, precompute suit/rank counts with `BoardContext`, then pack up to 32 hero/villain pairs into vectors and call `evaluateBatch` for both sides, comparing ranks lane-by-lane.
+
+**Implementation**:
+
+- Added `BoardContext` helper exports (`initBoardContext`, `evaluateHoleWithContext`, `evaluateShowdownWithContext`) so callers can precompute board state once.
+- Introduced `evaluateShowdownBatch` to process chunks of 32/16/8/4/2/1 pairs, combining the shared board mask with each hole mask and comparing SIMD rank vectors.
+- Extended `poker-eval bench --showdown` to report context vs. batched timings and added regression tests ensuring batch results match the single context path.
+
+**Benchmark** (`zig build -Doptimize=ReleaseFast`, Apple M1):
+
+```
+poker-eval bench --showdown --iterations 320000
+Context path: 41.92 ns/eval
+Batched path: 13.42 ns/eval
+Speedup:      3.12×
+```
+
+**Why it worked**: BoardContext eliminates redundant suit/rank recomputation, and batching keeps the SIMD evaluator saturated. The cost of packing 32 pairs is amortized across the vector work, turning the showdown comparator into a memory-friendly, cache-resident loop with minimal scalar overhead.
 
 ---
 
