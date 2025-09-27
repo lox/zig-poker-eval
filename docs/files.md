@@ -29,7 +29,6 @@ Low-level implementation details and algorithms:
 - `src/internal/mphf.zig` - Minimal perfect hash function implementation
 - `src/internal/build_tables.zig` - Table generation logic (run via `zig build build-tables`)
 - `src/internal/slow_evaluator.zig` - Reference implementation for verification
-- `src/internal/simulation.zig` - Monte Carlo simulation engine internals
 - `src/internal/notation.zig` - Card notation parsing and formatting
 - `src/internal/profile_main.zig` - Profiling harness for performance analysis
 

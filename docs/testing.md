@@ -38,7 +38,6 @@ Test distribution by module:
 - `poker.zig` (line 244-282): 3 tests - Public API
 - `internal/slow_evaluator.zig` (line 281-447): 17 tests - Reference implementation
 - `internal/notation.zig` (line 176-316): 6 tests - Notation parsing
-- `internal/simulation.zig` (line 170-242): 4 tests - Monte Carlo helpers
 - `internal/build_tables.zig` (line 39-90): 4 tests - Table generation
 
 ### Integration Tests
