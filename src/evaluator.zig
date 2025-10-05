@@ -239,6 +239,7 @@ fn computeRpcSimd(comptime batchSize: usize, hands: *const [batchSize]u64) [batc
     var result: [batchSize]u32 = undefined;
 
     // Use SIMD for batch sizes that are powers of 2 or have good SIMD support
+    // Note: Requires LLVM backend on x86_64 due to self-hosted backend bug with vpmovzxbd instruction
     if (batchSize == 2 or batchSize == 4 or batchSize == 8 or batchSize == 16 or batchSize == 32 or batchSize == 64) {
         // Extract suits for all hands (structure-of-arrays)
         var clubs: [batchSize]u16 = undefined;

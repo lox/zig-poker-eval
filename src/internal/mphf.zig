@@ -68,10 +68,10 @@ pub fn buildChd(allocator: std.mem.Allocator, patterns: []const Pattern, num_buc
         // Group patterns by bucket
         var buckets = try allocator.alloc(std.ArrayList(Pattern), num_buckets);
         for (buckets) |*bucket| {
-            bucket.* = std.ArrayList(Pattern).init(allocator);
+            bucket.* = .empty;
         }
         defer {
-            for (buckets) |*bucket| bucket.deinit();
+            for (buckets) |*bucket| bucket.deinit(allocator);
             allocator.free(buckets);
         }
 
@@ -83,7 +83,7 @@ pub fn buildChd(allocator: std.mem.Allocator, patterns: []const Pattern, num_buc
                 std.debug.print("CHD bucket assignment: RPC {} -> bucket {} (base_index {})\n", .{ pattern.key, h.bucket, h.base_index });
             }
 
-            try buckets[h.bucket].append(pattern);
+            try buckets[h.bucket].append(allocator, pattern);
         }
 
         // Try to find displacement for each bucket

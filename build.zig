@@ -4,6 +4,11 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Work around Zig 0.15.1 self-hosted x86_64 backend bug with SIMD
+    // The self-hosted backend can't encode vpmovzxbd with YMM registers
+    // Use LLVM backend on x86_64 for proper SIMD support
+    const use_llvm = if (target.result.cpu.arch == .x86_64) true else null;
+
     // Define core modules in dependency order
 
     // Level 1: Card module (no dependencies)
@@ -71,9 +76,12 @@ pub fn build(b: *std.Build) void {
     // Table builder executable (for manual table regeneration)
     const table_builder = b.addExecutable(.{
         .name = "build_tables",
-        .root_source_file = b.path("src/internal/build_tables.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/internal/build_tables.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .use_llvm = use_llvm,
     });
 
     // Add module path for slow evaluator (needed by table builder)
@@ -92,9 +100,12 @@ pub fn build(b: *std.Build) void {
     // Main CLI executable
     const exe = b.addExecutable(.{
         .name = "poker-eval",
-        .root_source_file = b.path("src/cli/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/cli/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .use_llvm = use_llvm,
     });
     // CLI only needs the main poker module (which provides everything)
     exe.root_module.addImport("poker", poker_mod);
@@ -124,9 +135,12 @@ pub fn build(b: *std.Build) void {
     // Generate all hands tool
     const gen_all_hands = b.addExecutable(.{
         .name = "generate-all-hands",
-        .root_source_file = b.path("src/tools/generate_all_hands.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/generate_all_hands.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .use_llvm = use_llvm,
     });
     gen_all_hands.root_module.addImport("poker", poker_mod);
     b.installArtifact(gen_all_hands);
@@ -138,9 +152,12 @@ pub fn build(b: *std.Build) void {
     // Verify all hands tool
     const verify_all_hands = b.addExecutable(.{
         .name = "verify-all-hands",
-        .root_source_file = b.path("src/tools/verify_all_hands.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/verify_all_hands.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .use_llvm = use_llvm,
     });
     verify_all_hands.root_module.addImport("poker", poker_mod);
     b.installArtifact(verify_all_hands);
@@ -156,18 +173,23 @@ pub fn build(b: *std.Build) void {
 
     // Card module tests (no dependencies)
     const card_tests = b.addTest(.{
-        .root_source_file = b.path("src/card.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/card.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
     const run_card_tests = b.addRunArtifact(card_tests);
     test_step.dependOn(&run_card_tests.step);
 
     // Evaluator module tests (depends on card)
     const evaluator_tests = b.addTest(.{
-        .root_source_file = b.path("src/evaluator.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/evaluator.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .use_llvm = use_llvm,
     });
     evaluator_tests.root_module.addImport("card", card_mod);
     const run_evaluator_tests = b.addRunArtifact(evaluator_tests);
@@ -175,9 +197,11 @@ pub fn build(b: *std.Build) void {
 
     // Hand module tests (depends on card)
     const hand_tests = b.addTest(.{
-        .root_source_file = b.path("src/hand.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/hand.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
     hand_tests.root_module.addImport("card", card_mod);
     const run_hand_tests = b.addRunArtifact(hand_tests);
@@ -185,9 +209,12 @@ pub fn build(b: *std.Build) void {
 
     // Range module tests (depends on card, hand, equity)
     const range_tests = b.addTest(.{
-        .root_source_file = b.path("src/range.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/range.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .use_llvm = use_llvm,
     });
     range_tests.root_module.addImport("card", card_mod);
     range_tests.root_module.addImport("hand", hand_mod);
@@ -197,9 +224,12 @@ pub fn build(b: *std.Build) void {
 
     // Equity module tests (depends on card, evaluator)
     const equity_tests = b.addTest(.{
-        .root_source_file = b.path("src/equity.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/equity.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .use_llvm = use_llvm,
     });
     equity_tests.root_module.addImport("card", card_mod);
     equity_tests.root_module.addImport("evaluator", evaluator_mod);
@@ -208,9 +238,11 @@ pub fn build(b: *std.Build) void {
 
     // Analysis module tests (depends on card)
     const analysis_tests = b.addTest(.{
-        .root_source_file = b.path("src/analysis.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/analysis.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
     analysis_tests.root_module.addImport("card", card_mod);
     const run_analysis_tests = b.addRunArtifact(analysis_tests);
@@ -218,9 +250,11 @@ pub fn build(b: *std.Build) void {
 
     // Draws module tests (depends on card)
     const draws_tests = b.addTest(.{
-        .root_source_file = b.path("src/draws.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/draws.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
     draws_tests.root_module.addImport("card", card_mod);
     const run_draws_tests = b.addRunArtifact(draws_tests);
@@ -228,9 +262,12 @@ pub fn build(b: *std.Build) void {
 
     // Main poker module tests (depends on all modules)
     const poker_tests = b.addTest(.{
-        .root_source_file = b.path("src/poker.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/poker.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .use_llvm = use_llvm,
     });
     poker_tests.root_module.addImport("card", card_mod);
     poker_tests.root_module.addImport("evaluator", evaluator_mod);

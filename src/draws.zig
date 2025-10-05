@@ -67,8 +67,8 @@ pub fn detectDraws(
     hole_cards: [2]card.Hand,
     community_cards: []const card.Hand,
 ) !DrawInfo {
-    var draws = std.ArrayList(DrawType).init(allocator);
-    defer draws.deinit();
+    var draws: std.ArrayList(DrawType) = .empty;
+    defer draws.deinit(allocator);
 
     // Create bitmask of all cards already used
     var used_cards: card.Hand = 0;
@@ -87,9 +87,9 @@ pub fn detectDraws(
     const flush_info = detectFlushDraw(hole_cards, community_cards);
     if (flush_info.has_flush_draw) {
         if (flush_info.is_nut_flush_draw) {
-            try draws.append(.nut_flush_draw);
+            try draws.append(allocator, .nut_flush_draw);
         } else {
-            try draws.append(.flush_draw);
+            try draws.append(allocator, .flush_draw);
         }
 
         // Get flush outs bitmask
@@ -100,14 +100,14 @@ pub fn detectDraws(
             nut_outs_mask |= flush_outs;
         }
     } else if (flush_info.has_backdoor_flush) {
-        try draws.append(.backdoor_flush);
+        try draws.append(allocator, .backdoor_flush);
     }
 
     // Check straight draws
     const straight_info = detectStraightDraw(hole_cards, community_cards);
     for (straight_info.draw_types) |draw_type| {
         if (draw_type != .none) {
-            try draws.append(draw_type);
+            try draws.append(allocator, draw_type);
         }
     }
 
@@ -123,7 +123,7 @@ pub fn detectDraws(
     if (community_cards.len <= 4 and !has_strong_draws) {
         const overcard_outs_mask = getOvercardOutsMask(hole_cards, community_cards, used_cards);
         if (overcard_outs_mask != 0) {
-            try draws.append(.overcards);
+            try draws.append(allocator, .overcards);
             all_outs_mask |= overcard_outs_mask;
         }
     }
@@ -134,16 +134,16 @@ pub fn detectDraws(
 
     // Check if it's a combo draw
     if (draws.items.len >= 2 and total_outs >= 12) {
-        try draws.append(.combo_draw);
+        try draws.append(allocator, .combo_draw);
     }
 
     // If no draws found, add none
     if (draws.items.len == 0) {
-        try draws.append(.none);
+        try draws.append(allocator, .none);
     }
 
     return DrawInfo{
-        .draws = try draws.toOwnedSlice(),
+        .draws = try draws.toOwnedSlice(allocator),
         .outs = @intCast(total_outs),
         .nut_outs = @intCast(nut_outs),
     };
@@ -415,8 +415,8 @@ fn getStraightOutsMask(hole_cards: [2]card.Hand, community_cards: []const card.H
     var start_rank: u8 = 0;
     while (start_rank <= 9) : (start_rank += 1) {
         var count: u8 = 0;
-        var missing_ranks = std.ArrayList(u8).init(std.heap.page_allocator);
-        defer missing_ranks.deinit();
+        var missing_ranks: std.ArrayList(u8) = .empty;
+        defer missing_ranks.deinit(std.heap.page_allocator);
 
         // Count cards in this 5-card window
         for (0..5) |i| {
@@ -424,7 +424,7 @@ fn getStraightOutsMask(hole_cards: [2]card.Hand, community_cards: []const card.H
             if ((rank_bits & (@as(u16, 1) << @intCast(rank))) != 0) {
                 count += 1;
             } else {
-                missing_ranks.append(@intCast(rank)) catch continue;
+                missing_ranks.append(std.heap.page_allocator, @intCast(rank)) catch continue;
             }
         }
 

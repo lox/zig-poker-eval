@@ -12,7 +12,8 @@ const TestResult = struct {
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();
-    var results = try std.ArrayList(TestResult).initCapacity(alloc, @import("builtin").test_functions.len);
+    var results: std.ArrayList(TestResult) = .empty;
+    try results.ensureTotalCapacity(alloc, @import("builtin").test_functions.len);
 
     var pass: u32 = 0;
     var fail: u32 = 0;
@@ -41,7 +42,7 @@ pub fn main() !void {
             leak += 1;
             if (status == .pass) status = .leak;
         }
-        try results.append(TestResult{
+        try results.append(alloc, TestResult{
             .name = test_fn.name,
             .status = status,
             .duration_ns = @as(u64, @intCast(end - start)),

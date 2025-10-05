@@ -1,7 +1,7 @@
 .{
     .name = .zig_poker_eval,
     .version = "1.0.0",
-    .minimum_zig_version = "0.14.0",
+    .minimum_zig_version = "0.15.1",
     .fingerprint = 0x6e5ae81e9335f167,
 
     .dependencies = .{},

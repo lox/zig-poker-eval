@@ -77,7 +77,10 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const stdout = std.io.getStdOut().writer();
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer_wrapper = std.fs.File.stdout().writer(&stdout_buffer);
+    const stdout = &stdout_writer_wrapper.interface;
+    defer stdout.flush() catch {};
 
     // Start timing
     var timer = try std.time.Timer.start();
@@ -110,13 +113,18 @@ pub fn main() !void {
     const version: u32 = 1;
     const num_hands: u32 = @intCast(results.len);
 
-    try file.writer().writeAll(magic);
-    try file.writer().writeInt(u32, version, .little);
-    try file.writer().writeInt(u32, num_hands, .little);
+    var file_buffer: [8192]u8 = undefined;
+    var file_writer = file.writer(&file_buffer);
+    const writer = &file_writer.interface;
+
+    try writer.writeAll(magic);
+    try writer.writeInt(u32, version, .little);
+    try writer.writeInt(u32, num_hands, .little);
 
     // Write all results
     const bytes = std.mem.sliceAsBytes(results);
-    try file.writer().writeAll(bytes);
+    try writer.writeAll(bytes);
+    try writer.flush();
 
     try stdout.print("File written successfully!\n", .{});
 
