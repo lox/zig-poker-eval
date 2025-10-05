@@ -81,6 +81,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         }),
+        .use_llvm = use_llvm,
     });
 
     // Add module path for slow evaluator (needed by table builder)
@@ -139,6 +140,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         }),
+        .use_llvm = use_llvm,
     });
     gen_all_hands.root_module.addImport("poker", poker_mod);
     b.installArtifact(gen_all_hands);
@@ -155,6 +157,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         }),
+        .use_llvm = use_llvm,
     });
     verify_all_hands.root_module.addImport("poker", poker_mod);
     b.installArtifact(verify_all_hands);
