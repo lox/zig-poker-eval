@@ -38,6 +38,20 @@ fi
 baseline_ns=$(jq -r '.ns_per_hand' "$BASELINE_FILE")
 current_ns=$(jq -r '.ns_per_hand' "$CURRENT_FILE")
 
+if [[ -z "$baseline_ns" ]] || [[ "$baseline_ns" == "null" ]]; then
+  echo "Error: Could not extract ns_per_hand from baseline file"
+  echo "Baseline file contents:"
+  cat "$BASELINE_FILE"
+  exit 1
+fi
+
+if [[ -z "$current_ns" ]] || [[ "$current_ns" == "null" ]]; then
+  echo "Error: Could not extract ns_per_hand from current file"
+  echo "Current file contents:"
+  cat "$CURRENT_FILE"
+  exit 1
+fi
+
 baseline_hps=$(jq -r '.hands_per_second' "$BASELINE_FILE")
 current_hps=$(jq -r '.hands_per_second' "$CURRENT_FILE")
 
