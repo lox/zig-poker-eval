@@ -15,6 +15,26 @@ zig build test
 zig build bench -Doptimize=ReleaseFast
 ```
 
+## Installation
+
+1) Add zig-poker-eval as a dependency in your `build.zig.zon`:
+
+```bash
+zig fetch --save "git+https://github.com/lox/zig-poker-eval?ref=v2.0.0"
+```
+
+2) In your `build.zig`, add the `poker` module as a dependency to your program:
+
+```zig
+const poker = b.dependency("zig_poker_eval", .{
+    .target = target,
+    .optimize = optimize,
+});
+
+// the executable from your call to b.addExecutable(...)
+exe.root_module.addImport("poker", poker.module("poker"));
+```
+
 ## Documentation
 
 ### Core Documentation
