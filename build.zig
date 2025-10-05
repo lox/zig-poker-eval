@@ -4,6 +4,11 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Work around Zig 0.15.1 self-hosted x86_64 backend bug with SIMD
+    // The self-hosted backend can't encode vpmovzxbd with YMM registers
+    // Use LLVM backend on x86_64 for proper SIMD support
+    const use_llvm = if (target.result.cpu.arch == .x86_64) true else null;
+
     // Define core modules in dependency order
 
     // Level 1: Card module (no dependencies)
@@ -99,6 +104,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         }),
+        .use_llvm = use_llvm,
     });
     // CLI only needs the main poker module (which provides everything)
     exe.root_module.addImport("poker", poker_mod);
@@ -180,6 +186,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         }),
+        .use_llvm = use_llvm,
     });
     evaluator_tests.root_module.addImport("card", card_mod);
     const run_evaluator_tests = b.addRunArtifact(evaluator_tests);
@@ -204,6 +211,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         }),
+        .use_llvm = use_llvm,
     });
     range_tests.root_module.addImport("card", card_mod);
     range_tests.root_module.addImport("hand", hand_mod);
@@ -218,6 +226,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         }),
+        .use_llvm = use_llvm,
     });
     equity_tests.root_module.addImport("card", card_mod);
     equity_tests.root_module.addImport("evaluator", evaluator_mod);
@@ -255,6 +264,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         }),
+        .use_llvm = use_llvm,
     });
     poker_tests.root_module.addImport("card", card_mod);
     poker_tests.root_module.addImport("evaluator", evaluator_mod);
