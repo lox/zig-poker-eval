@@ -17,6 +17,8 @@ zig build bench -Doptimize=ReleaseFast
 
 ## Installation
 
+Requires Zig 0.15.1 or later.
+
 1) Add zig-poker-eval as a dependency in your `build.zig.zon`:
 
 ```bash
