@@ -45,20 +45,21 @@ pub fn main() !void {
 
     var file_buffer: [8192]u8 = undefined;
     var file_reader = file.reader(&file_buffer);
+    const reader = &file_reader.interface;
 
     // Read header
     var magic: [4]u8 = undefined;
-    try file_reader.readSliceAll(&magic);
+    try reader.readSliceAll(&magic);
     if (!std.mem.eql(u8, &magic, "PKRH")) {
         return error.InvalidMagic;
     }
 
-    const version = try file_reader.readInt(u32, .little);
+    const version = try reader.takeInt(u32, .little);
     if (version != 1) {
         return error.UnsupportedVersion;
     }
 
-    const num_hands = try file_reader.readInt(u32, .little);
+    const num_hands = try reader.takeInt(u32, .little);
     try stdout.print("Loading {} hands from all_hands.dat...\n", .{num_hands});
 
     // Read all hand results into memory first
@@ -66,7 +67,7 @@ pub fn main() !void {
     defer allocator.free(results);
 
     const bytes = std.mem.sliceAsBytes(results);
-    try file_reader.readSliceAll(bytes);
+    try reader.readSliceAll(bytes);
 
     try stdout.print("Loaded all hands into memory ({d:.1} MB)\n", .{@as(f64, @floatFromInt(bytes.len)) / (1024.0 * 1024.0)});
 

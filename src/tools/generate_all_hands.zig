@@ -115,15 +115,16 @@ pub fn main() !void {
 
     var file_buffer: [8192]u8 = undefined;
     var file_writer = file.writer(&file_buffer);
+    const writer = &file_writer.interface;
 
-    try file_writer.writeAll(magic);
-    try file_writer.writeInt(u32, version, .little);
-    try file_writer.writeInt(u32, num_hands, .little);
+    try writer.writeAll(magic);
+    try writer.writeInt(u32, version, .little);
+    try writer.writeInt(u32, num_hands, .little);
 
     // Write all results
     const bytes = std.mem.sliceAsBytes(results);
-    try file_writer.writeAll(bytes);
-    try file_writer.flush();
+    try writer.writeAll(bytes);
+    try writer.flush();
 
     try stdout.print("File written successfully!\n", .{});
 
