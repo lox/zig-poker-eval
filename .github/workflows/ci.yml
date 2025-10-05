@@ -44,9 +44,37 @@ jobs:
         run: zig build -Doptimize=ReleaseFast
 
       - name: Run benchmarks
-        run: zig build bench -Doptimize=ReleaseFast
+        run: zig build bench -Doptimize=ReleaseFast -- --format json > benchmark-results.json
         # Only run benchmarks on Linux for consistency
         if: matrix.os == 'ubuntu-latest'
+
+      - name: Download baseline benchmark
+        if: matrix.os == 'ubuntu-latest' && github.event_name == 'pull_request'
+        uses: dawidd6/action-download-artifact@v3
+        with:
+          workflow: ci.yml
+          branch: ${{ github.base_ref }}
+          name: benchmark-results
+          path: baseline
+          if_no_artifact_found: warn
+        continue-on-error: true
+
+      - name: Compare benchmarks
+        if: matrix.os == 'ubuntu-latest' && github.event_name == 'pull_request'
+        run: |
+          if [[ -f baseline/benchmark-results.json ]]; then
+            ./scripts/compare_benchmark.sh baseline/benchmark-results.json benchmark-results.json
+          else
+            echo "No baseline benchmark found, skipping comparison"
+          fi
+
+      - name: Upload benchmark results
+        if: matrix.os == 'ubuntu-latest' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmark-results.json
+          retention-days: 90
 
   lint:
     name: Lint

@@ -316,6 +316,7 @@ const BenchCommand = struct {
         batch_sizes: bool = false,
         equity: bool = false,
         showdown: bool = false,
+        format: OutputFormat = .table,
     };
 
     const meta = cli_lib.CommandMeta{
@@ -349,12 +350,17 @@ const BenchCommand = struct {
         if (std.mem.eql(u8, field_name, "batch_sizes")) return "Compare performance across different batch sizes";
         if (std.mem.eql(u8, field_name, "equity")) return "Benchmark equity calculation performance";
         if (std.mem.eql(u8, field_name, "showdown")) return "Benchmark showdown evaluation (scalar vs batched)";
+        if (std.mem.eql(u8, field_name, "format")) return "Output format: table or json";
         return "No description available";
     }
 
     fn handle(opts: Options, allocator: std.mem.Allocator) !void {
-        ansi.printBold("🚀 Performance Benchmark\n", .{});
-        print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
+        const use_json = opts.format == .json;
+
+        if (!use_json) {
+            ansi.printBold("🚀 Performance Benchmark\n", .{});
+            print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
+        }
 
         // Convert our options to benchmark options
         var bench_options = benchmark.BenchmarkOptions{
@@ -418,43 +424,51 @@ const BenchCommand = struct {
         }
 
         // Run main benchmark
-        print("Running benchmark with {} iterations...\n", .{bench_options.iterations});
-        if (bench_options.warmup) print("  • Cache warmup enabled\n", .{});
-        if (bench_options.measure_overhead) print("  • Overhead measurement enabled\n", .{});
-        if (bench_options.multiple_runs) print("  • Multiple runs for statistical analysis\n", .{});
+        if (!use_json) {
+            print("Running benchmark with {} iterations...\n", .{bench_options.iterations});
+            if (bench_options.warmup) print("  • Cache warmup enabled\n", .{});
+            if (bench_options.measure_overhead) print("  • Overhead measurement enabled\n", .{});
+            if (bench_options.multiple_runs) print("  • Multiple runs for statistical analysis\n", .{});
+        }
 
         const result = try benchmark.runBenchmark(bench_options, allocator);
 
         // Display results
-        print("\n", .{});
-        ansi.printBold("📊 Benchmark Results\n", .{});
-        print("  Total hands:         {}\n", .{result.total_hands});
-        if (bench_options.measure_overhead) {
-            print("  Framework overhead:  {d:.2} ns/hand\n", .{result.overhead_ns});
-        }
-        ansi.printGreen("  Batch performance:   {d:.2} ns/hand\n", .{result.batch_ns_per_hand});
-        ansi.printGreen("  Hands per second:    {}\n", .{result.hands_per_second});
-
-        if (bench_options.multiple_runs) {
-            if (result.coefficient_variation > 0.05) {
-                ansi.printYellow("  Variation:           {d:.2}% (high - consider stable environment)\n", .{result.coefficient_variation * 100});
-            } else {
-                ansi.printGreen("  Variation:           {d:.2}% (low - reliable measurement)\n", .{result.coefficient_variation * 100});
-            }
-        }
-
-        if (opts.show_comparison) {
+        if (use_json) {
+            print("{{\"ns_per_hand\": {d:.4}, \"hands_per_second\": {}, \"total_hands\": {}, \"overhead_ns\": {d:.4}, \"variation\": {d:.4}}}\n", .{ result.batch_ns_per_hand, result.hands_per_second, result.total_hands, result.overhead_ns, result.coefficient_variation });
+        } else {
             print("\n", .{});
-            ansi.printBold("🔄 Performance Comparison\n", .{});
-            ansi.printCyan("  Batch (4x SIMD):     {d:.2} ns/hand ({} hands/sec)\n", .{ result.batch_ns_per_hand, result.hands_per_second });
-            ansi.printYellow("  Single hand:         {d:.2} ns/hand ({d:.0} hands/sec)\n", .{ result.single_ns_per_hand, 1e9 / result.single_ns_per_hand });
-            ansi.printGreen("  SIMD Speedup:        {d:.2}x\n", .{result.simd_speedup});
+            ansi.printBold("📊 Benchmark Results\n", .{});
+            print("  Total hands:         {}\n", .{result.total_hands});
+            if (bench_options.measure_overhead) {
+                print("  Framework overhead:  {d:.2} ns/hand\n", .{result.overhead_ns});
+            }
+            ansi.printGreen("  Batch performance:   {d:.2} ns/hand\n", .{result.batch_ns_per_hand});
+            ansi.printGreen("  Hands per second:    {}\n", .{result.hands_per_second});
+
+            if (bench_options.multiple_runs) {
+                if (result.coefficient_variation > 0.05) {
+                    ansi.printYellow("  Variation:           {d:.2}% (high - consider stable environment)\n", .{result.coefficient_variation * 100});
+                } else {
+                    ansi.printGreen("  Variation:           {d:.2}% (low - reliable measurement)\n", .{result.coefficient_variation * 100});
+                }
+            }
+
+            if (opts.show_comparison) {
+                print("\n", .{});
+                ansi.printBold("🔄 Performance Comparison\n", .{});
+                ansi.printCyan("  Batch (4x SIMD):     {d:.2} ns/hand ({} hands/sec)\n", .{ result.batch_ns_per_hand, result.hands_per_second });
+                ansi.printYellow("  Single hand:         {d:.2} ns/hand ({d:.0} hands/sec)\n", .{ result.single_ns_per_hand, 1e9 / result.single_ns_per_hand });
+                ansi.printGreen("  SIMD Speedup:        {d:.2}x\n", .{result.simd_speedup});
+            }
         }
 
         // Run validation if requested
         if (opts.validate) {
-            print("\n", .{});
-            ansi.printBold("✅ Correctness Validation\n", .{});
+            if (!use_json) {
+                print("\n", .{});
+                ansi.printBold("✅ Correctness Validation\n", .{});
+            }
 
             // Generate validation hands
             var prng = std.Random.DefaultPrng.init(123); // Different seed
@@ -467,10 +481,16 @@ const BenchCommand = struct {
             }
 
             _ = benchmark.validateCorrectness(validation_hands) catch |err| {
-                ansi.printRed("❌ Validation failed: {}\n", .{err});
+                if (use_json) {
+                    print("{{\"validation\": \"failed\", \"error\": \"{any}\"}}\n", .{err});
+                } else {
+                    ansi.printRed("❌ Validation failed: {}\n", .{err});
+                }
                 return;
             };
-            ansi.printGreen("✅ All evaluations match reference implementation\n", .{});
+            if (!use_json) {
+                ansi.printGreen("✅ All evaluations match reference implementation\n", .{});
+            }
         }
     }
 };
