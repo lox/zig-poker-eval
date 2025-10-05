@@ -4,28 +4,17 @@
 
 High-performance 7-card poker hand evaluator achieving ~4.5ns per hand evaluation on Apple M1. Includes comprehensive analysis tools for equity calculations, range parsing, and Monte Carlo simulations.
 
-```bash
-# Build and run
-zig build run
-
-# Run tests (82 tests across modules)
-zig build test
-
-# Benchmark performance
-zig build bench -Doptimize=ReleaseFast
-```
-
 ## Installation
 
 Requires Zig 0.15.1 or later.
 
-1) Add zig-poker-eval as a dependency in your `build.zig.zon`:
+Add zig-poker-eval as a dependency in your `build.zig.zon`:
 
 ```bash
 zig fetch --save "git+https://github.com/lox/zig-poker-eval?ref=v2.0.0"
 ```
 
-2) In your `build.zig`, add the `poker` module as a dependency to your program:
+In your `build.zig`, add the `poker` module as a dependency to your program:
 
 ```zig
 const poker = b.dependency("zig_poker_eval", .{
@@ -79,6 +68,24 @@ const aa = poker.parseHand("AhAs");
 const kk = poker.parseHand("KdKc");
 const result = try poker.monteCarlo(aa, kk, &.{}, 100000, rng, allocator);
 // result.equity() ≈ 0.80 (AA wins ~80% vs KK)
+```
+
+## Development
+
+Uses [Hermit](https://github.com/cashapp/hermit) for dependencies.
+
+```bash
+# Activate Hermit
+source bin/activate-hermit
+
+# Build and run
+zig build run
+
+# Run tests (82 tests across modules)
+zig build test
+
+# Benchmark performance
+zig build bench -Doptimize=ReleaseFast
 ```
 
 ## Performance
