@@ -238,8 +238,14 @@ fn computeRpcFromHand(hand: u64) u32 {
 fn computeRpcSimd(comptime batchSize: usize, hands: *const [batchSize]u64) [batchSize]u32 {
     var result: [batchSize]u32 = undefined;
 
+    // TODO(zig-0.15.1): SIMD has a compiler bug on x86_64 Linux
+    // error(x86_64_encoder): no encoding found for: none vpmovzxbd ymm m128 none none
+    // Disable SIMD on x86_64 until this is fixed
+    const builtin = @import("builtin");
+    const use_simd = builtin.cpu.arch != .x86_64;
+
     // Use SIMD for batch sizes that are powers of 2 or have good SIMD support
-    if (batchSize == 2 or batchSize == 4 or batchSize == 8 or batchSize == 16 or batchSize == 32 or batchSize == 64) {
+    if (use_simd and (batchSize == 2 or batchSize == 4 or batchSize == 8 or batchSize == 16 or batchSize == 32 or batchSize == 64)) {
         // Extract suits for all hands (structure-of-arrays)
         var clubs: [batchSize]u16 = undefined;
         var diamonds: [batchSize]u16 = undefined;
