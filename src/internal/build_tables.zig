@@ -117,8 +117,8 @@ test "slow evaluator vs table patterns" {
 
 fn buildTables(allocator: std.mem.Allocator) !void {
     // Enumerate all 7-card hands once
-    var non_flush_patterns = std.ArrayList(mphf.Pattern).init(allocator);
-    defer non_flush_patterns.deinit();
+    var non_flush_patterns: std.ArrayList(mphf.Pattern) = .empty;
+    defer non_flush_patterns.deinit(allocator);
 
     var flush_patterns = std.AutoHashMap(u16, u16).init(allocator);
     defer flush_patterns.deinit();
@@ -232,7 +232,7 @@ fn buildTables(allocator: std.mem.Allocator) !void {
             if (!seen_rpcs.contains(rpc)) {
                 const rank = evaluator.evaluateHand(hand);
                 try seen_rpcs.put(rpc, rank);
-                try non_flush_patterns.append(.{ .key = rpc, .value = rank });
+                try non_flush_patterns.append(allocator, .{ .key = rpc, .value = rank });
             }
         }
     }

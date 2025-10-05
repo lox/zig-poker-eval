@@ -424,7 +424,10 @@ pub fn testSingleHand(hand: u64) struct { slow: u16, fast: u16, match: bool } {
 
 // Equity benchmark for measuring Monte Carlo performance
 pub fn benchmarkEquity(allocator: std.mem.Allocator, options: BenchmarkOptions) !void {
-    const stdout = std.io.getStdOut().writer();
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer_wrapper = std.fs.File.stdout().writer(&stdout_buffer);
+    const stdout = &stdout_writer_wrapper.interface;
+    defer stdout.flush() catch {};
 
     // Generate test hands for equity calculations
     var prng = std.Random.DefaultPrng.init(42);
@@ -566,7 +569,10 @@ pub fn benchmarkEquity(allocator: std.mem.Allocator, options: BenchmarkOptions) 
 
 // Benchmark different batch sizes
 pub fn benchmarkBatchSizes(allocator: std.mem.Allocator) !void {
-    const stdout = std.io.getStdOut().writer();
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer_wrapper = std.fs.File.stdout().writer(&stdout_buffer);
+    const stdout = &stdout_writer_wrapper.interface;
+    defer stdout.flush() catch {};
 
     // Generate test hands
     var prng = std.Random.DefaultPrng.init(42);

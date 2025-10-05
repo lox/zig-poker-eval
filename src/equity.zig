@@ -425,8 +425,8 @@ pub fn multiway(hands: []const Hand, board: []const Hand, simulations: u32, rng:
 
         // Evaluate showdown - find best rank
         var best_rank: u16 = 65535; // Worst possible rank
-        var winners = std.ArrayList(usize).init(allocator);
-        defer winners.deinit();
+        var winners: std.ArrayList(usize) = .empty;
+        defer winners.deinit(allocator);
 
         // Find best rank
         for (final_hands, 0..) |hand, i| {
@@ -434,9 +434,9 @@ pub fn multiway(hands: []const Hand, board: []const Hand, simulations: u32, rng:
             if (rank < best_rank) {
                 best_rank = rank;
                 winners.clearRetainingCapacity();
-                try winners.append(i);
+                try winners.append(allocator, i);
             } else if (rank == best_rank) {
-                try winners.append(i);
+                try winners.append(allocator, i);
             }
         }
 
@@ -539,14 +539,14 @@ pub fn evaluateEquityShowdown(hero_hand: Hand, villain_hand: Hand) i8 {
 
 /// Enumerate all possible board completions for exact equity
 fn enumerateEquityBoardCompletions(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Hand, num_cards: u8, allocator: std.mem.Allocator) ![]Hand {
-    var used_cards = std.ArrayList(Hand).init(allocator);
-    defer used_cards.deinit();
+    var used_cards: std.ArrayList(Hand) = .empty;
+    defer used_cards.deinit(allocator);
 
     // Add hole cards and board to used cards
-    try used_cards.append(hero_hole_cards);
-    try used_cards.append(villain_hole_cards);
+    try used_cards.append(allocator, hero_hole_cards);
+    try used_cards.append(allocator, villain_hole_cards);
     for (board) |board_card| {
-        try used_cards.append(board_card);
+        try used_cards.append(allocator, board_card);
     }
 
     // Get all cards that are already in use
@@ -560,13 +560,13 @@ fn enumerateEquityBoardCompletions(hero_hole_cards: Hand, villain_hole_cards: Ha
     const remaining_bitmask = ~used_cards_bitmask & all_cards_mask;
 
     // Convert bitmask to individual cards
-    var remaining_cards = std.ArrayList(Hand).init(allocator);
-    defer remaining_cards.deinit();
+    var remaining_cards: std.ArrayList(Hand) = .empty;
+    defer remaining_cards.deinit(allocator);
 
     for (0..52) |i| {
         const card_bit = @as(Hand, 1) << @intCast(i);
         if ((remaining_bitmask & card_bit) != 0) {
-            try remaining_cards.append(card_bit);
+            try remaining_cards.append(allocator, card_bit);
         }
     }
 
@@ -575,7 +575,7 @@ fn enumerateEquityBoardCompletions(hero_hole_cards: Hand, villain_hole_cards: Ha
         return try allocator.dupe(Hand, remaining_cards.items[0..num_cards]);
     }
 
-    return try remaining_cards.toOwnedSlice();
+    return try remaining_cards.toOwnedSlice(allocator);
 }
 
 // === THREADED EQUITY CALCULATION ===

@@ -88,18 +88,18 @@ const EquityCommand = struct {
             };
 
             // Convert to slice for equity function
-            var board_list = std.ArrayList(poker.Hand).init(allocator);
-            defer board_list.deinit();
+            var board_list: std.ArrayList(poker.Hand) = .empty;
+            defer board_list.deinit(allocator);
 
             // Extract individual cards from board_hand
             var i: u6 = 0;
             while (i < 52) : (i += 1) {
                 const card_bit = @as(u64, 1) << i;
                 if (board_hand & card_bit != 0) {
-                    try board_list.append(card_bit);
+                    try board_list.append(allocator, card_bit);
                 }
             }
-            board_cards = try board_list.toOwnedSlice();
+            board_cards = try board_list.toOwnedSlice(allocator);
             defer allocator.free(board_cards);
         }
 

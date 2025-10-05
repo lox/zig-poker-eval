@@ -153,8 +153,8 @@ fn getSingleCardRank(single_card: card.Hand) u8 {
 
 /// Internal function to parse comma-separated ranges
 fn parseRange(range_str: []const u8, allocator: std.mem.Allocator) ![]const [2]card.Hand {
-    var hands_list = std.ArrayList([2]card.Hand).init(allocator);
-    defer hands_list.deinit();
+    var hands_list: std.ArrayList([2]card.Hand) = .empty;
+    defer hands_list.deinit(allocator);
 
     var iterator = std.mem.splitSequence(u8, range_str, ",");
     while (iterator.next()) |hand_notation| {
@@ -165,11 +165,11 @@ fn parseRange(range_str: []const u8, allocator: std.mem.Allocator) ![]const [2]c
         defer allocator.free(combinations);
 
         for (combinations) |combo| {
-            try hands_list.append(combo);
+            try hands_list.append(allocator, combo);
         }
     }
 
-    return hands_list.toOwnedSlice();
+    return hands_list.toOwnedSlice(allocator);
 }
 
 // Tests
