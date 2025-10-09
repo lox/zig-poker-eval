@@ -295,13 +295,69 @@ fn computeRpcSimd(comptime batchSize: usize, hands: *const [batchSize]u64) [batc
     return result;
 }
 
-fn chdLookupScalar(rpc: u32) u16 {
+inline fn chdLookupScalar(rpc: u32) u16 {
     return tables.lookup(rpc);
+}
+
+// === SIMD Flush Detection ===
+
+/// Detect flush hands in a batch using SIMD
+fn detectFlushSimd(comptime batchSize: usize, hands: *const [batchSize]u64) [batchSize]bool {
+    var result: [batchSize]bool = [_]bool{false} ** batchSize;
+
+    if (batchSize == 2 or batchSize == 4 or batchSize == 8 or batchSize == 16 or batchSize == 32 or batchSize == 64) {
+        // Extract suits for all hands (structure-of-arrays)
+        var clubs: [batchSize]u16 = undefined;
+        var diamonds: [batchSize]u16 = undefined;
+        var hearts: [batchSize]u16 = undefined;
+        var spades: [batchSize]u16 = undefined;
+
+        for (hands, 0..) |hand, i| {
+            clubs[i] = @as(u16, @truncate((hand >> 0) & RANK_MASK));
+            diamonds[i] = @as(u16, @truncate((hand >> 13) & RANK_MASK));
+            hearts[i] = @as(u16, @truncate((hand >> 26) & RANK_MASK));
+            spades[i] = @as(u16, @truncate((hand >> 39) & RANK_MASK));
+        }
+
+        // Vectorized popcount for each suit
+        const clubs_v: @Vector(batchSize, u16) = clubs;
+        const diamonds_v: @Vector(batchSize, u16) = diamonds;
+        const hearts_v: @Vector(batchSize, u16) = hearts;
+        const spades_v: @Vector(batchSize, u16) = spades;
+
+        const clubs_count = @popCount(clubs_v);
+        const diamonds_count = @popCount(diamonds_v);
+        const hearts_count = @popCount(hearts_v);
+        const spades_count = @popCount(spades_v);
+
+        const threshold: @Vector(batchSize, u16) = @splat(5);
+
+        // Check if any suit has >= 5 cards
+        const clubs_flush = clubs_count >= threshold;
+        const diamonds_flush = diamonds_count >= threshold;
+        const hearts_flush = hearts_count >= threshold;
+        const spades_flush = spades_count >= threshold;
+
+        // Combine results (any suit with >= 5 means flush) - use bitwise OR for vectors
+        const has_flush = clubs_flush | diamonds_flush | hearts_flush | spades_flush;
+
+        // Convert vector to array
+        inline for (0..batchSize) |i| {
+            result[i] = has_flush[i];
+        }
+    } else {
+        // Fallback to scalar detection
+        for (hands, 0..) |hand, i| {
+            result[i] = isFlushHand(hand);
+        }
+    }
+
+    return result;
 }
 
 // === Flush Detection and Pattern Extraction ===
 
-pub fn isFlushHand(hand: u64) bool {
+pub inline fn isFlushHand(hand: u64) bool {
     const suits = [4]u16{
         @as(u16, @truncate(hand >> 0)) & RANK_MASK, // clubs
         @as(u16, @truncate(hand >> 13)) & RANK_MASK, // diamonds
@@ -383,13 +439,16 @@ pub fn evaluateBatch(comptime batchSize: usize, hands: @Vector(batchSize, u64)) 
         hands_array[i] = hands[i];
     }
 
-    // Compute RPC for all hands (SIMD-optimized for batchSize=4)
+    // Compute RPC for all hands (SIMD-optimized)
     const rpc_results = computeRpcSimd(batchSize, &hands_array);
 
-    // Evaluate each hand
+    // Detect flush hands in batch (SIMD-optimized)
+    const flush_mask = detectFlushSimd(batchSize, &hands_array);
+
+    // Evaluate each hand using pre-computed flush detection
     var results: [batchSize]u16 = undefined;
     inline for (0..batchSize) |i| {
-        if (isFlushHand(hands_array[i])) {
+        if (flush_mask[i]) {
             results[i] = tables.flushLookup(getFlushPattern(hands_array[i]));
         } else {
             results[i] = chdLookupScalar(rpc_results[i]);
