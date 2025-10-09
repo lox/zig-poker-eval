@@ -78,7 +78,7 @@ tasks:
       - zig build -Doptimize=ReleaseFast
       - rm -rf "{{.PROFILE_DIR}}"
       - mkdir -p "{{.PROFILE_DIR}}"
-      - dsymutil zig-out/bin/poker-eval
+      - command -v dsymutil >/dev/null 2>&1 && dsymutil zig-out/bin/poker-eval || true
       - uniprof record --platform native -o "{{.PROFILE_JSON}}" -- zig-out/bin/poker-eval bench --iterations={{.ITERATIONS}}
 
   profile:equity:
@@ -95,7 +95,7 @@ tasks:
       - zig build -Doptimize=ReleaseFast
       - rm -rf "{{.PROFILE_DIR}}"
       - mkdir -p "{{.PROFILE_DIR}}"
-      - dsymutil zig-out/bin/poker-eval
+      - command -v dsymutil >/dev/null 2>&1 && dsymutil zig-out/bin/poker-eval || true
       - uniprof record --platform native -o "{{.PROFILE_JSON}}" -- zig-out/bin/poker-eval bench --equity
 
   profile:showdown:
@@ -112,5 +112,5 @@ tasks:
       - zig build -Doptimize=ReleaseFast
       - rm -rf "{{.PROFILE_DIR}}"
       - mkdir -p "{{.PROFILE_DIR}}"
-      - dsymutil zig-out/bin/poker-eval
+      - command -v dsymutil >/dev/null 2>&1 && dsymutil zig-out/bin/poker-eval || true
       - uniprof record --platform native -o "{{.PROFILE_JSON}}" -- zig-out/bin/poker-eval bench --showdown
