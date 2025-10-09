@@ -137,6 +137,27 @@ pub fn createHand(cards: []const struct { Suit, Rank }) Hand {
     return hand;
 }
 
+/// Parse rank character from poker notation (case-insensitive)
+/// Returns Rank enum (0-12 for 2-A)
+pub fn parseRank(char: u8) ?Rank {
+    return switch (char) {
+        '2' => .two,
+        '3' => .three,
+        '4' => .four,
+        '5' => .five,
+        '6' => .six,
+        '7' => .seven,
+        '8' => .eight,
+        '9' => .nine,
+        'T', 't' => .ten,
+        'J', 'j' => .jack,
+        'Q', 'q' => .queen,
+        'K', 'k' => .king,
+        'A', 'a' => .ace,
+        else => null,
+    };
+}
+
 /// Combine two hole cards into a single Hand bitfield
 pub inline fn combine(hole: [2]Hand) Hand {
     return hole[0] | hole[1];
@@ -307,19 +328,14 @@ test "pocket pair generation" {
     }
 }
 
-test "convenience functions" {
-    const ace_spades = card.makeCard(.spades, .ace);
-    try testing.expect(ace_spades == card.makeCard(.spades, .ace));
-
-    const hand = createHand(&.{
-        .{ .spades, .ace },
-        .{ .hearts, .king },
-        .{ .diamonds, .queen },
-    });
-    try testing.expect(card.hasCard(hand, .spades, .ace));
-    try testing.expect(card.hasCard(hand, .hearts, .king));
-    try testing.expect(card.hasCard(hand, .diamonds, .queen));
-    try testing.expect(card.countCards(hand) == 3);
+test "parseRank from poker notation" {
+    try testing.expectEqual(@as(?Rank, .two), parseRank('2'));
+    try testing.expectEqual(@as(?Rank, .ten), parseRank('T'));
+    try testing.expectEqual(@as(?Rank, .ten), parseRank('t'));
+    try testing.expectEqual(@as(?Rank, .ace), parseRank('A'));
+    try testing.expectEqual(@as(?Rank, .ace), parseRank('a'));
+    try testing.expectEqual(@as(?Rank, null), parseRank('X'));
+    try testing.expectEqual(@as(?Rank, null), parseRank('1'));
 }
 
 test "combine and split helpers" {
@@ -343,6 +359,21 @@ test "combine and split helpers" {
     // Verify round-trip
     const recombined = combine(split_result);
     try testing.expect(recombined == combined);
+}
+
+test "convenience functions" {
+    const ace_spades = card.makeCard(.spades, .ace);
+    try testing.expect(ace_spades == card.makeCard(.spades, .ace));
+
+    const hand = createHand(&.{
+        .{ .spades, .ace },
+        .{ .hearts, .king },
+        .{ .diamonds, .queen },
+    });
+    try testing.expect(card.hasCard(hand, .spades, .ace));
+    try testing.expect(card.hasCard(hand, .hearts, .king));
+    try testing.expect(card.hasCard(hand, .diamonds, .queen));
+    try testing.expect(card.countCards(hand) == 3);
 }
 
 test "hasCardConflict detects overlapping cards" {

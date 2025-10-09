@@ -43,15 +43,13 @@ pub const Range = struct {
     pub fn addHandNotation(self: *Range, notation: []const u8, probability: f32) !void {
         if (notation.len < 2 or notation.len > 3) return error.InvalidNotation;
 
-        const rank1 = parseRank(notation[0]) orelse return error.InvalidRank;
-        const rank2 = parseRank(notation[1]) orelse return error.InvalidRank;
-        const rank1_idx = @as(u8, @intCast(rank1 - 2)); // Convert poker rank to card rank (0-12)
-        const rank2_idx = @as(u8, @intCast(rank2 - 2));
+        const rank1 = hand.parseRank(notation[0]) orelse return error.InvalidRank;
+        const rank2 = hand.parseRank(notation[1]) orelse return error.InvalidRank;
 
         if (notation.len == 2) {
             if (rank1 == rank2) {
                 // Pocket pair - add all 6 combinations
-                const combinations = try hand.generatePocketPair(@enumFromInt(rank1_idx), self.allocator);
+                const combinations = try hand.generatePocketPair(rank1, self.allocator);
                 defer self.allocator.free(combinations);
 
                 for (combinations) |combo| {
@@ -59,11 +57,7 @@ pub const Range = struct {
                 }
             } else {
                 // Unpaired hand without modifier - add all 16 combinations (suited + offsuit)
-                const combinations = try hand.generateAllCombinations(
-                    @enumFromInt(rank1_idx),
-                    @enumFromInt(rank2_idx),
-                    self.allocator,
-                );
+                const combinations = try hand.generateAllCombinations(rank1, rank2, self.allocator);
                 defer self.allocator.free(combinations);
 
                 for (combinations) |combo| {
@@ -78,11 +72,7 @@ pub const Range = struct {
             switch (modifier) {
                 's', 'S' => {
                     // Suited - add 4 combinations
-                    const combinations = try hand.generateSuitedCombinations(
-                        @enumFromInt(rank1_idx),
-                        @enumFromInt(rank2_idx),
-                        self.allocator,
-                    );
+                    const combinations = try hand.generateSuitedCombinations(rank1, rank2, self.allocator);
                     defer self.allocator.free(combinations);
 
                     for (combinations) |combo| {
@@ -91,11 +81,7 @@ pub const Range = struct {
                 },
                 'o', 'O' => {
                     // Offsuit - add 12 combinations
-                    const combinations = try hand.generateOffsuitCombinations(
-                        @enumFromInt(rank1_idx),
-                        @enumFromInt(rank2_idx),
-                        self.allocator,
-                    );
+                    const combinations = try hand.generateOffsuitCombinations(rank1, rank2, self.allocator);
                     defer self.allocator.free(combinations);
 
                     for (combinations) |combo| {
@@ -327,26 +313,6 @@ pub const Range = struct {
     }
 };
 
-/// Parse single rank character to numeric value (case-insensitive)
-fn parseRank(char: u8) ?u8 {
-    return switch (char) {
-        '2' => 2,
-        '3' => 3,
-        '4' => 4,
-        '5' => 5,
-        '6' => 6,
-        '7' => 7,
-        '8' => 8,
-        '9' => 9,
-        'T', 't' => 10,
-        'J', 'j' => 11,
-        'Q', 'q' => 12,
-        'K', 'k' => 13,
-        'A', 'a' => 14,
-        else => null,
-    };
-}
-
 /// Parse comma-delimited range notation (e.g., "AA,KK,QQ,AKs,AKo") into a Range
 pub fn parseRange(notation: []const u8, allocator: std.mem.Allocator) !Range {
     var range = Range.init(allocator);
@@ -467,11 +433,11 @@ test "range notation parsing" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Test parseRank function
-    try testing.expectEqual(@as(?u8, 2), parseRank('2'));
-    try testing.expectEqual(@as(?u8, 10), parseRank('T'));
-    try testing.expectEqual(@as(?u8, 14), parseRank('A'));
-    try testing.expectEqual(@as(?u8, null), parseRank('X'));
+    // Test parseRank function (now in hand.zig)
+    try testing.expectEqual(@as(?Rank, .two), hand.parseRank('2'));
+    try testing.expectEqual(@as(?Rank, .ten), hand.parseRank('T'));
+    try testing.expectEqual(@as(?Rank, .ace), hand.parseRank('A'));
+    try testing.expectEqual(@as(?Rank, null), hand.parseRank('X'));
 
     // Test range with different notations
     var range = Range.init(allocator);
