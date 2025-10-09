@@ -2,12 +2,13 @@
 
 **Original Baseline** (pre-SIMD): 11.95 ns/hand (83.7M hands/s)
 **After SIMD Batching** (Exp 6): 4.5 ns/hand (224M hands/s) - 2.66× speedup
-**Current** (Exp 12): **3.69 ns/hand (271M hands/s)** - SIMD batching + SIMD flush detection
+**After SIMD Flush Detection** (Exp 12): 3.69 ns/hand (271M hands/s) - 3.24× speedup
+**Current** (Exp 13): **3.27 ns/hand (306M hands/s)** - Flush pattern lookup table
 
 **Showdown Baseline**: 41.9 ns/eval (context path, 5-card board + two holes)
 **Showdown Current** (Exp 10): 13.4 ns/eval (batched, board context + SIMD), 3.1× faster
 
-**Total Speedup**: 3.24× from original baseline (11.95ns → 3.69ns)
+**Total Speedup**: 3.65× from original baseline (11.95ns → 3.27ns)
 
 ## Experiment 1: Packed ARM64 Tables
 
@@ -479,6 +480,111 @@ pub fn evaluateBatch(comptime batchSize: usize, hands: @Vector(batchSize, u64)) 
 - Memory latency (CHD lookups): ~2.0-2.5 ns/hand (unavoidable)
 - Remaining computation: ~1.2-1.7 ns/hand
 - Further improvements limited by Amdahl's Law with ~70% memory-bound work
+
+## Experiment 13: Flush Pattern Lookup Table
+
+**Performance Impact**: +11.4% faster (3.69→3.27 ns/hand)
+**Complexity**: Medium
+**Status**: ✅ SUCCESS
+
+**Approach**: Replace branching and iteration in `getTop5Ranks()` with a compile-time lookup table that pre-computes the top-5 flush pattern for all 65,536 possible suit masks.
+
+**Motivation**: Profiling with uniprof revealed that `getTop5Ranks()` consumed 5.26% of execution time despite being called only for flush hands (~20% of hands). The function had three code paths: exact-5-cards (fast path), straight detection (10 iterations), and rank iteration (up to 13 iterations). Analysis identified this as the largest non-memory bottleneck.
+
+**Implementation**:
+
+```zig
+// Compile-time lookup table generation (src/evaluator.zig:48)
+const flush_top5_table: [65536]u16 = blk: {
+    @setEvalBranchQuota(2000000); // Need higher quota for 65K table generation
+    var table: [65536]u16 = [_]u16{0} ** 65536;
+
+    // Compute top 5 pattern for every possible suit mask
+    for (0..65536) |mask_int| {
+        const suit_mask: u16 = @intCast(mask_int);
+        const bit_count = @popCount(suit_mask);
+
+        // Only valid for 5-7 card flushes
+        if (bit_count < 5 or bit_count > 7) {
+            table[mask_int] = 0; // Invalid input, never called
+            continue;
+        }
+
+        // Fast path: exactly 5 bits set
+        if (bit_count == 5) {
+            table[mask_int] = suit_mask;
+            continue;
+        }
+
+        // Check for straights
+        const straights = [_]u16{
+            0x1F00, 0x0F80, 0x07C0, 0x03E0, 0x01F0,
+            0x00F8, 0x007C, 0x003E, 0x001F, 0x100F, // wheel
+        };
+
+        var is_straight = false;
+        for (straights) |pattern| {
+            if ((suit_mask & pattern) == pattern) {
+                table[mask_int] = pattern;
+                is_straight = true;
+                break;
+            }
+        }
+
+        if (is_straight) continue;
+
+        // Take highest 5 ranks
+        var result: u16 = 0;
+        var count: u8 = 0;
+        var rank: i8 = 12;
+
+        while (count < 5 and rank >= 0) : (rank -= 1) {
+            const bit = @as(u16, 1) << @intCast(rank);
+            if ((suit_mask & bit) != 0) {
+                result |= bit;
+                count += 1;
+            }
+        }
+
+        table[mask_int] = result;
+    }
+
+    break :blk table;
+};
+
+// Simplified function - single memory load (src/evaluator.zig:453)
+inline fn getTop5Ranks(suit_mask: u16) u16 {
+    return flush_top5_table[suit_mask];
+}
+```
+
+**Benchmark Results**: 20M iterations (640M hands), ReleaseFast, Apple M1
+
+- **Baseline (Experiment 12)**: 3.69 ns/hand (271M hands/sec)
+- **With lookup table**: 3.27 ns/hand (306M hands/sec)
+- **Improvement**: 11.4% faster (0.42 ns/hand reduction)
+- **Consistency**: 3 runs: 3.26, 3.28, 3.28 ns/hand (CV: 0.4%)
+- **Tests**: All 78 tests passed
+
+**Why it succeeded**: The lookup table eliminates all branching and iteration in flush pattern extraction. Instead of checking for exact-5-cards, iterating through 10 straight patterns, then potentially iterating through 13 ranks, the function now performs a single array lookup. The 128KB table (65,536 × 2 bytes) is generated at compile-time and adds minimal cache pressure since the CHD tables (267KB) already force L2 cache usage.
+
+**Key insight**: Profile-guided optimization continues to deliver results. The 5.26% profiling hotspot translated to an 11.4% improvement - the additional gain comes from:
+1. Eliminating branch mispredictions (3 code paths → 1)
+2. Reducing instruction cache pressure (complex loop logic → simple load)
+3. Enabling better instruction pipelining (no data-dependent branching)
+
+**Technical details**:
+- Table size: 128KB (65,536 entries × 2 bytes per u16)
+- Memory impact: Total working set now 395KB (267KB CHD + 128KB flush patterns)
+- Cache behavior: Already L2-bound, minimal additional pressure
+- Compile-time generation: Requires `@setEvalBranchQuota(2000000)` for table computation
+- All possible suit masks pre-computed (valid inputs: 5-7 bits set)
+
+**Performance analysis**:
+- Current: 3.27 ns/hand (306M hands/sec)
+- Theoretical ceiling: ~2.5 ns/hand (memory-bound CHD lookups)
+- Remaining headroom: 0.77ns (23%)
+- Further optimization limited by Amdahl's Law (~70% memory-bound work)
 
 ---
 
