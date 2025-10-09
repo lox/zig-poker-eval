@@ -61,7 +61,7 @@ pub fn main() !void {
         print("calculating...\n", .{});
 
         const equity = try calculateEquityVsRandom(hand, allocator);
-        equities[i] = equity;
+        equities[i] = .{ equity.wins, equity.losses, equity.ties };
 
         const hand_elapsed = std.time.milliTimestamp() - hand_start;
         const hand_total = equity.wins + equity.losses + equity.ties;
@@ -158,11 +158,11 @@ fn calculateEquityVsRandom(hand: StartingHand, allocator: std.mem.Allocator) !st
     const hero_hand = createHand(hand);
 
     // Build available cards list (all cards except hero's)
-    var available = std.ArrayList(u8).init(allocator);
-    defer available.deinit();
+    var available: std.ArrayList(u8) = .empty;
+    defer available.deinit(allocator);
     for (0..52) |card| {
         if ((hero_hand & (@as(u64, 1) << @intCast(card))) == 0) {
-            try available.append(@intCast(card));
+            try available.append(allocator, @intCast(card));
         }
     }
 
@@ -238,17 +238,17 @@ fn createHand(hand: StartingHand) u64 {
         // Pocket pair - use first two suits
         const card1 = hand.rank1 + (0 * 13); // clubs
         const card2 = hand.rank1 + (1 * 13); // diamonds
-        return (@as(u64, 1) << card1) | (@as(u64, 1) << card2);
+        return (@as(u64, 1) << @intCast(card1)) | (@as(u64, 1) << @intCast(card2));
     } else if (hand.suited) {
         // Suited - use same suit (clubs)
         const card1 = hand.rank1 + (0 * 13);
         const card2 = hand.rank2 + (0 * 13);
-        return (@as(u64, 1) << card1) | (@as(u64, 1) << card2);
+        return (@as(u64, 1) << @intCast(card1)) | (@as(u64, 1) << @intCast(card2));
     } else {
         // Offsuit - use different suits
         const card1 = hand.rank1 + (0 * 13); // clubs
         const card2 = hand.rank2 + (1 * 13); // diamonds
-        return (@as(u64, 1) << card1) | (@as(u64, 1) << card2);
+        return (@as(u64, 1) << @intCast(card1)) | (@as(u64, 1) << @intCast(card2));
     }
 }
 
@@ -275,7 +275,11 @@ fn estimateTotalEvaluations() u64 {
 fn writeTableFile(equity_table: [169][2]u16) !void {
     const file = try std.fs.cwd().createFile("src/heads_up_tables.zig", .{});
     defer file.close();
-    const writer = file.writer();
+
+    // Build the entire file content in memory first
+    var buffer: [32768]u8 = undefined; // Large enough for our output
+    var fbs = std.io.fixedBufferStream(&buffer);
+    const writer = fbs.writer();
 
     try writer.print("// Generated heads-up equity tables\n", .{});
     try writer.print("// Each entry is (win_rate_x1000, tie_rate_x1000)\n", .{});
@@ -288,7 +292,7 @@ fn writeTableFile(equity_table: [169][2]u16) !void {
 
     for (equity_table, 0..) |eq, i| {
         // Add comment for notable hands
-        const comment = getHandComment(i);
+        const comment = getHandComment(@intCast(i));
         if (comment.len > 0) {
             try writer.print("    .{{ {}, {} }}, // {s}\n", .{ eq[0], eq[1], comment });
         } else {
@@ -297,6 +301,9 @@ fn writeTableFile(equity_table: [169][2]u16) !void {
     }
 
     try writer.print("}};\n", .{});
+
+    // Write the entire buffer to file
+    try file.writeAll(fbs.getWritten());
 }
 
 fn getHandComment(index: u8) []const u8 {

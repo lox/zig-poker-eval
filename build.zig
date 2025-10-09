@@ -176,6 +176,23 @@ pub fn build(b: *std.Build) void {
     const verify_all_step = b.step("verify-all", "Verify evaluator against all 133M hands");
     verify_all_step.dependOn(&run_verify_all.step);
 
+    // Generate heads-up tables tool
+    const gen_heads_up_tables = b.addExecutable(.{
+        .name = "generate-heads-up-tables",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/generate_heads_up_tables.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .use_llvm = use_llvm,
+    });
+    gen_heads_up_tables.root_module.addImport("poker", poker_mod);
+    b.installArtifact(gen_heads_up_tables);
+
+    const run_gen_heads_up = b.addRunArtifact(gen_heads_up_tables);
+    const gen_heads_up_step = b.step("gen-heads-up", "Generate heads-up equity tables (10+ hours)");
+    gen_heads_up_step.dependOn(&run_gen_heads_up.step);
+
     // Test step - run tests from all modules
     const test_step = b.step("test", "Run all unit tests");
 
