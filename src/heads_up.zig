@@ -1,4 +1,4 @@
-// Experiment 17: Specialized Heads-Up Equity Tables
+// Specialized Heads-Up Equity Tables
 // Pre-computed win frequencies for heads-up (2 player) poker scenarios
 // Based on analysis of holdem-hand-evaluator approach
 
@@ -173,7 +173,7 @@ pub fn benchmark(allocator: std.mem.Allocator) !void {
     const print = std.debug.print;
 
     print("\n==============================================\n", .{});
-    print("Experiment 17: Heads-Up Equity Tables\n", .{});
+    print("Heads-Up Equity Tables Benchmark\n", .{});
     print("==============================================\n\n", .{});
 
     // Test hands

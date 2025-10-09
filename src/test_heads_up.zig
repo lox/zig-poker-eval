@@ -1,7 +1,7 @@
-// Experiment 17 Test: Benchmark pre-computed vs Monte Carlo heads-up equity
+// Test: Benchmark pre-computed vs Monte Carlo heads-up equity
 const std = @import("std");
 const poker = @import("poker.zig");
-const exp17 = @import("experiment17_heads_up.zig");
+const heads_up = @import("heads_up.zig");
 
 const print = std.debug.print;
 
@@ -72,7 +72,7 @@ pub fn main() !void {
 
     print("\n", .{});
     print("========================================================\n", .{});
-    print("Experiment 17: Heads-Up Equity - Precomputed vs Monte Carlo\n", .{});
+    print("Heads-Up Equity - Precomputed vs Monte Carlo\n", .{});
     print("========================================================\n", .{});
     print("\n", .{});
 
@@ -97,12 +97,12 @@ pub fn main() !void {
         print("{s:12} - ", .{matchup.name});
 
         // Parse hands for pre-computed
-        const h1_idx = try exp17.HandIndex.parseHand(matchup.hero);
-        const h2_idx = try exp17.HandIndex.parseHand(matchup.villain);
+        const h1_idx = try heads_up.HandIndex.parseHand(matchup.hero);
+        const h2_idx = try heads_up.HandIndex.parseHand(matchup.villain);
 
         // Pre-computed lookup (instant)
         const pc_start = std.time.nanoTimestamp();
-        const precomputed = exp17.HeadsUpEquity.getPreflopEquity(h1_idx, h2_idx);
+        const precomputed = heads_up.HeadsUpEquity.getPreflopEquity(h1_idx, h2_idx);
         const pc_time = std.time.nanoTimestamp() - pc_start;
 
         // Monte Carlo simulation
