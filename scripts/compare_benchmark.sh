@@ -5,7 +5,7 @@ set -euo pipefail
 # Usage: compare_benchmark.sh <baseline.json> <current.json>
 
 # Check dependencies
-for cmd in jq bc; do
+for cmd in jq awk; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "Error: $cmd is required but not installed"
     exit 1
@@ -61,7 +61,7 @@ current_hps=$(jq -r '.hands_per_second' "$CURRENT_FILE")
 
 # Calculate percentage change
 # Positive change = regression (slower), negative = improvement (faster)
-change_pct=$(echo "scale=2; (($current_ns - $baseline_ns) / $baseline_ns) * 100" | bc)
+change_pct=$(awk "BEGIN {printf \"%.2f\", (($current_ns - $baseline_ns) / $baseline_ns) * 100}")
 
 echo "Benchmark Comparison"
 echo "===================="
@@ -71,16 +71,16 @@ echo "Current:   ${current_ns} ns/hand (${current_hps} hands/sec)"
 echo ""
 
 # Check if we have a regression
-if (( $(echo "$change_pct > $THRESHOLD" | bc -l) )); then
+if awk "BEGIN {exit !($change_pct > $THRESHOLD)}"; then
   echo "❌ REGRESSION DETECTED: Performance decreased by ${change_pct}%"
   echo "   Threshold: ${THRESHOLD}%"
   exit 1
-elif (( $(echo "$change_pct > 0" | bc -l) )); then
+elif awk "BEGIN {exit !($change_pct > 0)}"; then
   echo "⚠️  Minor slowdown: ${change_pct}% (within ${THRESHOLD}% threshold)"
   exit 0
 else
   # Improvement
-  improvement=$(echo "scale=2; -1 * $change_pct" | bc)
+  improvement=$(awk "BEGIN {printf \"%.2f\", -1 * $change_pct}")
   echo "✅ Performance improved by ${improvement}%"
   exit 0
 fi
