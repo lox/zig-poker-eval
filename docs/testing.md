@@ -57,16 +57,18 @@ The benchmark suite (`src/tools/benchmark.zig`) measures:
 
 ```bash
 # Run all unit tests (82 tests across all modules)
-zig build test
+task test
 
-# Run tests with detailed summary
+# Run tests with detailed summary (via zig build directly)
 zig build test --summary all
 
-# Run specific module tests (via test runner)
+# Run specific module tests
 zig test src/evaluator.zig
 
-# Run performance benchmark
-zig build bench -Doptimize=ReleaseFast
+# Run performance benchmarks
+task bench:eval        # Hand evaluation
+task bench:equity      # Equity calculations
+task bench:showdown    # Showdown evaluation
 
 # Generate all 133M hands for verification
 zig build gen-all
@@ -99,18 +101,15 @@ Total time: 45.678 ms
 
 Benchmark output:
 ```
-$ zig build bench -Doptimize=ReleaseFast
-=== Poker Hand Evaluator Benchmark ===
-Iterations: 100000
-Hands per iteration: 32
-Total hands evaluated: 3200000
+$ task bench:eval
+🚀 Performance Benchmark
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Running benchmark with 100000 iterations...
 
-Results:
-  Batch evaluation: 2.3 ns/hand
-  Single evaluation: 3.1 ns/hand
-  SIMD speedup: 1.35x
-  Throughput: 434M hands/second
-  CV: 0.8%
+📊 Benchmark Results
+  Total hands:         3200000
+  Batch performance:   4.87 ns/hand
+  Hands per second:    205180815
 ```
 
 ## Test File Organization
@@ -140,8 +139,10 @@ The test runner (`src/tools/test_runner.zig`) provides:
 
 | Target | Description | Command |
 |--------|-------------|---------|
-| `test` | Run all unit tests | `zig build test` |
-| `bench` | Performance benchmark | `zig build bench -Doptimize=ReleaseFast` |
+| `test` | Run all unit tests | `task test` |
+| `bench:eval` | Hand evaluation benchmark | `task bench:eval` |
+| `bench:equity` | Equity calculation benchmark | `task bench:equity` |
+| `bench:showdown` | Showdown evaluation benchmark | `task bench:showdown` |
 | `gen-all` | Generate all hands | `zig build gen-all` |
 | `verify-all` | Verify correctness | `zig build verify-all` |
 | `build-tables` | Regenerate lookup tables | `zig build build-tables -Doptimize=ReleaseFast` |

@@ -72,20 +72,23 @@ const result = try poker.monteCarlo(aa, kk, &.{}, 100000, rng, allocator);
 
 ## Development
 
-Uses [Hermit](https://github.com/cashapp/hermit) for dependencies.
+Uses [Hermit](https://github.com/cashapp/hermit) for dependencies and [Task](https://taskfile.dev) for automation.
 
 ```bash
 # Activate Hermit
 source bin/activate-hermit
 
-# Build and run
-zig build run
+# Build
+task build
 
 # Run tests (82 tests across modules)
-zig build test
+task test
 
 # Benchmark performance
-zig build bench -Doptimize=ReleaseFast
+task bench:eval
+
+# Calculate equity
+task run -- equity "AhAs" "KdKc"
 ```
 
 ## Performance

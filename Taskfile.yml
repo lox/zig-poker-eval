@@ -1,0 +1,116 @@
+---
+
+version: '3'
+
+vars:
+  ZIG_OPTIMIZE: '{{.ZIG_OPTIMIZE | default "ReleaseFast"}}'
+  # Tests default to Debug for better error detection (assertions, bounds checks)
+  ZIG_TEST_OPTIMIZE: '{{.ZIG_TEST_OPTIMIZE | default "Debug"}}'
+
+tasks:
+  build:
+    desc: Build poker-eval CLI executable
+    cmds:
+      - zig build -Doptimize={{.ZIG_OPTIMIZE}}
+    sources:
+      - src/**/*.zig
+      - build.zig
+    generates:
+      - zig-out/bin/poker-eval
+
+  test:
+    desc: Run all unit tests (defaults to Debug)
+    cmds:
+      - zig build test -Doptimize={{.ZIG_TEST_OPTIMIZE}} --summary all
+
+  bench:
+    desc: Run poker evaluator benchmarks
+    deps:
+      - build
+    cmds:
+      - zig-out/bin/poker-eval bench {{.CLI_ARGS}}
+
+  bench:eval:
+    desc: Benchmark hand evaluation performance
+    deps:
+      - build
+    cmds:
+      - zig-out/bin/poker-eval bench {{.CLI_ARGS}}
+
+  bench:equity:
+    desc: Benchmark Monte Carlo equity calculation performance
+    deps:
+      - build
+    cmds:
+      - zig-out/bin/poker-eval bench --equity {{.CLI_ARGS}}
+
+  bench:showdown:
+    desc: Benchmark showdown evaluation (scalar vs batched)
+    deps:
+      - build
+    cmds:
+      - zig-out/bin/poker-eval bench --showdown {{.CLI_ARGS}}
+
+  run:
+    desc: Run poker-eval CLI with optional arguments
+    deps:
+      - build
+    cmds:
+      - zig-out/bin/poker-eval {{.CLI_ARGS}}
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -rf zig-out zig-cache
+
+  profile:eval:
+    desc: Profile hand evaluation with uniprof (default 20M iterations, ReleaseFast)
+    vars:
+      ITERATIONS: '{{.ITERATIONS | default "20000000"}}'
+      PROFILE_DIR: '{{.PROFILE_DIR | default "/tmp/eval_profile"}}'
+      PROFILE_JSON: '{{.PROFILE_DIR}}/profile.json'
+    sources:
+      - src/**/*.zig
+      - build.zig
+    generates:
+      - '{{.PROFILE_JSON}}'
+    cmds:
+      - zig build -Doptimize=ReleaseFast
+      - rm -rf "{{.PROFILE_DIR}}"
+      - mkdir -p "{{.PROFILE_DIR}}"
+      - command -v dsymutil >/dev/null 2>&1 && dsymutil zig-out/bin/poker-eval || true
+      - uniprof record --platform native -o "{{.PROFILE_JSON}}" -- zig-out/bin/poker-eval bench --iterations={{.ITERATIONS}}
+
+  profile:equity:
+    desc: Profile equity calculations with uniprof (ReleaseFast)
+    vars:
+      PROFILE_DIR: '{{.PROFILE_DIR | default "/tmp/equity_profile"}}'
+      PROFILE_JSON: '{{.PROFILE_DIR}}/profile.json'
+    sources:
+      - src/**/*.zig
+      - build.zig
+    generates:
+      - '{{.PROFILE_JSON}}'
+    cmds:
+      - zig build -Doptimize=ReleaseFast
+      - rm -rf "{{.PROFILE_DIR}}"
+      - mkdir -p "{{.PROFILE_DIR}}"
+      - command -v dsymutil >/dev/null 2>&1 && dsymutil zig-out/bin/poker-eval || true
+      - uniprof record --platform native -o "{{.PROFILE_JSON}}" -- zig-out/bin/poker-eval bench --equity
+
+  profile:showdown:
+    desc: Profile showdown evaluation with uniprof (ReleaseFast)
+    vars:
+      PROFILE_DIR: '{{.PROFILE_DIR | default "/tmp/showdown_profile"}}'
+      PROFILE_JSON: '{{.PROFILE_DIR}}/profile.json'
+    sources:
+      - src/**/*.zig
+      - build.zig
+    generates:
+      - '{{.PROFILE_JSON}}'
+    cmds:
+      - zig build -Doptimize=ReleaseFast
+      - rm -rf "{{.PROFILE_DIR}}"
+      - mkdir -p "{{.PROFILE_DIR}}"
+      - command -v dsymutil >/dev/null 2>&1 && dsymutil zig-out/bin/poker-eval || true
+      - uniprof record --platform native -o "{{.PROFILE_JSON}}" -- zig-out/bin/poker-eval bench --showdown
