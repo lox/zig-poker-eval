@@ -81,6 +81,12 @@ pub const HandIndex = struct {
 // Pre-computed equity for all 169 starting hands vs random opponent
 // Each entry is (win_rate_x1000, tie_rate_x1000) - stored as u16 to save space
 // For example, (850, 23) means 85.0% win, 2.3% tie, 12.7% loss
+//
+// To generate real data:
+//   zig run src/tools/generate_heads_up_tables.zig
+// Then replace the placeholder data below with:
+//   const heads_up_tables = @import("heads_up_tables.zig");
+//   pub const PREFLOP_VS_RANDOM = heads_up_tables.PREFLOP_VS_RANDOM;
 pub const PREFLOP_VS_RANDOM: [169][2]u16 = computePreflopEquities();
 
 // Compute equities at compile time
