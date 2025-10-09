@@ -9,7 +9,7 @@ on:
 jobs:
   test:
     name: Test
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'namespace-profile-linux-amd64' || 'namespace-profile-mac-arm64' }}
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
@@ -17,19 +17,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: cashapp/activate-hermit@v1
-
-      - name: Cache Zig
-        uses: actions/cache@v3
+      - uses: namespacelabs/nscloud-cache-action@v1
         with:
           path: |
             ~/.cache/zig
             ~/AppData/Local/zig
             zig-cache
             .zig-cache
-          key: ${{ runner.os }}-zig-${{ hashFiles('build.zig', 'build.zig.zon') }}
-          restore-keys: |
-            ${{ runner.os }}-zig-
+            ${{ runner.os == 'macOS' && '~/Library/Caches/hermit/pkg' || '~/.cache/hermit/pkg' }}
+
+      - uses: cashapp/activate-hermit@v1
+        with:
+          cache: false
 
       - name: Format check
         run: zig fmt --check .
