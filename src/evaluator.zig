@@ -40,6 +40,68 @@ pub fn getHandCategory(rank: HandRank) HandCategory {
 
 const RANK_MASK = 0x1FFF; // 13 bits for ranks
 
+// === Flush Pattern Lookup Table ===
+
+/// Compile-time lookup table for extracting top 5 ranks from flush suits
+/// Maps any u16 suit mask to its top 5 ranks (for 5-7 card flushes)
+/// Table size: 65,536 entries * 2 bytes = 128KB
+const flush_top5_table: [65536]u16 = blk: {
+    @setEvalBranchQuota(2000000); // Need higher quota for 65K table generation
+    var table: [65536]u16 = [_]u16{0} ** 65536;
+
+    // Compute top 5 pattern for every possible suit mask
+    for (0..65536) |mask_int| {
+        const suit_mask: u16 = @intCast(mask_int);
+        const bit_count = @popCount(suit_mask);
+
+        // Only valid for 5-7 card flushes
+        if (bit_count < 5 or bit_count > 7) {
+            table[mask_int] = 0; // Invalid input, never called
+            continue;
+        }
+
+        // Fast path: exactly 5 bits set
+        if (bit_count == 5) {
+            table[mask_int] = suit_mask;
+            continue;
+        }
+
+        // Check for straights
+        const straights = [_]u16{
+            0x1F00, 0x0F80, 0x07C0, 0x03E0, 0x01F0,
+            0x00F8, 0x007C, 0x003E, 0x001F, 0x100F, // wheel (A-2-3-4-5)
+        };
+
+        var is_straight = false;
+        for (straights) |pattern| {
+            if ((suit_mask & pattern) == pattern) {
+                table[mask_int] = pattern;
+                is_straight = true;
+                break;
+            }
+        }
+
+        if (is_straight) continue;
+
+        // Take highest 5 ranks
+        var result: u16 = 0;
+        var count: u8 = 0;
+        var rank: i8 = 12;
+
+        while (count < 5 and rank >= 0) : (rank -= 1) {
+            const bit = @as(u16, 1) << @intCast(rank);
+            if ((suit_mask & bit) != 0) {
+                result |= bit;
+                count += 1;
+            }
+        }
+
+        table[mask_int] = result;
+    }
+
+    break :blk table;
+};
+
 /// Cached board analysis for reusing evaluation work across multiple hole cards
 pub const BoardContext = struct {
     board: card.Hand,
@@ -387,33 +449,10 @@ pub fn getFlushPattern(hand: u64) u16 {
     return 0; // Should never happen for flush hands
 }
 
-fn getTop5Ranks(suit_mask: u16) u16 {
-    if (@popCount(suit_mask) == 5) return suit_mask;
-
-    // Check for straights first
-    const straights = [_]u16{
-        0x1F00, 0x0F80, 0x07C0, 0x03E0, 0x01F0,
-        0x00F8, 0x007C, 0x003E, 0x001F, 0x100F,
-    };
-
-    for (straights) |pattern| {
-        if ((suit_mask & pattern) == pattern) return pattern;
-    }
-
-    // Take highest 5 ranks
-    var result: u16 = 0;
-    var count: u8 = 0;
-    var rank: i8 = 12;
-
-    while (count < 5 and rank >= 0) : (rank -= 1) {
-        const bit = @as(u16, 1) << @intCast(rank);
-        if ((suit_mask & bit) != 0) {
-            result |= bit;
-            count += 1;
-        }
-    }
-
-    return result;
+/// Extract top 5 ranks from a flush suit using lookup table
+/// Eliminates branching and iteration - single memory load
+inline fn getTop5Ranks(suit_mask: u16) u16 {
+    return flush_top5_table[suit_mask];
 }
 
 // === Public API ===
