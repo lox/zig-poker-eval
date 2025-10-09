@@ -1,12 +1,11 @@
 const std = @import("std");
 const card = @import("card");
 const hand = @import("hand");
-// Note: notation parsing is implemented inline to avoid circular dependencies
-// TODO: Consider refactoring to share notation parsing logic
 const equity = @import("equity");
 
 /// Range representation and poker notation parsing
 /// Handles range strings like "AA,KK,AKs,AKo" and converts them to hand combinations
+/// Notation parsing is implemented inline for efficient direct insertion into range HashMap
 
 // Re-export core types for convenience
 pub const Hand = card.Hand;
@@ -96,7 +95,7 @@ pub const Range = struct {
             if (rank1 == rank2) return error.CannotBeSuited;
 
             switch (modifier) {
-                's' => {
+                's', 'S' => {
                     // Suited - add 4 combinations
                     const combinations = try hand.generateSuitedCombinations(
                         @enumFromInt(rank1_idx),
@@ -109,7 +108,7 @@ pub const Range = struct {
                         try self.addHand(combo, probability);
                     }
                 },
-                'o' => {
+                'o', 'O' => {
                     // Offsuit - add 12 combinations
                     const combinations = try hand.generateOffsuitCombinations(
                         @enumFromInt(rank1_idx),
@@ -167,7 +166,7 @@ pub const Range = struct {
     }
 };
 
-/// Parse single rank character to numeric value
+/// Parse single rank character to numeric value (case-insensitive)
 fn parseRank(char: u8) ?u8 {
     return switch (char) {
         '2' => 2,
@@ -178,11 +177,11 @@ fn parseRank(char: u8) ?u8 {
         '7' => 7,
         '8' => 8,
         '9' => 9,
-        'T' => 10,
-        'J' => 11,
-        'Q' => 12,
-        'K' => 13,
-        'A' => 14,
+        'T', 't' => 10,
+        'J', 'j' => 11,
+        'Q', 'q' => 12,
+        'K', 'k' => 13,
+        'A', 'a' => 14,
         else => null,
     };
 }
@@ -513,6 +512,34 @@ test "range delegation to hand parsing" {
     try testing.expect(card.countCards(hole_cards) == 2);
     try testing.expect(card.hasCard(hole_cards, .hearts, .ace));
     try testing.expect(card.hasCard(hole_cards, .spades, .ace));
+}
+
+test "case-insensitive notation parsing" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    // Test lowercase ranks
+    var range1 = try parseRange("aa,kk,qq", allocator);
+    defer range1.deinit();
+    try testing.expect(range1.handCount() == 18); // 6 + 6 + 6
+
+    // Test mixed case
+    var range2 = try parseRange("Aa,kK,AkS,aKo", allocator);
+    defer range2.deinit();
+    try testing.expect(range2.handCount() == 28); // 6 + 6 + 4 + 12
+
+    // Test specific case patterns
+    var range3 = Range.init(allocator);
+    defer range3.deinit();
+    try range3.addHandNotation("jj", 1.0);
+    try testing.expect(range3.handCount() == 6);
+
+    try range3.addHandNotation("AkS", 1.0);
+    try testing.expect(range3.handCount() == 10); // 6 + 4
+
+    try range3.addHandNotation("qJo", 1.0);
+    try testing.expect(range3.handCount() == 22); // 6 + 4 + 12
 }
 
 // Ensure all tests in this module are discovered
