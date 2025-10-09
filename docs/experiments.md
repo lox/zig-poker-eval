@@ -586,6 +586,104 @@ inline fn getTop5Ranks(suit_mask: u16) u16 {
 - Remaining headroom: 0.77ns (23%)
 - Further optimization limited by Amdahl's Law (~70% memory-bound work)
 
+## Experiment 14: Reuse Suit Extraction
+
+**Performance Impact**: -1.8% slower (3.27→3.33 ns/hand)
+**Complexity**: Medium
+**Status**: ❌ FAILED
+
+**Approach**: Eliminate redundant suit extraction by having `detectFlushSimd` return extracted suit data alongside the flush mask, allowing flush pattern evaluation to reuse this data instead of re-extracting suits in `getFlushPattern`.
+
+**Motivation**: Analysis identified that suits are extracted twice per batch:
+1. Once in `detectFlushSimd` for flush detection (~370-391 in evaluator.zig)
+2. Again in `getFlushPattern` for each flush hand (~440-467)
+
+For batch-32 with ~20% flush rate (~6 flush hands), this meant 24 redundant suit extractions (4 shifts + 4 masks each).
+
+**Implementation**:
+
+```zig
+// New struct to return both flush mask and suit data
+fn FlushDetectionResult(comptime batchSize: usize) type {
+    return struct {
+        flush_mask: [batchSize]bool,
+        suits: [batchSize][4]u16, // Suits for reuse in flush evaluation
+    };
+}
+
+// Modified detectFlushSimd to return suit data
+fn detectFlushSimdWithSuits(comptime batchSize: usize, hands: *const [batchSize]u64) FlushDetectionResult(batchSize) {
+    var result = FlushDetectionResult(batchSize){
+        .flush_mask = [_]bool{false} ** batchSize,
+        .suits = [_][4]u16{[_]u16{0} ** 4} ** batchSize,
+    };
+
+    // ... existing suit extraction logic ...
+
+    // Store both results and suit data
+    inline for (0..batchSize) |i| {
+        result.flush_mask[i] = has_flush[i];
+        result.suits[i] = [4]u16{ clubs[i], diamonds[i], hearts[i], spades[i] };
+    }
+
+    return result;
+}
+
+// New helper to get flush pattern from pre-extracted suits
+inline fn getFlushPatternFromSuits(suits: [4]u16) u16 {
+    for (suits) |suit_mask| {
+        if (@popCount(suit_mask) >= 5) {
+            return getTop5Ranks(suit_mask);
+        }
+    }
+    return 0;
+}
+
+// Modified evaluateBatch to use pre-extracted suits
+pub fn evaluateBatch(comptime batchSize: usize, hands: @Vector(batchSize, u64)) @Vector(batchSize, u16) {
+    const flush_detection = detectFlushSimdWithSuits(batchSize, &hands_array);
+
+    inline for (0..batchSize) |i| {
+        if (flush_detection.flush_mask[i]) {
+            const pattern = getFlushPatternFromSuits(flush_detection.suits[i]);
+            results[i] = tables.flushLookup(pattern);
+        } else {
+            results[i] = chdLookupScalar(rpc_results[i]);
+        }
+    }
+}
+```
+
+**Benchmark Results**: 20M+ iterations, ReleaseFast, Apple M1
+
+- **Baseline (Experiment 13)**: 3.27 ns/hand (306M hands/sec)
+- **With suit reuse**: 3.33 ns/hand (300M hands/sec)
+- **Performance**: 1.8% slower (0.06 ns/hand regression)
+- **Consistency**: 3 runs: 3.33, 3.33, 3.34 ns/hand
+- **Tests**: All 78 tests passed
+
+**Why it failed**: The overhead of allocating and returning a larger struct outweighed the benefit of eliminating redundant suit extraction. Root causes:
+
+1. **Stack allocation overhead**: The `FlushDetectionResult` struct requires 256 bytes for batch-32 (32 hands × 4 suits × 2 bytes). This stack allocation and initialization cost exceeded the savings from eliminating suit extraction.
+
+2. **Wasted work**: Suit data is stored for all 32 hands but only used for ~6 flush hands (~20% of batch). The remaining ~26 non-flush hands pay the storage cost without benefit.
+
+3. **Register pressure**: Returning a larger struct likely caused register spilling or less efficient register allocation in the hot path.
+
+4. **Memory bandwidth**: Storing 256 bytes per batch to save 24 suit extractions (96 bytes of shifts/masks) increased memory traffic rather than reducing it.
+
+**Key insight**: **Premature data reuse can hurt performance**. While eliminating redundant computation sounds beneficial, the overhead of preserving and passing data structures can exceed the savings. The original design's "extract on demand" approach was actually more efficient because:
+- Suit extraction for 6 flush hands (24 operations) is cheaper than allocating/storing/passing 256 bytes
+- Compiler can optimize the redundant extraction better than managing the larger struct
+- Cache pressure from larger stack frames outweighs computation savings
+
+**Theoretical vs. actual**: The analysis correctly identified redundant work (suits extracted twice), but failed to account for:
+- Cost of struct allocation and passing
+- Efficiency of modern compilers at optimizing small, repeated operations
+- Cache/memory hierarchy effects of larger data structures
+
+**Conclusion**: At 3.27 ns/hand, we've reached a **practical performance ceiling**. The evaluator is 77% of theoretical maximum (2.5 ns/hand), with remaining time dominated by unavoidable CHD memory lookups. Further micro-optimizations face diminishing returns where implementation overhead exceeds theoretical savings.
+
 ---
 
 ## Test Environment

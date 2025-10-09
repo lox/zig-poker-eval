@@ -363,6 +363,13 @@ inline fn chdLookupScalar(rpc: u32) u16 {
 
 // === SIMD Flush Detection ===
 
+// NOTE: Experiment 14 attempted to return suit data alongside flush mask to eliminate
+// redundant suit extraction in getFlushPattern(). This failed (1.8% slower) because:
+// - Stack allocation overhead (256 bytes for batch-32) exceeded computational savings
+// - Storing suits for all hands when only ~20% are flushes is wasteful
+// - "Extract on demand" is more efficient than "extract once, cache everywhere"
+// See docs/experiments.md Experiment 14 for detailed analysis.
+
 /// Detect flush hands in a batch using SIMD
 fn detectFlushSimd(comptime batchSize: usize, hands: *const [batchSize]u64) [batchSize]bool {
     var result: [batchSize]bool = [_]bool{false} ** batchSize;
@@ -434,6 +441,10 @@ pub inline fn isFlushHand(hand: u64) bool {
 }
 
 pub fn getFlushPattern(hand: u64) u16 {
+    // NOTE: Yes, this re-extracts suits that were already extracted in detectFlushSimd.
+    // Experiment 14 showed that caching suit data to avoid this redundancy actually
+    // hurts performance (-1.8%) due to struct allocation overhead exceeding the savings.
+    // The compiler optimizes this "redundant" extraction better than manual caching.
     const suits = [4]u16{
         @as(u16, @truncate(hand >> 0)) & RANK_MASK, // clubs
         @as(u16, @truncate(hand >> 13)) & RANK_MASK, // diamonds
