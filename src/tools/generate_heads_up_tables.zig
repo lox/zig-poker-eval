@@ -1,11 +1,11 @@
 // Tool to generate heads-up equity tables
-// Calculates equity for all 169 starting hands vs random opponent
+// Calculates EXACT equity for all 169 starting hands vs random opponent
 // Output: src/heads_up_tables.zig with hardcoded values
 //
-// Uses Monte Carlo sampling (1M simulations per hand) for practical runtime:
-// - Full enumeration: ~354 billion evaluations = ~10 hours
-// - Monte Carlo 1M: 169 million evaluations = ~17 seconds
-// - Accuracy: < 0.1% error vs full enumeration
+// Uses full enumeration for perfect accuracy:
+// - Total: ~354 billion hand evaluations
+// - Runtime: ~10 hours at 10M evals/sec
+// - Accuracy: 100% exact (no sampling error)
 
 const std = @import("std");
 const poker = @import("poker");
@@ -41,22 +41,52 @@ pub fn main() !void {
     });
 
     // Calculate equities
-    print("Calculating equities for 169 starting hands...\n", .{});
+    print("Calculating exact equities for 169 starting hands...\n", .{});
+    print("This will take approximately 10 hours. Progress will be shown.\n\n", .{});
+
     var equities: [169][3]u32 = undefined;
 
     const start_time = std.time.milliTimestamp();
+    var total_evaluations: u64 = 0;
 
     for (hands, 0..) |hand, i| {
-        if (i % 10 == 0) {
-            print("Progress: {}/169 hands...\n", .{i});
+        const hand_start = std.time.milliTimestamp();
+
+        print("Hand {}/{}: ", .{ i + 1, 169 });
+        // Print hand name if notable
+        const name = getHandComment(@intCast(i));
+        if (name.len > 0) {
+            print("{s} ", .{name});
         }
+        print("calculating...\n", .{});
 
         const equity = try calculateEquityVsRandom(hand, allocator);
         equities[i] = equity;
+
+        const hand_elapsed = std.time.milliTimestamp() - hand_start;
+        const hand_total = equity.wins + equity.losses + equity.ties;
+        total_evaluations += hand_total;
+
+        print("  Completed in {d:.1}s - Win: {d:.2}% Tie: {d:.2}%\n", .{
+            @as(f64, @floatFromInt(hand_elapsed)) / 1000.0,
+            @as(f64, @floatFromInt(equity.wins)) * 100.0 / @as(f64, @floatFromInt(hand_total)),
+            @as(f64, @floatFromInt(equity.ties)) * 100.0 / @as(f64, @floatFromInt(hand_total)),
+        });
+
+        // Estimate remaining time
+        if (i > 0) {
+            const elapsed_total = std.time.milliTimestamp() - start_time;
+            const avg_per_hand = @as(f64, @floatFromInt(elapsed_total)) / @as(f64, @floatFromInt(i + 1));
+            const remaining_hands = 169 - (i + 1);
+            const estimated_remaining = avg_per_hand * @as(f64, @floatFromInt(remaining_hands)) / 1000.0 / 60.0;
+
+            print("  Progress: {}/169 hands, ~{d:.1} minutes remaining\n\n", .{ i + 1, estimated_remaining });
+        }
     }
 
     const elapsed_ms = std.time.milliTimestamp() - start_time;
-    print("\nCompleted in {} ms ({d:.1} seconds)\n", .{ elapsed_ms, @as(f64, @floatFromInt(elapsed_ms)) / 1000.0 });
+    const hours = @as(f64, @floatFromInt(elapsed_ms)) / 1000.0 / 3600.0;
+    print("\nCompleted {} billion evaluations in {d:.2} hours\n", .{ total_evaluations / 1_000_000_000, hours });
 
     // Convert to win percentages (x1000 for precision)
     var equity_table: [169][2]u16 = undefined;
@@ -120,58 +150,86 @@ fn generateStartingHands() [169]StartingHand {
 }
 
 fn calculateEquityVsRandom(hand: StartingHand, allocator: std.mem.Allocator) !struct { wins: u32, losses: u32, ties: u32 } {
-    // Use Monte Carlo sampling for practical generation time
-    // 1 million simulations per hand gives < 0.1% error
-    const SIMULATIONS = 1_000_000;
-
-    var prng = std.Random.DefaultPrng.init(@intCast(std.time.milliTimestamp() + hand.index));
-    const random = prng.random();
-
-    var wins: u32 = 0;
-    var losses: u32 = 0;
-    var ties: u32 = 0;
+    var wins: u64 = 0;
+    var losses: u64 = 0;
+    var ties: u64 = 0;
 
     // Create our hero hand
     const hero_hand = createHand(hand);
 
-    // Build deck without hero cards
-    var deck = std.ArrayList(u8).init(allocator);
-    defer deck.deinit();
-
+    // Build available cards list (all cards except hero's)
+    var available = std.ArrayList(u8).init(allocator);
+    defer available.deinit();
     for (0..52) |card| {
         if ((hero_hand & (@as(u64, 1) << @intCast(card))) == 0) {
-            try deck.append(@intCast(card));
+            try available.append(@intCast(card));
         }
     }
 
-    for (0..SIMULATIONS) |_| {
-        // Shuffle remaining cards for this simulation
-        random.shuffle(u8, deck.items);
+    const n_available = available.items.len; // Should be 50
+    var evaluations: u64 = 0;
 
-        // Deal villain cards (first 2) and board (next 5)
-        const villain_hand = (@as(u64, 1) << @intCast(deck.items[0])) |
-            (@as(u64, 1) << @intCast(deck.items[1]));
+    // Enumerate all opponent hands: C(50,2) = 1,225
+    for (0..n_available - 1) |v1| {
+        const villain_card1 = @as(u64, 1) << @intCast(available.items[v1]);
 
-        const board = (@as(u64, 1) << @intCast(deck.items[2])) |
-            (@as(u64, 1) << @intCast(deck.items[3])) |
-            (@as(u64, 1) << @intCast(deck.items[4])) |
-            (@as(u64, 1) << @intCast(deck.items[5])) |
-            (@as(u64, 1) << @intCast(deck.items[6]));
+        for (v1 + 1..n_available) |v2| {
+            const villain_card2 = @as(u64, 1) << @intCast(available.items[v2]);
+            const villain_hand = villain_card1 | villain_card2;
 
-        // Evaluate both hands
-        const hero_rank = poker.evaluateHand(hero_hand | board);
-        const villain_rank = poker.evaluateHand(villain_hand | board);
+            // For each villain hand, enumerate all boards: C(48,5) = 1,712,304
+            // We need to skip the 2 villain cards from the 50 available
+            for (0..n_available - 4) |b1| {
+                if (b1 == v1 or b1 == v2) continue;
+                const board1 = @as(u64, 1) << @intCast(available.items[b1]);
 
-        if (hero_rank < villain_rank) {
-            wins += 1;
-        } else if (hero_rank > villain_rank) {
-            losses += 1;
-        } else {
-            ties += 1;
+                for (b1 + 1..n_available - 3) |b2| {
+                    if (b2 == v1 or b2 == v2) continue;
+                    const board2 = @as(u64, 1) << @intCast(available.items[b2]);
+
+                    for (b2 + 1..n_available - 2) |b3| {
+                        if (b3 == v1 or b3 == v2) continue;
+                        const board3 = @as(u64, 1) << @intCast(available.items[b3]);
+
+                        for (b3 + 1..n_available - 1) |b4| {
+                            if (b4 == v1 or b4 == v2) continue;
+                            const board4 = @as(u64, 1) << @intCast(available.items[b4]);
+
+                            for (b4 + 1..n_available) |b5| {
+                                if (b5 == v1 or b5 == v2) continue;
+                                const board5 = @as(u64, 1) << @intCast(available.items[b5]);
+
+                                const board = board1 | board2 | board3 | board4 | board5;
+
+                                // Evaluate both hands
+                                const hero_rank = poker.evaluateHand(hero_hand | board);
+                                const villain_rank = poker.evaluateHand(villain_hand | board);
+
+                                if (hero_rank < villain_rank) {
+                                    wins += 1;
+                                } else if (hero_rank > villain_rank) {
+                                    losses += 1;
+                                } else {
+                                    ties += 1;
+                                }
+
+                                evaluations += 1;
+
+                                // Progress tracking every 100M evaluations
+                                if (evaluations % 100_000_000 == 0) {
+                                    const total = wins + losses + ties;
+                                    print("  Hand {}: {}M evals, win={d:.1}%\n", .{ hand.index, evaluations / 1_000_000, @as(f64, @floatFromInt(wins)) * 100.0 / @as(f64, @floatFromInt(total)) });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
-    return .{ .wins = wins, .losses = losses, .ties = ties };
+    // Return as u32 for compatibility
+    return .{ .wins = @intCast(wins), .losses = @intCast(losses), .ties = @intCast(ties) };
 }
 
 fn createHand(hand: StartingHand) u64 {
@@ -209,9 +267,9 @@ fn getAvailableCard(index: usize, used_cards: u64) ?u64 {
 }
 
 fn estimateTotalEvaluations() u64 {
-    // Using Monte Carlo: 169 hands × 1 million simulations
-    const SIMULATIONS_PER_HAND = 1_000_000;
-    return 169 * SIMULATIONS_PER_HAND;
+    // Full enumeration: 169 hands × C(50,2) opponents × C(48,5) boards
+    // = 169 × 1,225 × 1,712,304 = 354,643,972,800
+    return 169 * 1225 * 1712304;
 }
 
 fn writeTableFile(equity_table: [169][2]u16) !void {
