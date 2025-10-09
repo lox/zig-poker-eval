@@ -190,7 +190,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(gen_heads_up_tables);
 
     const run_gen_heads_up = b.addRunArtifact(gen_heads_up_tables);
-    const gen_heads_up_step = b.step("gen-heads-up", "Generate heads-up equity tables (10+ hours)");
+    const gen_heads_up_step = b.step("gen-heads-up", "Generate heads-up equity tables (~15 min)");
     gen_heads_up_step.dependOn(&run_gen_heads_up.step);
 
     // Test step - run tests from all modules
