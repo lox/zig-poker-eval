@@ -431,15 +431,38 @@ pub fn multiway(hands: []const Hand, board: []const Hand, simulations: u32, rng:
         winners.clearRetainingCapacity();
         var best_rank: u16 = 65535; // Worst possible rank
 
-        // Find best rank
-        for (final_hands, 0..) |hand, i| {
-            const rank = evaluator.evaluateHand(hand);
-            if (rank < best_rank) {
-                best_rank = rank;
-                winners.clearRetainingCapacity();
-                try winners.append(allocator, i);
-            } else if (rank == best_rank) {
-                try winners.append(allocator, i);
+        // SIMD batch evaluation for common player counts (2-8)
+        // Falls back to scalar for edge cases (9+ players)
+        if (num_players <= 8) {
+            // Pad to batch size 8 for consistent SIMD evaluation
+            var hands_batch: [8]u64 = [_]u64{0} ** 8;
+            @memcpy(hands_batch[0..num_players], final_hands);
+
+            const hands_vec: @Vector(8, u64) = hands_batch;
+            const ranks_vec = evaluator.evaluateBatch(8, hands_vec);
+            const ranks: [8]u16 = ranks_vec;
+
+            // Find best rank and winners (only process actual players)
+            for (ranks[0..num_players], 0..) |rank, i| {
+                if (rank < best_rank) {
+                    best_rank = rank;
+                    winners.clearRetainingCapacity();
+                    try winners.append(allocator, i);
+                } else if (rank == best_rank) {
+                    try winners.append(allocator, i);
+                }
+            }
+        } else {
+            // Scalar fallback for 9+ players
+            for (final_hands, 0..) |hand, i| {
+                const rank = evaluator.evaluateHand(hand);
+                if (rank < best_rank) {
+                    best_rank = rank;
+                    winners.clearRetainingCapacity();
+                    try winners.append(allocator, i);
+                } else if (rank == best_rank) {
+                    try winners.append(allocator, i);
+                }
             }
         }
 
