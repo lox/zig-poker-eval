@@ -164,6 +164,151 @@ pub const Range = struct {
     pub fn iterator(self: *const Range) Iterator {
         return Iterator{ .inner = self.hands.iterator() };
     }
+
+    /// Sample a random hand from this range using weighted probability
+    pub fn sample(self: *const Range, rng: std.Random) [2]Hand {
+        // Calculate total weight
+        var total_weight: f64 = 0;
+        var iter = self.iterator();
+        while (iter.next()) |entry| {
+            total_weight += entry.probability;
+        }
+
+        // Sample based on weight
+        const target = rng.float(f64) * total_weight;
+        var cumulative: f64 = 0;
+
+        var sample_iter = self.iterator();
+        while (sample_iter.next()) |entry| {
+            cumulative += entry.probability;
+            if (cumulative >= target) {
+                return entry.hand;
+            }
+        }
+
+        // Fallback - return first hand (should not happen with proper weights)
+        var fallback_iter = self.iterator();
+        if (fallback_iter.next()) |entry| {
+            return entry.hand;
+        }
+
+        // This should never happen with non-empty range
+        unreachable;
+    }
+
+    /// Calculate exact range vs range equity
+    pub fn equityExact(self: *const Range, opponent: *const Range, board: []const Hand, allocator: std.mem.Allocator) !RangeEquityResult {
+        // Handle empty ranges
+        if (self.handCount() == 0 or opponent.handCount() == 0) {
+            return RangeEquityResult{
+                .hero_equity = 0.0,
+                .villain_equity = 0.0,
+                .total_simulations = 0,
+            };
+        }
+
+        var total_hero_equity: f64 = 0.0;
+        var total_weight: f64 = 0.0;
+        var total_combinations: u32 = 0;
+
+        // Iterate through all combinations of hands from both ranges
+        var hero_iter = self.iterator();
+        while (hero_iter.next()) |hero_entry| {
+            var villain_iter = opponent.iterator();
+            while (villain_iter.next()) |villain_entry| {
+                // Check for card conflicts
+                if (hand.hasCardConflict(hero_entry.hand, villain_entry.hand, board)) {
+                    continue;
+                }
+
+                // Calculate weight for this combination
+                const weight = hero_entry.probability * villain_entry.probability;
+                total_weight += weight;
+
+                // Calculate equity for this matchup
+                const hero_combined = hero_entry.hand[0] | hero_entry.hand[1];
+                const villain_combined = villain_entry.hand[0] | villain_entry.hand[1];
+                const result = try equity.exact(hero_combined, villain_combined, board, allocator);
+
+                // Accumulate weighted equity
+                total_hero_equity += result.equity() * weight;
+                total_combinations += 1;
+            }
+        }
+
+        const hero_equity = if (total_weight > 0) total_hero_equity / total_weight else 0.0;
+
+        return RangeEquityResult{
+            .hero_equity = hero_equity,
+            .villain_equity = 1.0 - hero_equity,
+            .total_simulations = total_combinations,
+        };
+    }
+
+    /// Calculate range vs range equity using Monte Carlo simulation
+    pub fn equityMonteCarlo(self: *const Range, opponent: *const Range, board: []const Hand, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) !RangeEquityResult {
+        // Handle empty ranges
+        if (self.handCount() == 0 or opponent.handCount() == 0) {
+            return RangeEquityResult{
+                .hero_equity = 0.0,
+                .villain_equity = 0.0,
+                .total_simulations = 0,
+            };
+        }
+
+        var hero_wins: u32 = 0;
+        var ties: u32 = 0;
+        var valid_simulations: u32 = 0;
+
+        var i: u32 = 0;
+        while (i < simulations) : (i += 1) {
+            // Sample hands from ranges
+            const hero_hand = self.sample(rng);
+            const villain_hand = opponent.sample(rng);
+
+            // Skip if hands conflict
+            if (hand.hasCardConflict(hero_hand, villain_hand, board)) {
+                continue;
+            }
+
+            // Run Monte Carlo simulation for this matchup
+            const hero_combined = hero_hand[0] | hero_hand[1];
+            const villain_combined = villain_hand[0] | villain_hand[1];
+            const result = try equity.monteCarlo(
+                hero_combined,
+                villain_combined,
+                board,
+                1, // Single simulation since we're already sampling
+                rng,
+                allocator,
+            );
+
+            valid_simulations += 1;
+
+            if (result.wins > 0) {
+                hero_wins += 1;
+            } else if (result.ties > 0) {
+                ties += 1;
+            }
+        }
+
+        // Handle case where all simulations were skipped due to conflicts
+        if (valid_simulations == 0) {
+            return RangeEquityResult{
+                .hero_equity = 0.0,
+                .villain_equity = 0.0,
+                .total_simulations = 0,
+            };
+        }
+
+        const hero_equity = (@as(f64, @floatFromInt(hero_wins)) + @as(f64, @floatFromInt(ties)) * 0.5) / @as(f64, @floatFromInt(valid_simulations));
+
+        return RangeEquityResult{
+            .hero_equity = hero_equity,
+            .villain_equity = 1.0 - hero_equity,
+            .total_simulations = valid_simulations,
+        };
+    }
 };
 
 /// Parse single rank character to numeric value (case-insensitive)
@@ -215,148 +360,16 @@ pub const RangeEquityResult = struct {
     }
 };
 
-/// Check if hands or board have conflicting cards
-fn hasCardConflict(hero_hole: [2]Hand, villain_hole: [2]Hand, board: []const Hand) bool {
-    // Combine cards into hands using bitwise OR
-    const hero = hero_hole[0] | hero_hole[1];
-    const villain = villain_hole[0] | villain_hole[1];
-    var board_hand: Hand = 0;
-    for (board) |board_card| {
-        board_hand |= board_card;
-    }
-
-    // Check for any overlapping bits
-    return (hero & villain) != 0 or
-        (hero & board_hand) != 0 or
-        (villain & board_hand) != 0;
-}
-
 /// Calculate exact range vs range equity
-/// Note: This function will need to import equity module once it's created
+/// Deprecated: Use Range.equityExact() instead
 pub fn calculateRangeEquityExact(hero_range: *const Range, villain_range: *const Range, board: []const Hand, allocator: std.mem.Allocator) !RangeEquityResult {
-    var total_hero_equity: f64 = 0.0;
-    var total_weight: f64 = 0.0;
-    var total_combinations: u32 = 0;
-
-    // Iterate through all combinations of hands from both ranges
-    var hero_iter = hero_range.iterator();
-    while (hero_iter.next()) |hero_entry| {
-        var villain_iter = villain_range.iterator();
-        while (villain_iter.next()) |villain_entry| {
-            // Check for card conflicts
-            if (hasCardConflict(hero_entry.hand, villain_entry.hand, board)) {
-                continue;
-            }
-
-            // Calculate exact equity for this hand combination
-            const hero_combined = hero_entry.hand[0] | hero_entry.hand[1];
-            const villain_combined = villain_entry.hand[0] | villain_entry.hand[1];
-            const equity_result = try equity.exact(
-                hero_combined,
-                villain_combined,
-                board,
-                allocator,
-            );
-            const hero_win_rate = equity_result.equity();
-
-            // Weight by probabilities of both hands
-            const weight = hero_entry.probability * villain_entry.probability;
-            total_hero_equity += hero_win_rate * weight;
-            total_weight += weight;
-            total_combinations += 1;
-        }
-    }
-
-    // Normalize by total weight
-    const hero_equity = if (total_weight > 0) total_hero_equity / total_weight else 0.0;
-
-    return RangeEquityResult{
-        .hero_equity = hero_equity,
-        .villain_equity = 1.0 - hero_equity,
-        .total_simulations = total_combinations,
-    };
-}
-
-/// Sample a hand from a range with weighted probability
-fn sampleHandFromRange(range: *const Range, total_weight: f64, rng: std.Random) [2]Hand {
-    const target = rng.float(f64) * total_weight;
-    var cumulative: f64 = 0;
-
-    var iter = range.iterator();
-    while (iter.next()) |entry| {
-        cumulative += entry.probability;
-        if (cumulative >= target) {
-            return entry.hand;
-        }
-    }
-
-    // Fallback - return first hand found (should not happen with proper weights)
-    var fallback_iter = range.iterator();
-    if (fallback_iter.next()) |entry| {
-        return entry.hand;
-    }
-    // This should never happen
-    unreachable;
+    return hero_range.equityExact(villain_range, board, allocator);
 }
 
 /// Calculate range vs range equity using Monte Carlo simulation
-/// Note: This function will need to import equity module once it's created
+/// Deprecated: Use Range.equityMonteCarlo() instead
 pub fn calculateRangeEquityMonteCarlo(hero_range: *const Range, villain_range: *const Range, board: []const Hand, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) !RangeEquityResult {
-    // Sample hands from ranges and run Monte Carlo simulations
-    var hero_wins: u32 = 0;
-    var ties: u32 = 0;
-
-    // Pre-calculate total weights for weighted sampling
-    var hero_total_weight: f64 = 0;
-    var hero_iter = hero_range.iterator();
-    while (hero_iter.next()) |entry| {
-        hero_total_weight += entry.probability;
-    }
-
-    var villain_total_weight: f64 = 0;
-    var villain_iter = villain_range.iterator();
-    while (villain_iter.next()) |entry| {
-        villain_total_weight += entry.probability;
-    }
-
-    var i: u32 = 0;
-    while (i < simulations) : (i += 1) {
-        // Sample hero hand from range
-        const hero_hand = sampleHandFromRange(hero_range, hero_total_weight, rng);
-        const villain_hand = sampleHandFromRange(villain_range, villain_total_weight, rng);
-
-        // Skip if hands conflict
-        if (hasCardConflict(hero_hand, villain_hand, board)) {
-            continue;
-        }
-
-        // Run Monte Carlo simulation for this matchup
-        const hero_combined = hero_hand[0] | hero_hand[1];
-        const villain_combined = villain_hand[0] | villain_hand[1];
-        const result = try equity.monteCarlo(
-            hero_combined,
-            villain_combined,
-            board,
-            1, // Single simulation since we're already sampling
-            rng,
-            allocator,
-        );
-
-        if (result.wins > 0) {
-            hero_wins += 1;
-        } else if (result.ties > 0) {
-            ties += 1;
-        }
-    }
-
-    const total = hero_wins + ties + (simulations - hero_wins - ties);
-    const hero_equity = (@as(f64, @floatFromInt(hero_wins)) + @as(f64, @floatFromInt(ties)) * 0.5) / @as(f64, @floatFromInt(total));
-
-    return RangeEquityResult{
-        .hero_equity = hero_equity,
-        .villain_equity = 1.0 - hero_equity,
-        .total_simulations = simulations,
-    };
+    return hero_range.equityMonteCarlo(villain_range, board, simulations, rng, allocator);
 }
 
 /// Common preflop ranges for quick setup
@@ -540,6 +553,288 @@ test "case-insensitive notation parsing" {
 
     try range3.addHandNotation("qJo", 1.0);
     try testing.expect(range3.handCount() == 22); // 6 + 4 + 12
+}
+
+test "Range.equityExact AA vs KK on turn" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var hero_range = Range.init(allocator);
+    defer hero_range.deinit();
+    try hero_range.addHandNotation("AA", 1.0);
+
+    var villain_range = Range.init(allocator);
+    defer villain_range.deinit();
+    try villain_range.addHandNotation("KK", 1.0);
+
+    // Turn board - only 44 rivers per matchup = 1,584 total evaluations
+    const board = [_]Hand{
+        card.makeCard(.spades, .seven),
+        card.makeCard(.hearts, .eight),
+        card.makeCard(.diamonds, .nine),
+        card.makeCard(.clubs, .two),
+    };
+
+    const result = try hero_range.equityExact(&villain_range, &board, allocator);
+
+    // AA should beat KK with this board
+    // 6 AA combos * 6 KK combos = 36 matchups (some may conflict with board)
+    try testing.expect(result.hero_equity > 0.90);
+}
+
+test "Range.equityMonteCarlo AA vs 22" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var prng = std.Random.DefaultPrng.init(42);
+    const rng = prng.random();
+
+    var hero_range = Range.init(allocator);
+    defer hero_range.deinit();
+    try hero_range.addHandNotation("AA", 1.0);
+
+    var villain_range = Range.init(allocator);
+    defer villain_range.deinit();
+    try villain_range.addHandNotation("22", 1.0);
+
+    const result = try hero_range.equityMonteCarlo(&villain_range, &.{}, 10000, rng, allocator);
+
+    // AA should dominate 22 (~85% equity)
+    try testing.expect(result.hero_equity > 0.80);
+    try testing.expect(result.hero_equity < 0.90);
+}
+
+test "Range.equityMonteCarlo with board" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var prng = std.Random.DefaultPrng.init(42);
+    const rng = prng.random();
+
+    var hero_range = Range.init(allocator);
+    defer hero_range.deinit();
+    try hero_range.addHandNotation("AA", 1.0);
+
+    var villain_range = Range.init(allocator);
+    defer villain_range.deinit();
+    try villain_range.addHandNotation("KK", 1.0);
+
+    // Empty board - AA should dominate KK
+    const result = try hero_range.equityMonteCarlo(&villain_range, &.{}, 10000, rng, allocator);
+
+    // AA should beat KK ~82% of the time
+    try testing.expect(result.hero_equity > 0.75);
+    try testing.expect(result.hero_equity < 0.90);
+}
+
+test "backward compatibility calculateRangeEquityExact" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var hero_range = Range.init(allocator);
+    defer hero_range.deinit();
+    try hero_range.addHandNotation("AA", 1.0);
+
+    var villain_range = Range.init(allocator);
+    defer villain_range.deinit();
+    try villain_range.addHandNotation("KK", 1.0);
+
+    // Turn board for fast test
+    const board = [_]Hand{
+        card.makeCard(.spades, .seven),
+        card.makeCard(.hearts, .eight),
+        card.makeCard(.diamonds, .nine),
+        card.makeCard(.clubs, .two),
+    };
+
+    const result = try calculateRangeEquityExact(&hero_range, &villain_range, &board, allocator);
+
+    // Should produce same results as Range.equityExact
+    try testing.expect(result.hero_equity > 0.90);
+}
+
+test "backward compatibility calculateRangeEquityMonteCarlo" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var prng = std.Random.DefaultPrng.init(42);
+    const rng = prng.random();
+
+    var hero_range = Range.init(allocator);
+    defer hero_range.deinit();
+    try hero_range.addHandNotation("AA", 1.0);
+
+    var villain_range = Range.init(allocator);
+    defer villain_range.deinit();
+    try villain_range.addHandNotation("KK", 1.0);
+
+    const result = try calculateRangeEquityMonteCarlo(&hero_range, &villain_range, &.{}, 5000, rng, allocator);
+
+    // Should produce same results as Range.equityMonteCarlo
+    try testing.expect(result.hero_equity > 0.75);
+    try testing.expect(result.hero_equity < 0.90);
+}
+
+test "empty range should return zero equity" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var prng = std.Random.DefaultPrng.init(42);
+    const rng = prng.random();
+
+    var hero_range = Range.init(allocator);
+    defer hero_range.deinit();
+
+    var villain_range = Range.init(allocator);
+    defer villain_range.deinit();
+    try villain_range.addHandNotation("AA", 1.0);
+
+    // Empty hero range should handle gracefully
+    const result = try hero_range.equityMonteCarlo(&villain_range, &.{}, 1000, rng, allocator);
+    try testing.expect(result.hero_equity == 0.0);
+    try testing.expect(result.villain_equity == 0.0);
+}
+
+test "card conflict in range should be handled" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var prng = std.Random.DefaultPrng.init(42);
+    const rng = prng.random();
+
+    var hero_range = Range.init(allocator);
+    defer hero_range.deinit();
+    try hero_range.addHandNotation("AA", 1.0);
+
+    var villain_range = Range.init(allocator);
+    defer villain_range.deinit();
+    try villain_range.addHandNotation("AA", 1.0);
+
+    // Same range should detect conflicts and skip those combos
+    const result = try hero_range.equityMonteCarlo(&villain_range, &.{}, 1000, rng, allocator);
+
+    // Should be approximately 0.5 equity since they tie when not conflicting
+    // Total simulations should be less than 1000 due to skipped conflicts
+    try testing.expect(result.hero_equity >= 0.0);
+    try testing.expect(result.hero_equity <= 1.0);
+    try testing.expect(result.total_simulations < 1000);
+    try testing.expect(result.total_simulations > 0);
+}
+
+test "range with weighted probabilities" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var range = Range.init(allocator);
+    defer range.deinit();
+
+    // Add hands with different probabilities
+    try range.addHandNotation("AA", 1.0);
+    try range.addHandNotation("KK", 0.5);
+
+    // Should have 6 + 6 = 12 total hands
+    try testing.expect(range.handCount() == 12);
+}
+
+test "Range.sample returns valid hand from range" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var prng = std.Random.DefaultPrng.init(42);
+    const rng = prng.random();
+
+    var range = Range.init(allocator);
+    defer range.deinit();
+    try range.addHandNotation("AA", 1.0);
+
+    // Sample should return one of the AA combinations
+    const sampled = range.sample(rng);
+    const combined = sampled[0] | sampled[1];
+
+    // Should be exactly 2 cards
+    try testing.expect(card.countCards(combined) == 2);
+
+    // Both should be aces
+    try testing.expect(card.hasCard(combined, .clubs, .ace) or
+        card.hasCard(combined, .diamonds, .ace) or
+        card.hasCard(combined, .hearts, .ace) or
+        card.hasCard(combined, .spades, .ace));
+}
+
+test "hasCardConflict detects overlaps" {
+    const hero = [2]Hand{
+        card.makeCard(.clubs, .ace),
+        card.makeCard(.diamonds, .ace),
+    };
+    const villain = [2]Hand{
+        card.makeCard(.clubs, .ace), // Conflicts with hero
+        card.makeCard(.hearts, .king),
+    };
+
+    try testing.expect(hand.hasCardConflict(hero, villain, &.{}));
+}
+
+test "hasCardConflict with board" {
+    const hero = [2]Hand{
+        card.makeCard(.clubs, .ace),
+        card.makeCard(.diamonds, .ace),
+    };
+    const villain = [2]Hand{
+        card.makeCard(.hearts, .king),
+        card.makeCard(.spades, .king),
+    };
+    const board = [_]Hand{
+        card.makeCard(.clubs, .ace), // Conflicts with hero
+        card.makeCard(.hearts, .seven),
+        card.makeCard(.spades, .two),
+    };
+
+    try testing.expect(hand.hasCardConflict(hero, villain, &board));
+}
+
+test "RangeEquityResult methods" {
+    const result = RangeEquityResult{
+        .hero_equity = 0.6,
+        .villain_equity = 0.4,
+        .total_simulations = 1000,
+    };
+
+    try testing.expect(result.sum() == 1.0);
+}
+
+test "invalid range notation" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var range = Range.init(allocator);
+    defer range.deinit();
+
+    // Test invalid notations
+    try testing.expectError(error.InvalidRank, range.addHandNotation("XX", 1.0));
+    try testing.expectError(error.InvalidNotation, range.addHandNotation("A", 1.0));
+    try testing.expectError(error.InvalidModifier, range.addHandNotation("AKx", 1.0));
+}
+
+test "pocket pair cannot be suited" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var range = Range.init(allocator);
+    defer range.deinit();
+
+    try testing.expectError(error.CannotBeSuited, range.addHandNotation("AAs", 1.0));
+    try testing.expectError(error.CannotBeSuited, range.addHandNotation("KKo", 1.0));
 }
 
 // Ensure all tests in this module are discovered

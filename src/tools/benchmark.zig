@@ -653,3 +653,102 @@ fn benchmarkBatchSizeGeneric(comptime batchSize: usize, test_hands: []const u64,
     std.mem.doNotOptimizeAway(checksum);
     return best_time;
 }
+
+// Benchmark range vs range equity calculations
+pub fn benchmarkRangeEquity(allocator: std.mem.Allocator) !void {
+    var stdout_buffer: [4096]u8 = undefined;
+    var stdout_writer_wrapper = std.fs.File.stdout().writer(&stdout_buffer);
+    const stdout = &stdout_writer_wrapper.interface;
+    defer stdout.flush() catch {};
+
+    var prng = std.Random.DefaultPrng.init(42);
+    const rng = prng.random();
+
+    try stdout.print("\nRange vs Range Equity Performance\n", .{});
+    try stdout.print("==================================================================\n", .{});
+    try stdout.print("Method             | Range Size | Board | Time (ms) | Combos/sec\n", .{});
+    try stdout.print("-------------------|------------|-------|-----------|------------\n", .{});
+
+    // Test scenarios with different range sizes
+    const test_cases = [_]struct {
+        hero_range: []const []const u8,
+        villain_range: []const []const u8,
+        board_size: usize,
+        mc_iterations: u32,
+    }{
+        // Small ranges - exact is feasible
+        .{ .hero_range = &.{"AA"}, .villain_range = &.{"KK"}, .board_size = 4, .mc_iterations = 10000 },
+        .{ .hero_range = &.{ "AA", "KK" }, .villain_range = &.{ "QQ", "JJ" }, .board_size = 4, .mc_iterations = 10000 },
+
+        // Medium ranges - exact gets slower
+        .{ .hero_range = &.{ "AA", "KK", "QQ", "AKs" }, .villain_range = &.{ "JJ", "TT", "99", "AQs" }, .board_size = 4, .mc_iterations = 5000 },
+
+        // Larger ranges - Monte Carlo preferred
+        .{ .hero_range = &.{ "AA", "KK", "QQ", "JJ", "AKs", "AQs", "AJs" }, .villain_range = &.{ "TT", "99", "88", "77", "KQs", "KJs" }, .board_size = 4, .mc_iterations = 5000 },
+    };
+
+    for (test_cases) |test_case| {
+        // Create ranges
+        var hero_range = poker.Range.init(allocator);
+        defer hero_range.deinit();
+
+        for (test_case.hero_range) |notation| {
+            try hero_range.addHandNotation(notation, 1.0);
+        }
+
+        var villain_range = poker.Range.init(allocator);
+        defer villain_range.deinit();
+
+        for (test_case.villain_range) |notation| {
+            try villain_range.addHandNotation(notation, 1.0);
+        }
+
+        // Create board (turn)
+        var board: [5]poker.Hand = undefined;
+        var used: u64 = 0;
+        for (0..test_case.board_size) |i| {
+            board[i] = drawUniqueCard(rng, &used);
+        }
+
+        const total_combos = hero_range.handCount() * villain_range.handCount();
+
+        // Benchmark exact equity (if feasible)
+        if (total_combos <= 100) {
+            const start = std.time.nanoTimestamp();
+            const result = try hero_range.equityExact(&villain_range, board[0..test_case.board_size], allocator);
+            const end = std.time.nanoTimestamp();
+
+            const elapsed_ns = @as(f64, @floatFromInt(end - start));
+            const elapsed_ms = elapsed_ns / 1_000_000.0;
+            const combos_per_sec = @as(f64, @floatFromInt(result.total_simulations)) / (elapsed_ns / 1_000_000_000.0);
+
+            try stdout.print("Exact              | {d:>3}×{d:<3}    | {d}card | {d:>9.2} | {d:>10.0}\n", .{
+                hero_range.handCount(),
+                villain_range.handCount(),
+                test_case.board_size,
+                elapsed_ms,
+                combos_per_sec,
+            });
+        }
+
+        // Benchmark Monte Carlo equity
+        {
+            const start = std.time.nanoTimestamp();
+            const result = try hero_range.equityMonteCarlo(&villain_range, board[0..test_case.board_size], test_case.mc_iterations, rng, allocator);
+            const end = std.time.nanoTimestamp();
+
+            const elapsed_ns = @as(f64, @floatFromInt(end - start));
+            const elapsed_ms = elapsed_ns / 1_000_000.0;
+            const sims_per_sec = @as(f64, @floatFromInt(result.total_simulations)) / (elapsed_ns / 1_000_000_000.0);
+
+            try stdout.print("MonteCarlo ({}K) | {d:>3}×{d:<3}    | {d}card | {d:>9.2} | {d:>10.0}\n", .{
+                test_case.mc_iterations / 1000,
+                hero_range.handCount(),
+                villain_range.handCount(),
+                test_case.board_size,
+                elapsed_ms,
+                sims_per_sec,
+            });
+        }
+    }
+}
