@@ -137,6 +137,22 @@ pub fn createHand(cards: []const struct { Suit, Rank }) Hand {
     return hand;
 }
 
+/// Check if two hole hands and/or board have any conflicting cards
+pub fn hasCardConflict(hero_hole: [2]Hand, villain_hole: [2]Hand, board: []const Hand) bool {
+    // Combine cards into hands using bitwise OR
+    const hero = hero_hole[0] | hero_hole[1];
+    const villain = villain_hole[0] | villain_hole[1];
+    var board_hand: Hand = 0;
+    for (board) |board_card| {
+        board_hand |= board_card;
+    }
+
+    // Check for any overlapping bits
+    return (hero & villain) != 0 or
+        (hero & board_hand) != 0 or
+        (villain & board_hand) != 0;
+}
+
 // Tests for hand parsing and generation
 const testing = std.testing;
 
@@ -279,6 +295,51 @@ test "convenience functions" {
     try testing.expect(card.hasCard(hand, .hearts, .king));
     try testing.expect(card.hasCard(hand, .diamonds, .queen));
     try testing.expect(card.countCards(hand) == 3);
+}
+
+test "hasCardConflict detects overlapping cards" {
+    // Conflict in hole cards
+    const hero1 = [2]Hand{
+        card.makeCard(.clubs, .ace),
+        card.makeCard(.diamonds, .ace),
+    };
+    const villain1 = [2]Hand{
+        card.makeCard(.clubs, .ace), // Same as hero
+        card.makeCard(.hearts, .king),
+    };
+    try testing.expect(hasCardConflict(hero1, villain1, &.{}));
+
+    // Conflict with board
+    const hero2 = [2]Hand{
+        card.makeCard(.spades, .ace),
+        card.makeCard(.spades, .king),
+    };
+    const villain2 = [2]Hand{
+        card.makeCard(.hearts, .ace),
+        card.makeCard(.hearts, .king),
+    };
+    const board = [_]Hand{
+        card.makeCard(.spades, .ace), // Same as hero's first card
+        card.makeCard(.diamonds, .seven),
+        card.makeCard(.clubs, .two),
+    };
+    try testing.expect(hasCardConflict(hero2, villain2, &board));
+
+    // No conflicts
+    const hero3 = [2]Hand{
+        card.makeCard(.clubs, .ace),
+        card.makeCard(.clubs, .king),
+    };
+    const villain3 = [2]Hand{
+        card.makeCard(.hearts, .queen),
+        card.makeCard(.hearts, .jack),
+    };
+    const clean_board = [_]Hand{
+        card.makeCard(.diamonds, .ten),
+        card.makeCard(.spades, .nine),
+        card.makeCard(.clubs, .eight),
+    };
+    try testing.expect(!hasCardConflict(hero3, villain3, &clean_board));
 }
 
 // Ensure all tests in this module are discovered

@@ -355,6 +355,12 @@ pub fn exact(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Han
     if ((hero_hole_cards & villain_hole_cards) != 0) return error.ConflictingHoleCards;
     const cards_needed = 5 - @as(u8, @intCast(board.len));
 
+    // Combine existing board cards
+    var board_hand: Hand = 0;
+    for (board) |board_card| {
+        board_hand |= board_card;
+    }
+
     // Enumerate all possible board completions
     const board_completions = try enumerateEquityBoardCompletions(hero_hole_cards, villain_hole_cards, board, cards_needed, allocator);
     defer allocator.free(board_completions);
@@ -363,9 +369,10 @@ pub fn exact(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Han
     var ties: u32 = 0;
 
     for (board_completions) |board_completion| {
-        // Create final hands and evaluate showdown
-        const hero_hand = hero_hole_cards | board_completion;
-        const villain_hand = villain_hole_cards | board_completion;
+        // Create final hands with existing board + completion
+        const complete_board = board_hand | board_completion;
+        const hero_hand = hero_hole_cards | complete_board;
+        const villain_hand = villain_hole_cards | complete_board;
         const result = evaluateEquityShowdown(hero_hand, villain_hand);
 
         if (result != 0) {
@@ -565,43 +572,68 @@ pub fn evaluateEquityShowdown(hero_hand: Hand, villain_hand: Hand) i8 {
 
 /// Enumerate all possible board completions for exact equity
 fn enumerateEquityBoardCompletions(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Hand, num_cards: u8, allocator: std.mem.Allocator) ![]Hand {
-    var used_cards: std.ArrayList(Hand) = .empty;
-    defer used_cards.deinit(allocator);
-
-    // Add hole cards and board to used cards
-    try used_cards.append(allocator, hero_hole_cards);
-    try used_cards.append(allocator, villain_hole_cards);
-    for (board) |board_card| {
-        try used_cards.append(allocator, board_card);
+    // Special case: if board is complete, return single empty combination
+    if (num_cards == 0) {
+        const result = try allocator.alloc(Hand, 1);
+        result[0] = 0; // Empty combination
+        return result;
     }
 
     // Get all cards that are already in use
-    var used_cards_bitmask: Hand = 0;
-    for (used_cards.items) |used_card| {
-        used_cards_bitmask |= used_card;
+    var used_cards_bitmask: Hand = hero_hole_cards | villain_hole_cards;
+    for (board) |board_card| {
+        used_cards_bitmask |= board_card;
     }
 
-    // Get remaining cards as bitmask (all 52 cards minus used cards)
-    const all_cards_mask = (@as(Hand, 1) << 52) - 1;
-    const remaining_bitmask = ~used_cards_bitmask & all_cards_mask;
-
-    // Convert bitmask to individual cards
-    var remaining_cards: std.ArrayList(Hand) = .empty;
-    defer remaining_cards.deinit(allocator);
-
+    // Get remaining cards as individual card bits
+    var remaining_cards: [52]u64 = undefined;
+    var remaining_count: u8 = 0;
     for (0..52) |i| {
         const card_bit = @as(Hand, 1) << @intCast(i);
-        if ((remaining_bitmask & card_bit) != 0) {
-            try remaining_cards.append(allocator, card_bit);
+        if ((card_bit & used_cards_bitmask) == 0) {
+            remaining_cards[remaining_count] = card_bit;
+            remaining_count += 1;
         }
     }
 
-    // Return only the requested number of cards if specified
-    if (num_cards > 0 and num_cards < remaining_cards.items.len) {
-        return try allocator.dupe(Hand, remaining_cards.items[0..num_cards]);
+    // Generate all combinations of num_cards from remaining cards
+    var combinations: std.ArrayList(Hand) = .empty;
+    errdefer combinations.deinit(allocator);
+
+    // Use recursion to generate combinations
+    var indices: [5]u8 = undefined;
+    try generateCombinationsHelper(&combinations, allocator, &remaining_cards, remaining_count, num_cards, &indices, 0, 0);
+
+    return try combinations.toOwnedSlice(allocator);
+}
+
+// Helper function to recursively generate combinations
+fn generateCombinationsHelper(
+    combinations: *std.ArrayList(Hand),
+    allocator: std.mem.Allocator,
+    cards: []const u64,
+    total_cards: u8,
+    num_needed: u8,
+    indices: []u8,
+    start_idx: u8,
+    current_depth: u8,
+) !void {
+    if (current_depth == num_needed) {
+        // We have a complete combination - OR all the selected cards together
+        var combo: u64 = 0;
+        for (0..num_needed) |i| {
+            combo |= cards[indices[i]];
+        }
+        try combinations.append(allocator, combo);
+        return;
     }
 
-    return try remaining_cards.toOwnedSlice(allocator);
+    // Generate combinations by selecting cards
+    var i = start_idx;
+    while (i <= total_cards - (num_needed - current_depth)) : (i += 1) {
+        indices[current_depth] = i;
+        try generateCombinationsHelper(combinations, allocator, cards, total_cards, num_needed, indices, i + 1, current_depth + 1);
+    }
 }
 
 // === THREADED EQUITY CALCULATION ===
@@ -804,10 +836,145 @@ test "hand evaluation sanity check" {
     try testing.expect(result == 1); // AA wins
 }
 
+test "exact equity AA vs KK on turn" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const aa = card.makeCard(.clubs, .ace) | card.makeCard(.diamonds, .ace);
+    const kk = card.makeCard(.hearts, .king) | card.makeCard(.spades, .king);
+
+    // Board through turn (only 44 possible rivers)
+    const board = [_]Hand{
+        card.makeCard(.spades, .seven),
+        card.makeCard(.hearts, .eight),
+        card.makeCard(.diamonds, .nine),
+        card.makeCard(.clubs, .two),
+    };
+
+    const result = try exact(aa, kk, &board, allocator);
+
+    // AA should beat KK with this board
+    try testing.expect(result.total_simulations == 44);
+    try testing.expect(result.equity() > 0.90);
+}
+
+test "exact equity with complete board" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const aa = card.makeCard(.clubs, .ace) | card.makeCard(.diamonds, .ace);
+    const kk = card.makeCard(.hearts, .king) | card.makeCard(.spades, .king);
+
+    // Complete board - AA wins with set
+    const board = [_]Hand{
+        card.makeCard(.spades, .ace),
+        card.makeCard(.diamonds, .seven),
+        card.makeCard(.hearts, .two),
+        card.makeCard(.clubs, .three),
+        card.makeCard(.spades, .five),
+    };
+
+    const result = try exact(aa, kk, &board, allocator);
+
+    // With complete board, only 1 scenario, AA wins 100%
+    try testing.expect(result.total_simulations == 1);
+    try testing.expect(result.wins == 1);
+    try testing.expect(result.equity() == 1.0);
+}
+
 test "cache line padding" {
     // Verify ThreadResult is properly padded
     try testing.expect(@sizeOf(ThreadResult) == 64);
     try testing.expect(@alignOf(ThreadResult) == 64);
+}
+
+test "exact equity with conflicting cards should error" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const aa = card.makeCard(.clubs, .ace) | card.makeCard(.diamonds, .ace);
+    const aa_conflict = card.makeCard(.clubs, .ace) | card.makeCard(.hearts, .ace);
+
+    try testing.expectError(error.ConflictingHoleCards, exact(aa, aa_conflict, &.{}, allocator));
+}
+
+test "exact equity validates hole card count" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const one_card = card.makeCard(.clubs, .ace);
+    const two_cards = card.makeCard(.hearts, .king) | card.makeCard(.spades, .king);
+
+    try testing.expectError(error.InvalidHeroHoleCards, exact(one_card, two_cards, &.{}, allocator));
+}
+
+test "monteCarlo equity validates hole card count" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var prng = std.Random.DefaultPrng.init(42);
+    const rng = prng.random();
+
+    const one_card = card.makeCard(.clubs, .ace);
+    const two_cards = card.makeCard(.hearts, .king) | card.makeCard(.spades, .king);
+
+    try testing.expectError(error.InvalidHeroHoleCards, monteCarlo(one_card, two_cards, &.{}, 100, rng, allocator));
+}
+
+test "EquityResult helper methods" {
+    const result = EquityResult{
+        .wins = 80,
+        .ties = 10,
+        .total_simulations = 100,
+    };
+
+    try testing.expect(result.winRate() == 0.80);
+    try testing.expect(result.tieRate() == 0.10);
+    try testing.expect(result.lossRate() == 0.10);
+    try testing.expect(result.equity() == 0.85); // 80 + 10*0.5 = 85%
+}
+
+test "DetailedEquityResult confidence interval" {
+    const result = DetailedEquityResult{
+        .wins = 500,
+        .ties = 0,
+        .total_simulations = 1000,
+    };
+
+    const ci = result.confidenceInterval();
+
+    // 50% equity, should have reasonable confidence bounds
+    try testing.expect(ci.lower >= 0.0);
+    try testing.expect(ci.upper <= 1.0);
+    try testing.expect(ci.lower < 0.5);
+    try testing.expect(ci.upper > 0.5);
+}
+
+test "exact equity with flop" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const aa = card.makeCard(.clubs, .ace) | card.makeCard(.diamonds, .ace);
+    const kk = card.makeCard(.hearts, .king) | card.makeCard(.spades, .king);
+
+    // Flop - this will enumerate C(45, 2) = 990 turn/river combinations
+    const board = [_]Hand{
+        card.makeCard(.spades, .seven),
+        card.makeCard(.hearts, .eight),
+        card.makeCard(.diamonds, .nine),
+    };
+
+    const result = try exact(aa, kk, &board, allocator);
+
+    try testing.expect(result.total_simulations == 990);
+    // AA should beat KK most of the time (but not as strongly as with a turn)
+    try testing.expect(result.equity() > 0.80);
 }
 
 // Ensure all tests in this module are discovered
