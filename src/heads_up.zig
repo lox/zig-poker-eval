@@ -84,12 +84,22 @@ pub const HandIndex = struct {
 pub const PREFLOP_VS_RANDOM: [169][2]u16 = computePreflopEquities();
 
 // Compute equities at compile time
+//
+// NOTE: Real equity calculation would require ~437 billion hand evaluations
+// (169 hands × 1225 opponents × 2.1M boards). This would make compilation
+// take hours/days. Options for production:
+//
+// 1. Pre-calculate offline: Generate once, save as data file (recommended)
+// 2. Monte Carlo sampling: ~10K simulations per hand (slower compilation)
+// 3. Use known values: Published equity data from poker literature
+//
+// Current implementation uses placeholder values for fast compilation.
+// TODO: Replace with actual equity data using one of the above methods.
 fn computePreflopEquities() [169][2]u16 {
     @setEvalBranchQuota(10_000_000);
     var result: [169][2]u16 = undefined;
 
-    // For now, we'll use placeholder values
-    // In production, this would compute actual equities
+    // Placeholder values that approximate real equities
     for (&result, 0..) |*entry, i| {
         // Pocket pairs get progressively stronger
         const is_pair = (i % 14) == 0;
