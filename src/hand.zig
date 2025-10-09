@@ -137,11 +137,36 @@ pub fn createHand(cards: []const struct { Suit, Rank }) Hand {
     return hand;
 }
 
+/// Combine two hole cards into a single Hand bitfield
+pub inline fn combine(hole: [2]Hand) Hand {
+    return hole[0] | hole[1];
+}
+
+/// Split a combined Hand into two individual cards
+/// Assumes the hand contains exactly 2 cards
+pub fn split(combined: Hand) [2]Hand {
+    std.debug.assert(card.countCards(combined) == 2);
+
+    var result: [2]Hand = undefined;
+    var found: u8 = 0;
+
+    for (0..52) |i| {
+        const card_bit = @as(Hand, 1) << @intCast(i);
+        if ((combined & card_bit) != 0) {
+            result[found] = card_bit;
+            found += 1;
+            if (found == 2) break;
+        }
+    }
+
+    return result;
+}
+
 /// Check if two hole hands and/or board have any conflicting cards
 pub fn hasCardConflict(hero_hole: [2]Hand, villain_hole: [2]Hand, board: []const Hand) bool {
     // Combine cards into hands using bitwise OR
-    const hero = hero_hole[0] | hero_hole[1];
-    const villain = villain_hole[0] | villain_hole[1];
+    const hero = combine(hero_hole);
+    const villain = combine(villain_hole);
     var board_hand: Hand = 0;
     for (board) |board_card| {
         board_hand |= board_card;
@@ -295,6 +320,29 @@ test "convenience functions" {
     try testing.expect(card.hasCard(hand, .hearts, .king));
     try testing.expect(card.hasCard(hand, .diamonds, .queen));
     try testing.expect(card.countCards(hand) == 3);
+}
+
+test "combine and split helpers" {
+    const hole = [2]Hand{
+        card.makeCard(.clubs, .ace),
+        card.makeCard(.diamonds, .king),
+    };
+
+    // Test combine
+    const combined = combine(hole);
+    try testing.expect(card.countCards(combined) == 2);
+    try testing.expect(card.hasCard(combined, .clubs, .ace));
+    try testing.expect(card.hasCard(combined, .diamonds, .king));
+
+    // Test split
+    const split_result = split(combined);
+    try testing.expect(split_result[0] == hole[0] or split_result[0] == hole[1]);
+    try testing.expect(split_result[1] == hole[0] or split_result[1] == hole[1]);
+    try testing.expect(split_result[0] != split_result[1]);
+
+    // Verify round-trip
+    const recombined = combine(split_result);
+    try testing.expect(recombined == combined);
 }
 
 test "hasCardConflict detects overlapping cards" {
