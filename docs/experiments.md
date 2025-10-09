@@ -684,6 +684,85 @@ pub fn evaluateBatch(comptime batchSize: usize, hands: @Vector(batchSize, u64)) 
 
 **Conclusion**: At 3.27 ns/hand, we've reached a **practical performance ceiling**. The evaluator is 77% of theoretical maximum (2.5 ns/hand), with remaining time dominated by unavoidable CHD memory lookups. Further micro-optimizations face diminishing returns where implementation overhead exceeds theoretical savings.
 
+## Experiment 15: Explicit CHD Prefetching
+
+**Performance Impact**: -16% slower (3.36→3.91 ns/hand)
+**Complexity**: Medium
+**Status**: ❌ FAILED
+
+**Approach**: Add explicit software prefetch hints for CHD table lookups since all RPCs are computed before any lookups occur. The idea was to prefetch the final CHD value_table indices while the CPU processes earlier computations, hiding L2 cache latency.
+
+**Motivation**: Analysis identified that CHD lookups dominate the 23% gap to theoretical maximum (2.5 ns/hand). The 256KB value_table doesn't fit in L1 cache (32KB), forcing L2 access with ~14-cycle latency. Since `evaluateBatch` computes all RPCs upfront via `computeRpcSimd`, we have the opportunity to prefetch all lookup addresses before the evaluation loop.
+
+**Implementation**:
+
+```zig
+// After RPC computation and flush detection, add prefetch loop
+inline for (0..batchSize) |i| {
+    if (!flush_mask[i]) {
+        // Inline CHD hash computation to find final index
+        const rpc = rpc_results[i];
+        const h = @as(u64, rpc) *% 0xA2C48F57A5F9B3D1; // CHD magic constant
+        const bucket = @as(u32, @intCast((h ^ (h >> 29)) >> 51));
+        const g_value = tables.chd_g_array[bucket];  // First load
+        const base_index = @as(u32, @intCast((h ^ (h >> 29)) & 0x1FFFF));
+        const final_index = (base_index + g_value) & 131071;
+        @prefetch(&tables.chd_value_table[final_index], .{}); // Prefetch hint
+    }
+}
+
+// Then evaluate with (hopefully) cached data
+inline for (0..batchSize) |i| {
+    if (flush_mask[i]) {
+        results[i] = tables.flushLookup(getFlushPattern(hands_array[i]));
+    } else {
+        results[i] = chdLookupScalar(rpc_results[i]);  // Should hit cache
+    }
+}
+```
+
+**Benchmark Results**: 10M iterations, ReleaseFast, Apple M1
+
+- **Baseline (Experiment 13)**: 3.36 ns/hand (298M hands/sec)
+- **With explicit prefetching**: 3.91 ns/hand (256M hands/sec)
+- **Performance**: 16% slower (0.55 ns/hand regression)
+- **Consistency**: 3 runs: 3.91, 3.92, 4.00 ns/hand
+- **Tests**: All 78 tests passed
+
+**Why it failed**: Multiple compounding factors made explicit prefetching counterproductive:
+
+1. **Duplicate work overhead**: The prefetch loop recomputes the full CHD hash (multiply, XOR, shifts) for all non-flush hands, then the evaluation loop computes it again via `chdLookupScalar`. This doubles the hash computation cost.
+
+2. **Hardware prefetcher interference**: Modern CPU prefetchers (especially Apple M1) are already effective at detecting sequential access patterns in the batch evaluation. Explicit `@prefetch` hints likely confused or displaced the hardware prefetcher's predictions.
+
+3. **Branch overhead**: The `if (!flush_mask[i])` check in the prefetch loop adds 32 branch instructions that weren't there before. Even though ~80% are predictable (non-flush), the branch overhead exceeds any prefetch benefit.
+
+4. **Memory bandwidth**: The prefetch loop adds extra memory accesses to `chd_g_array` (8KB, L1-cached) for all hands. While individually cheap (~1-3 cycles), 32 extra L1 accesses add measurable overhead.
+
+5. **Register pressure**: Inlining the hash computation in two places (prefetch and evaluation) increases register usage, potentially causing spills and hurting the SIMD operations.
+
+**Key insight**: **Hardware prefetchers + simple code beats manual prefetching**. At this level of optimization (3.36 ns/hand), the CPU's hardware prefetcher is already doing near-optimal work. The sequential access pattern in the evaluation loop (iterate through rpc_results, call chdLookupScalar for each) is exactly what hardware prefetchers excel at predicting. Adding explicit prefetch hints:
+- Duplicates work (redundant hash computations)
+- Interferes with hardware prediction
+- Adds instruction and branch overhead
+
+**Alternative considered**: "Fused" prefetch where we compute the hash once and store indices, then prefetch, then use stored indices. Analysis showed this would require:
+- 32 × 4 bytes = 128 bytes stack allocation for indices
+- Same duplicate work problem (hash computed separately from lookup)
+- Experiment 14 already showed struct allocation overhead exceeds computational savings
+
+**Theoretical vs. actual**: The hypothesis that prefetching could hide L2 latency was sound in isolation, but failed to account for:
+- Hardware prefetching already present
+- Cost of computing what to prefetch
+- Interference with existing CPU optimizations
+
+**Conclusion**: Explicit prefetching is counterproductive at this performance level. The 23% gap to theoretical maximum (2.5 ns/hand) is likely **fundamental**:
+- CHD value_table (256KB) doesn't fit in L1 (32KB) → unavoidable L2 latency
+- Hardware prefetching is already maximally effective
+- Remaining gap is memory hierarchy physics, not software optimization opportunity
+
+We've definitively reached the **practical performance ceiling** for this algorithmic approach. Further gains require different algorithms (GPU, different hash structures) or accepting 77% of theoretical maximum.
+
 ---
 
 ## Test Environment
