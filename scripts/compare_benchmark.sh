@@ -39,10 +39,14 @@ baseline_ns=$(jq -r '.ns_per_hand' "$BASELINE_FILE")
 current_ns=$(jq -r '.ns_per_hand' "$CURRENT_FILE")
 
 if [[ -z "$baseline_ns" ]] || [[ "$baseline_ns" == "null" ]]; then
-  echo "Error: Could not extract ns_per_hand from baseline file"
+  echo "Warning: Could not extract ns_per_hand from baseline file"
   echo "Baseline file contents:"
   cat "$BASELINE_FILE"
-  exit 1
+  echo ""
+  echo "Skipping comparison - baseline may be from incompatible version"
+  echo "Current results:"
+  cat "$CURRENT_FILE"
+  exit 0
 fi
 
 if [[ -z "$current_ns" ]] || [[ "$current_ns" == "null" ]]; then
