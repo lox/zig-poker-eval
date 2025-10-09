@@ -1,204 +1,269 @@
 # Profiling Guide
 
-This guide describes how to profile the Zig poker evaluator to identify performance bottlenecks and optimization opportunities.
+This guide describes how to profile the Zig poker evaluator using uniprof to identify performance bottlenecks and optimization opportunities.
 
-## 1. Profiling Script
+## Prerequisites
 
-The main profiling tool is `scripts/profile.sh`, a unified script for macOS that provides high-frequency sampling with configurable parameters.
-
-### Basic Usage
+Install uniprof:
 ```bash
-# Quick profile (default: 20M iterations, 15s sampling)
-./scripts/profile.sh
-
-# Custom parameters
-./scripts/profile.sh [iterations] [duration] [output_file]
-
-# Examples
-./scripts/profile.sh 5000000 10 quick_profile.txt     # 5M iterations, 10s
-./scripts/profile.sh 50000000 30 detailed_profile.txt # 50M iterations, 30s
+cargo install uniprof
 ```
 
-### Script Features
-- Builds benchmark with ReleaseFast + debug symbols
-- Configurable iteration count and sampling duration
-- Samples every 1ms for high resolution
-- Outputs detailed function-level breakdown
-- Error handling for failed sampling
+## Quick Start
 
-## 2. Understanding Profile Output
+```bash
+# Profile hand evaluation (20M iterations)
+task profile:eval
 
-### Sample Output
+# Profile equity calculations
+task profile:equity
+
+# Profile showdown evaluation
+task profile:showdown
+
+# Analyze results in terminal
+uniprof analyze /tmp/eval_profile/profile.json
+
+# Visualize in browser
+uniprof visualize /tmp/eval_profile/profile.json
 ```
-=== PROFILING RESULTS ===
-Total samples: 3886
 
-Function breakdown:
-    evaluator.computeRpcFromHand         3815 (98.2%)
-    evaluator.evaluateHand                 71  (1.8%)
+## Profiling Tasks
+
+### Hand Evaluation Performance
+
+Profile the core hand evaluation engine:
+
+```bash
+# Default: 20M iterations
+task profile:eval
+
+# Custom iteration count
+task profile:eval ITERATIONS=50000000
+
+# Custom output directory
+task profile:eval PROFILE_DIR=/tmp/my_profile
 ```
 
-This clearly shows that 98.2% of time is spent in RPC computation (rank counting), which led to the SIMD optimization efforts.
+This profiles the batch evaluation path, showing:
+- SIMD vectorization hotspots
+- Lookup table access patterns
+- Function call overhead
+
+### Equity Calculation Performance
+
+Profile Monte Carlo equity simulations:
+
+```bash
+task profile:equity
+
+# Profiles multiple scenarios:
+# - Head-to-head (preflop, flop, turn, river)
+# - Multi-way (3, 4, 6, 9 players)
+```
+
+This profiles:
+- Random hand generation
+- Board enumeration
+- Showdown evaluation
+- Result accumulation
+
+## Analyzing Profiles
+
+### Terminal Analysis
+
+Quick overview in the terminal:
+
+```bash
+uniprof analyze /tmp/poker_profile/profile.json
+```
+
+Shows:
+- Function call tree
+- Time percentages
+- Self time vs total time
+- Call counts
+
+### Browser Visualization
+
+Interactive flamegraph:
+
+```bash
+uniprof visualize /tmp/poker_profile/profile.json
+```
+
+Opens browser with:
+- Flamegraph visualization
+- Searchable function list
+- Click to zoom/filter
+- Export capabilities
+
+## Understanding Results
 
 ### Key Metrics
-- **Total samples**: Higher is better for statistical significance
-- **Function breakdown**: Shows percentage of time in each function
-- **Line-level hotspots**: Identifies specific code lines consuming CPU
 
-## 3. Platform-Specific Profiling
+**Self Time**: Time spent in the function itself (excluding callees)
+**Total Time**: Time including all function calls
+**Call Count**: Number of times function was called
 
-### macOS (Primary Platform)
-Uses the `sample` command:
+### What to Look For
+
+1. **Wide bars in flamegraph**: Functions consuming significant time
+2. **Tall stacks**: Deep call chains (potential for inlining)
+3. **Unexpected hotspots**: May indicate algorithmic issues
+4. **Memory operations**: Cache misses or allocation overhead
+
+## Optimization Workflow
+
+1. **Establish baseline**
+   ```bash
+   task bench:eval -- --quick
+   ```
+
+2. **Profile to find bottlenecks**
+   ```bash
+   task profile:eval
+   uniprof visualize /tmp/eval_profile/profile.json
+   ```
+
+3. **Identify optimization targets**
+   - Functions > 20% of total time
+   - Loops with high iteration counts
+   - Unnecessary allocations
+
+4. **Optimize identified functions**
+   - SIMD vectorization
+   - Loop unrolling
+   - Cache-friendly data layout
+
+5. **Benchmark improvement**
+   ```bash
+   task bench:eval
+   ```
+
+6. **Re-profile to verify**
+   ```bash
+   task profile:eval
+   ```
+
+7. **Repeat until target performance achieved**
+
+## Advanced Usage
+
+### Custom Profiling
+
+Profile specific workloads directly:
+
 ```bash
-sample <PID> <duration> <interval_ms> -fullPaths -file output.txt
-```
+# Build with frame pointers
+task build
 
-### Linux Alternative
-```bash
-# Use perf instead
-perf record -g -F 1000 ./zig-out/bin/poker-eval bench
-perf report
-```
+# Generate debug symbols
+dsymutil zig-out/bin/poker-eval
 
-### Windows Alternative
-- Use Intel VTune or Visual Studio Profiler
-- AMD uProf for AMD processors
-
-## 4. Common Profiling Scenarios
-
-### Finding Bottlenecks
-```bash
-# Long profile for detailed analysis
-./scripts/profile.sh 100000000 30 bottleneck_analysis.txt
-
-# Look for functions > 10% of samples
-grep -E "^\s+[0-9]+" bottleneck_analysis.txt | head -20
+# Profile custom command
+uniprof record --platform native -o my_profile.json -- \
+  zig-out/bin/poker-eval equity "AhAs" "KdKc" --sims 100000
 ```
 
 ### Comparing Optimizations
+
 ```bash
-# Profile before optimization
-./scripts/profile.sh 20000000 15 before.txt
+# Profile before changes
+task profile:eval PROFILE_DIR=/tmp/before
+cp /tmp/before/profile.json /tmp/before.json
 
 # Make changes, rebuild, profile after
-./scripts/profile.sh 20000000 15 after.txt
+task profile:eval PROFILE_DIR=/tmp/after
+cp /tmp/after/profile.json /tmp/after.json
 
-# Compare function percentages
+# Compare in browser
+uniprof visualize /tmp/before.json
+uniprof visualize /tmp/after.json
 ```
 
-### SIMD Effectiveness
-Profile different batch sizes to see vectorization benefits:
+### Frame Pointer Preservation
+
+The build system automatically preserves frame pointers in Debug and ReleaseSafe modes for accurate profiling. For ReleaseFast (default), frame pointers may be omitted for maximum performance.
+
+To profile ReleaseFast builds with frame pointers, modify `build.zig`:
+
+```zig
+.omit_frame_pointer = false,
+```
+
+## Platform Notes
+
+### macOS (Primary)
+
+Uniprof uses native instruments sampling on macOS for zero-overhead profiling.
+
+### Linux
+
+Uniprof uses `perf` on Linux. Ensure kernel perf events are enabled:
+
 ```bash
-# Profile single-hand evaluation
-zig build run -Doptimize=ReleaseFast -- bench --batch-size 1 &
-BENCH_PID=$!
-sample $BENCH_PID 10 1 -file single_hand.txt
+# Check perf availability
+perf --version
 
-# Profile batch evaluation
-zig build run -Doptimize=ReleaseFast -- bench --batch-size 32 &
-BENCH_PID=$!
-sample $BENCH_PID 10 1 -file batch_32.txt
+# May need to adjust permissions
+echo 1 | sudo tee /proc/sys/kernel/perf_event_paranoid
 ```
 
-## 5. Key Findings from Profiling
+### Windows
 
-### Before SIMD Optimization
-```
-computeRpcFromHand    98.2%  # Rank counting dominates
-evaluateHand           1.8%  # Table lookup negligible
-```
+Uniprof uses ETW (Event Tracing for Windows). Run as administrator for best results.
 
-### After SIMD Optimization
-```
-computeRpcSimd        45.3%  # Vectorized rank counting
-evaluateBatch         38.2%  # Batch coordination overhead
-chdLookupScalar       16.5%  # Table lookups now visible
-```
+## Troubleshooting
 
-The SIMD optimization successfully reduced RPC computation time by ~50%, making other operations visible in the profile.
+### Missing Symbols
 
-## 6. Advanced Profiling Techniques
+**Symptom**: Functions show as addresses instead of names
 
-### Sampling Frequency
-- **1ms interval**: Good balance of resolution and overhead
-- **0.1ms interval**: Maximum resolution but higher overhead
-- **10ms interval**: Low overhead for long-running benchmarks
-
-### Profile-Guided Optimization
-1. Profile to find hotspots
-2. Optimize the top function
-3. Re-profile to verify improvement
-4. Repeat until diminishing returns
-
-### Cache Analysis
-While `sample` doesn't show cache misses directly, you can infer cache behavior:
-- Consistent timing = good cache behavior
-- High variation = possible cache misses
-
-## 7. Troubleshooting Profiling Issues
-
-### No Samples Collected
-```
-❌ No samples collected - benchmark may have finished too quickly
-```
-**Solution**: Increase iterations or reduce sample duration
-
-### Low Sample Count
-- **Cause**: Benchmark too short for sampling interval
-- **Solution**: Use more iterations (50M+ for 15s profiling)
-
-### Missing Debug Symbols
-- **Symptom**: Function names show as addresses
-- **Solution**: Ensure `-Doptimize=ReleaseFast` includes debug info
-
-## 8. Interpreting Results for Optimization
-
-### What to Look For
-1. **Functions > 20% of samples**: Primary optimization targets
-2. **Unexpected hotspots**: May indicate algorithmic issues
-3. **Even distribution**: Good - no single bottleneck
-4. **Memory operations**: High % may indicate cache issues
-
-### Example Analysis
-From actual profiling that led to SIMD optimization:
-```
-computeRpcFromHand (98.2%) breakdown:
-- Nested loops: 85% (13 ranks × 4 suits)
-- Base-5 encoding: 13%
-- Function overhead: 2%
-```
-
-This profile directly motivated the SIMD batch processing approach, which processes multiple hands in parallel through the expensive rank counting loops.
-
-## 9. Continuous Profiling
-
-For ongoing optimization:
-1. Save baseline profiles with each release
-2. Compare profiles across versions
-3. Track performance metrics over time
-4. Profile on different hardware (M1, M2, Intel)
-
-## 10. Quick Reference
-
-### Essential Commands
+**Solution**: Ensure debug symbols are generated:
 ```bash
-# Basic profile
-./scripts/profile.sh
-
-# Detailed profile
-./scripts/profile.sh 50000000 30 detailed.txt
-
-# View results
-cat detailed.txt | grep -A 20 "Function breakdown"
-
-# Find hot functions
-awk '/Sort by top of stack/{flag=1; next} /Binary Images/{flag=0} flag' detailed.txt
+dsymutil zig-out/bin/poker-eval
 ```
 
-### Optimization Workflow
-1. Benchmark to establish baseline
-2. Profile to find bottlenecks
-3. Optimize identified functions
-4. Benchmark to measure improvement
-5. Profile to find new bottlenecks
-6. Repeat until target performance achieved
+### Short Sample Time
+
+**Symptom**: Profile completes too quickly
+
+**Solution**: Increase iterations:
+```bash
+task profile:eval ITERATIONS=100000000
+```
+
+### Permission Errors
+
+**Symptom**: Uniprof fails to attach
+
+**Solution**: Grant necessary permissions (varies by platform):
+- macOS: Allow in System Preferences > Privacy
+- Linux: Adjust perf_event_paranoid
+- Windows: Run as administrator
+
+## Quick Reference
+
+```bash
+# Common workflows
+task profile:eval                     # Profile hand evaluation
+task profile:equity                   # Profile equity calculations
+task profile:showdown                 # Profile showdown evaluation
+uniprof analyze <json>                # Terminal analysis
+uniprof visualize <json>              # Browser visualization
+
+# Benchmarking
+task bench:eval                       # Evaluation benchmark
+task bench:equity                     # Equity benchmark
+task bench:showdown                   # Showdown benchmark
+
+# Custom profiling
+uniprof record -o out.json -- <cmd>  # Record custom command
+```
+
+## Further Reading
+
+- [uniprof documentation](https://github.com/emmanuelantony2000/uniprof)
+- Flamegraph interpretation guides
+- CPU profiling best practices

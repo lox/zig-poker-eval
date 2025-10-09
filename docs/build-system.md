@@ -35,7 +35,36 @@ The build system defines a hierarchical module structure (lines 7-63 in `build.z
 
 ## Build Workflows
 
-### Common Commands
+### Task Automation (Recommended)
+
+The project uses [Task](https://taskfile.dev) for common workflows:
+
+```bash
+# Build main executable
+task build
+
+# Run main executable
+task run -- <args>
+
+# Run all tests
+task test
+
+# Run benchmarks
+task bench:eval
+task bench:equity
+task bench:showdown
+
+# Profile performance
+task profile:eval
+task profile:equity
+task profile:showdown
+```
+
+See `Taskfile.yml` for all available tasks.
+
+### Direct Zig Build Commands
+
+For advanced use cases or build system development:
 
 ```bash
 # Basic build
@@ -49,9 +78,6 @@ zig build test
 
 # Run tests with detailed output
 zig build test --summary all
-
-# Run performance benchmark (requires optimization)
-zig build bench -Doptimize=ReleaseFast
 
 # Generate lookup tables (manual use only)
 zig build build-tables -Doptimize=ReleaseFast

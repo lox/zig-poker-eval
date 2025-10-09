@@ -298,16 +298,13 @@ switch (result.command) {
 ### Building and Running
 
 ```bash
-# Build all targets
-zig build
-
-# Run main executable
-zig build run
+# Build main executable
+task build
 
 # Run with arguments
-zig build run -- eval --hand "AsKsQsJsTs"
+task run -- eval "AsKsQsJsTs"
 
-# Build optimized for benchmarking
+# Build for library use
 zig build -Doptimize=ReleaseFast
 ```
 
@@ -315,23 +312,38 @@ zig build -Doptimize=ReleaseFast
 
 ```bash
 # Run all tests
-zig build test
+task test
 
-# Run with detailed output
+# Run with detailed output (via zig build)
 zig build test --summary all
 
-# Test specific module (modify build.zig temporarily)
+# Test specific module
 zig test src/evaluator.zig
 ```
 
 ### Benchmarking
 
 ```bash
-# Run performance benchmark (must use ReleaseFast)
-zig build bench -Doptimize=ReleaseFast
+# Run performance benchmarks
+task bench:eval
+task bench:equity
+task bench:showdown
 
-# Profile with specific iterations
-zig build run -Doptimize=ReleaseFast -- bench --iterations 10000000
+# With custom options
+task bench:eval -- --iterations 10000000 --validate
+```
+
+### Profiling
+
+```bash
+# Profile different workloads
+task profile:eval
+task profile:equity
+task profile:showdown
+
+# Analyze results
+uniprof analyze /tmp/eval_profile/profile.json
+uniprof visualize /tmp/eval_profile/profile.json
 ```
 
 ### Table Generation
@@ -381,12 +393,14 @@ const PackedRank = packed struct {
 ### Profiling Integration
 
 ```bash
-# Use the built-in profiling script
-./scripts/profile.sh
+# Use task-based profiling with uniprof
+task profile:eval
+task profile:equity
+task profile:showdown
 
-# Or manually with perf
-perf record -g ./zig-out/bin/poker-eval bench
-perf report
+# Analyze results
+uniprof analyze /tmp/eval_profile/profile.json
+uniprof visualize /tmp/eval_profile/profile.json
 ```
 
 ## Reference

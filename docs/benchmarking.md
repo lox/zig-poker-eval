@@ -31,24 +31,33 @@ pub const BenchmarkOptions = struct {
 
 ```bash
 # Run with default options (100K iterations × 32 hands = 3.2M hands)
-zig build bench -Doptimize=ReleaseFast
+task bench:eval
 
-# Via CLI with custom iterations
-zig build run -Doptimize=ReleaseFast -- bench --iterations 1000000
+# With custom iterations
+task bench:eval -- --iterations 1000000
 ```
 
 ### Quick Validation
 
 ```bash
 # Quick benchmark with correctness validation
-zig build run -- bench --quick --validate
+task bench:eval -- --quick --validate
 ```
 
-### Batch Size Comparison
+### Benchmark Types
 
 ```bash
+# Hand evaluation performance
+task bench:eval
+
+# Equity calculation performance
+task bench:equity
+
+# Showdown evaluation (scalar vs batched)
+task bench:showdown
+
 # Test different batch sizes (2, 4, 8, 16, 32, 64)
-zig build run -- bench --batch-sizes
+task bench:eval -- --batch-sizes
 ```
 
 ## 3. Measurement Methodology

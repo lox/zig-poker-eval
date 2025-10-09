@@ -104,6 +104,8 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/cli/main.zig"),
             .target = target,
             .optimize = optimize,
+            // Preserve frame pointers for profiling in Debug and ReleaseSafe modes
+            .omit_frame_pointer = if (optimize == .Debug or optimize == .ReleaseSafe) false else null,
         }),
         .use_llvm = use_llvm,
     });
