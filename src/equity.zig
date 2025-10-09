@@ -411,22 +411,25 @@ pub fn multiway(hands: []const Hand, board: []const Hand, simulations: u32, rng:
         result.* = EquityResult{ .wins = 0, .ties = 0, .total_simulations = simulations };
     }
 
+    // Allocate buffers once outside the loop to avoid allocation overhead
+    var final_hands = try allocator.alloc(Hand, num_players);
+    defer allocator.free(final_hands);
+
+    var winners: std.ArrayList(usize) = .empty;
+    defer winners.deinit(allocator);
+
     for (0..simulations) |_| {
         // Sample remaining board cards
         const board_completion = sampleRemainingCardsForEquity(hands, board_hand, cards_needed, rng);
 
-        // Create final hands
-        var final_hands = try allocator.alloc(Hand, num_players);
-        defer allocator.free(final_hands);
-
+        // Reuse final_hands buffer
         for (hands, 0..) |hole_cards, i| {
             final_hands[i] = hole_cards | board_completion;
         }
 
-        // Evaluate showdown - find best rank
+        // Reuse winners ArrayList
+        winners.clearRetainingCapacity();
         var best_rank: u16 = 65535; // Worst possible rank
-        var winners: std.ArrayList(usize) = .empty;
-        defer winners.deinit(allocator);
 
         // Find best rank
         for (final_hands, 0..) |hand, i| {
