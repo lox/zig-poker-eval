@@ -17,6 +17,10 @@ const evaluator = @import("evaluator");
 // - Diagonal entries are pocket pairs
 // - Upper triangle are suited hands
 // - Lower triangle are offsuit hands
+//
+// Note: This module has its own simple notation parsing for converting
+// hand strings to indices (0-168). This avoids dependencies on the
+// more complex range/notation modules which generate actual card combinations.
 
 pub const HandIndex = struct {
     // Convert two ranks to an index in the 169-hand table
