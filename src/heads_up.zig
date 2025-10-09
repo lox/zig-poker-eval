@@ -1,9 +1,12 @@
 // Specialized Heads-Up Equity Tables
 // Pre-computed win frequencies for heads-up (2 player) poker scenarios
+
 // Based on analysis of holdem-hand-evaluator approach
+// https://github.com/b-inary/holdem-hand-evaluator
 
 const std = @import("std");
-const poker = @import("poker.zig");
+const card = @import("card");
+const evaluator = @import("evaluator");
 
 // There are 169 unique starting hands in Texas Hold'em:
 // - 13 pocket pairs (AA, KK, QQ, ..., 22)
@@ -144,8 +147,8 @@ pub const HeadsUpEquity = struct {
 
     // Fast path for preflop all-in scenarios
     pub fn evaluatePreflopAllIn(
-        hero_cards: [2]poker.Card,
-        villain_cards: [2]poker.Card,
+        hero_cards: card.Hand,
+        villain_cards: card.Hand,
     ) Result {
         // Convert cards to hand indices
         const hero_idx = getHandIndex(hero_cards);
@@ -154,122 +157,29 @@ pub const HeadsUpEquity = struct {
         return getPreflopEquity(hero_idx, villain_idx);
     }
 
-    fn getHandIndex(cards: [2]poker.Card) u8 {
-        const r1 = @intFromEnum(cards[0].rank);
-        const r2 = @intFromEnum(cards[1].rank);
-        const s1 = @intFromEnum(cards[0].suit);
-        const s2 = @intFromEnum(cards[1].suit);
+    fn getHandIndex(hand: card.Hand) u8 {
+        // Extract the two cards from the hand bitfield
+        var cards_found: [2]struct { rank: u8, suit: u8 } = undefined;
+        var count: usize = 0;
 
-        const suited = s1 == s2;
-        const high = @max(r1, r2);
-        const low = @min(r1, r2);
+        for (0..52) |i| {
+            if ((hand & (@as(u64, 1) << @intCast(i))) != 0) {
+                cards_found[count] = .{
+                    .rank = @intCast(i % 13),
+                    .suit = @intCast(i / 13),
+                };
+                count += 1;
+                if (count >= 2) break;
+            }
+        }
+
+        const suited = cards_found[0].suit == cards_found[1].suit;
+        const high = @max(cards_found[0].rank, cards_found[1].rank);
+        const low = @min(cards_found[0].rank, cards_found[1].rank);
 
         return HandIndex.getIndex(high, low, suited);
     }
 };
-
-// Benchmark comparison: Pre-computed vs Monte Carlo
-pub fn benchmark(allocator: std.mem.Allocator) !void {
-    const print = std.debug.print;
-
-    print("\n==============================================\n", .{});
-    print("Heads-Up Equity Tables Benchmark\n", .{});
-    print("==============================================\n\n", .{});
-
-    // Test hands
-    const test_hands = [_]struct { h1: []const u8, h2: []const u8 }{
-        .{ .h1 = "AA", .h2 = "KK" }, // Premium vs premium
-        .{ .h1 = "AKs", .h2 = "QQ" }, // Big slick suited vs queens
-        .{ .h1 = "TT", .h2 = "AKo" }, // Pair vs overcards
-        .{ .h1 = "76s", .h2 = "AQo" }, // Suited connectors vs big ace
-        .{ .h1 = "22", .h2 = "AKs" }, // Small pair vs big slick
-    };
-
-    print("Preflop Equity Comparisons:\n", .{});
-    print("----------------------------\n", .{});
-
-    for (test_hands) |matchup| {
-        const h1_idx = try HandIndex.parseHand(matchup.h1);
-        const h2_idx = try HandIndex.parseHand(matchup.h2);
-
-        // Pre-computed (instant)
-        const timer_start = std.time.nanoTimestamp();
-        const precomputed = HeadsUpEquity.getPreflopEquity(h1_idx, h2_idx);
-        const precomputed_time = std.time.nanoTimestamp() - timer_start;
-
-        // Monte Carlo comparison (would need actual implementation)
-        // For now, just show the pre-computed results
-
-        print("{s:4} vs {s:4}: ", .{ matchup.h1, matchup.h2 });
-        print("Win={d:.1}% Tie={d:.1}% Loss={d:.1}% ", .{
-            precomputed.win * 100,
-            precomputed.tie * 100,
-            precomputed.loss * 100,
-        });
-        print("(Time: {} ns)\n", .{precomputed_time});
-    }
-
-    // Memory usage
-    const table_size = @sizeOf(@TypeOf(PREFLOP_VS_RANDOM));
-    print("\nMemory Usage:\n", .{});
-    print("  Preflop table: {} bytes ({d:.1} KB)\n", .{ table_size, @as(f32, @floatFromInt(table_size)) / 1024.0 });
-    print("  Full 169x169 would be: ~114 KB\n", .{});
-
-    print("\nPerformance Analysis:\n", .{});
-    print("  Pre-computed: O(1) lookup, ~10-50 ns\n", .{});
-    print("  Monte Carlo: O(n) simulations, ~10-100 ms\n", .{});
-    print("  Speedup: 100,000-1,000,000x for preflop\n", .{});
-
-    _ = allocator;
-}
-
-// Generate full equity tables (expensive, run offline)
-pub fn generateFullEquityTables(allocator: std.mem.Allocator) !void {
-    print("Generating full 169x169 heads-up equity table...\n", .{});
-
-    var table: [169][169][3]u32 = undefined;
-
-    // This would enumerate all possible matchups
-    // For each of the 169 starting hands vs each other
-    // Calculate exact win/tie/loss frequencies
-
-    // Simplified version for demonstration
-    for (0..169) |i| {
-        for (0..169) |j| {
-            // Would compute actual equity here
-            table[i][j] = .{ 1000000, 50000, 1000000 };
-        }
-
-        if (i % 13 == 0) {
-            print("  Progress: {}/169 hands processed\n", .{i});
-        }
-    }
-
-    // Save to file for embedding
-    const file = try std.fs.cwd().createFile(
-        "heads_up_equity_table.zig",
-        .{},
-    );
-    defer file.close();
-
-    try file.writer().print("// Generated heads-up equity table\n", .{});
-    try file.writer().print("pub const FULL_EQUITY_TABLE = [_][169][3]u32{{\n", .{});
-
-    for (table) |row| {
-        try file.writer().print("    .{{\n", .{});
-        for (row) |entry| {
-            try file.writer().print("        .{{ {}, {}, {} }},\n", .{ entry[0], entry[1], entry[2] });
-        }
-        try file.writer().print("    }},\n", .{});
-    }
-
-    try file.writer().print("}};\n", .{});
-
-    print("Table generated successfully!\n", .{});
-    _ = allocator;
-}
-
-const print = std.debug.print;
 
 test "hand index calculation" {
     // Test pocket pairs

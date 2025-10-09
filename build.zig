@@ -55,6 +55,13 @@ pub fn build(b: *std.Build) void {
     });
     draws_mod.addImport("card", card_mod);
 
+    // Level 4: Heads-up module (depends on card, evaluator)
+    const heads_up_mod = b.addModule("heads_up", .{
+        .root_source_file = b.path("src/heads_up.zig"),
+    });
+    heads_up_mod.addImport("card", card_mod);
+    heads_up_mod.addImport("evaluator", evaluator_mod);
+
     // Level 5: Main poker module (depends on all others)
     const poker_mod = b.addModule("poker", .{
         .root_source_file = b.path("src/poker.zig"),
@@ -66,6 +73,7 @@ pub fn build(b: *std.Build) void {
     poker_mod.addImport("equity", equity_mod);
     poker_mod.addImport("analysis", analysis_mod);
     poker_mod.addImport("draws", draws_mod);
+    poker_mod.addImport("heads_up", heads_up_mod);
 
     // Tools module (depends on poker for benchmarking)
     const tools_mod = b.addModule("tools", .{
@@ -262,6 +270,19 @@ pub fn build(b: *std.Build) void {
     const run_draws_tests = b.addRunArtifact(draws_tests);
     test_step.dependOn(&run_draws_tests.step);
 
+    // Heads-up module tests (depends on card, evaluator)
+    const heads_up_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/heads_up.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    heads_up_tests.root_module.addImport("card", card_mod);
+    heads_up_tests.root_module.addImport("evaluator", evaluator_mod);
+    const run_heads_up_tests = b.addRunArtifact(heads_up_tests);
+    test_step.dependOn(&run_heads_up_tests.step);
+
     // Main poker module tests (depends on all modules)
     const poker_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -278,6 +299,7 @@ pub fn build(b: *std.Build) void {
     poker_tests.root_module.addImport("equity", equity_mod);
     poker_tests.root_module.addImport("analysis", analysis_mod);
     poker_tests.root_module.addImport("draws", draws_mod);
+    poker_tests.root_module.addImport("heads_up", heads_up_mod);
     const run_poker_tests = b.addRunArtifact(poker_tests);
     test_step.dependOn(&run_poker_tests.step);
 }
