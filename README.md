@@ -2,7 +2,7 @@
 
 # Zig Poker Evaluator
 
-High-performance 7-card poker hand evaluator achieving ~4.5ns per hand evaluation on Apple M1. Includes comprehensive analysis tools for equity calculations, range parsing, and Monte Carlo simulations.
+High-performance 7-card poker hand evaluator achieving ~3.3ns per hand evaluation on Apple M1. Includes comprehensive analysis tools for equity calculations, range parsing, and Monte Carlo simulations.
 
 ## Installation
 
@@ -47,7 +47,7 @@ exe.root_module.addImport("poker", poker.module("poker"));
 
 ## Core Features
 
-- **Ultra-fast evaluation**: ~4.5ns per hand using CHD perfect hash tables and SIMD batch processing
+- **Ultra-fast evaluation**: ~3.3ns per hand using CHD perfect hash tables and SIMD batch processing
 - **SIMD optimization**: Batch evaluation of 32 hands simultaneously
 - **Equity calculations**: Monte Carlo and exact enumeration
 - **Range parsing**: Standard poker notation (AA, KK, AKs, etc.)
@@ -95,6 +95,7 @@ task run -- equity "AhAs" "KdKc"
 
 Achieved on Apple M1:
 
-- Single evaluation: ~4.5ns per hand
-- Batch evaluation: 224M+ hands/second
-- Memory usage: ~267KB for lookup tables (L2 cache resident)
+- Batch evaluation: ~3.30ns per hand (303M hands/second)
+- Speedup: 3.65× from original baseline (11.95ns → 3.27ns)
+- Theoretical ceiling: ~2.5ns (limited by L2 cache latency)
+- Memory usage: ~395KB for lookup tables (267KB CHD + 128KB flush patterns)
