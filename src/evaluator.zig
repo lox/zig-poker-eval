@@ -23,17 +23,18 @@ pub const HandCategory = enum(u4) {
 
 /// Convert evaluator rank (lower=better) to HandCategory enum
 pub fn getHandCategory(rank: HandRank) HandCategory {
-    // Evaluator uses lower numbers for better hands
-    // These ranges are based on the actual slow evaluator implementation
-    if (rank <= 10) return .straight_flush; // Royal flush + straight flushes (0-10)
-    if (rank <= 165) return .four_of_a_kind; // Four of a kind (10-165)
-    if (rank <= 321) return .full_house; // Full house (166-321)
-    if (rank <= 1598) return .flush; // Flush (322-1598)
-    if (rank <= 1608) return .straight; // Straight (1599-1608)
-    if (rank <= 2466) return .three_of_a_kind; // Three of a kind (1609-2466)
-    if (rank <= 3324) return .two_pair; // Two pair (2467-3324)
-    if (rank <= 6184) return .pair; // One pair (3325-6184)
-    return .high_card; // High card (6185-7461)
+    const category_index = rank / slow_eval.CATEGORY_STEP;
+    return switch (category_index) {
+        0 => .straight_flush,
+        1 => .four_of_a_kind,
+        2 => .full_house,
+        3 => .flush,
+        4 => .straight,
+        5 => .three_of_a_kind,
+        6 => .two_pair,
+        7 => .pair,
+        else => .high_card,
+    };
 }
 
 // === Core Constants ===
@@ -604,9 +605,35 @@ pub fn generateRandomHand(rng: *std.Random) u64 {
 const testing = std.testing;
 
 test "hand category conversion" {
-    try testing.expect(getHandCategory(1) == .straight_flush);
-    try testing.expect(getHandCategory(100) == .four_of_a_kind);
-    try testing.expect(getHandCategory(7000) == .high_card);
+    const straight_flush = card.makeCard(.clubs, .nine) |
+        card.makeCard(.clubs, .eight) |
+        card.makeCard(.clubs, .seven) |
+        card.makeCard(.clubs, .six) |
+        card.makeCard(.clubs, .five) |
+        card.makeCard(.diamonds, .ace) |
+        card.makeCard(.hearts, .king);
+    const straight_flush_rank = evaluateHand(straight_flush);
+    try testing.expect(getHandCategory(straight_flush_rank) == .straight_flush);
+
+    const four_kind = card.makeCard(.clubs, .ace) |
+        card.makeCard(.diamonds, .ace) |
+        card.makeCard(.hearts, .ace) |
+        card.makeCard(.spades, .ace) |
+        card.makeCard(.clubs, .king) |
+        card.makeCard(.diamonds, .queen) |
+        card.makeCard(.hearts, .jack);
+    const four_kind_rank = evaluateHand(four_kind);
+    try testing.expect(getHandCategory(four_kind_rank) == .four_of_a_kind);
+
+    const high_card = card.makeCard(.clubs, .ace) |
+        card.makeCard(.diamonds, .queen) |
+        card.makeCard(.hearts, .ten) |
+        card.makeCard(.spades, .eight) |
+        card.makeCard(.clubs, .five) |
+        card.makeCard(.diamonds, .three) |
+        card.makeCard(.hearts, .two);
+    const high_card_rank = evaluateHand(high_card);
+    try testing.expect(getHandCategory(high_card_rank) == .high_card);
 }
 
 test "flush pattern extraction" {
@@ -690,7 +717,7 @@ test "variable batch sizes" {
     var rng = prng.random();
 
     // Test batch sizes 1, 2, 4, 8
-    inline for ([_]usize{ 1, 2, 4, 8 }) |batchSize| {
+    inline for ([_]usize{ 1, 2, 4, 8, 16, 32 }) |batchSize| {
         // Generate random hands
         var hands_array: [batchSize]u64 = undefined;
         for (&hands_array) |*hand| {
@@ -727,9 +754,9 @@ test "two trips makes full house" {
     const slow_rank = slow_eval.evaluateHand(test_hand);
     const fast_rank = evaluateHand(test_hand);
 
-    // Should be a full house (rank 166-321)
-    try testing.expect(slow_rank >= 166 and slow_rank <= 321);
-    try testing.expect(fast_rank >= 166 and fast_rank <= 321);
+    // Should be a full house
+    try testing.expect(slow_rank / slow_eval.CATEGORY_STEP == 2);
+    try testing.expect(fast_rank / slow_eval.CATEGORY_STEP == 2);
 
     // Fast and slow should match
     if (slow_rank != fast_rank) {
@@ -784,8 +811,8 @@ test "two trips edge cases" {
         const slow_rank = slow_eval.evaluateHand(tc.hand);
         const fast_rank = evaluateHand(tc.hand);
 
-        // All should be full houses (rank 166-321)
-        try testing.expect(slow_rank >= 166 and slow_rank <= 321);
+        // All should be full houses
+        try testing.expect(slow_rank / slow_eval.CATEGORY_STEP == 2);
 
         if (slow_rank != fast_rank) {
             std.debug.print("Two trips edge case FAIL ({s}): hand=0x{X}, slow={}, fast={}\n", .{ tc.desc, tc.hand, slow_rank, fast_rank });

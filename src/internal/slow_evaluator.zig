@@ -7,6 +7,7 @@ const card = @import("card");
 // Re-export types from modern card module
 pub const Hand = card.Hand;
 pub const HandRank = u16;
+pub const CATEGORY_STEP: HandRank = 4096;
 
 // Hand ranking constants (from lowest to highest)
 pub const HAND_RANKS = struct {
@@ -56,8 +57,9 @@ fn getHighestRanks(ranks: u16, count: u8) u16 {
     var bit: u8 = 12; // Start from Ace
 
     while (remaining > 0 and bit < 13) {
-        if ((ranks & (@as(u16, 1) << @intCast(bit))) != 0) {
-            result |= @as(u16, 1) << @intCast(bit);
+        const shift_bit: u4 = @intCast(bit);
+        if ((ranks & (@as(u16, 1) << shift_bit)) != 0) {
+            result |= @as(u16, 1) << shift_bit;
             remaining -= 1;
         }
         if (bit == 0) break;
@@ -88,193 +90,291 @@ fn getStraightMask(ranks: u16) u16 {
     return 0;
 }
 
+inline fn rankOrder(rank: u8) u16 {
+    return @intCast(12 - rank);
+}
+
+fn choose(n: u8, k: u8) u16 {
+    if (k > n) return 0;
+    if (k == 0 or k == n) return 1;
+
+    const kk = if (k > n - k) n - k else k;
+    var result: u32 = 1;
+    var i: u8 = 0;
+
+    while (i < kk) : (i += 1) {
+        result = result * (@as(u32, n) - @as(u32, i));
+        result /= @as(u32, i) + 1;
+    }
+
+    return @intCast(result);
+}
+
+fn combinationIndexAscending(n: u8, combo: []const u8) u16 {
+    var index: u16 = 0;
+    var prev: i16 = -1;
+    const k = combo.len;
+
+    for (combo, 0..) |c, i| {
+        var j: i16 = prev + 1;
+        while (j < c) : (j += 1) {
+            const remaining = @as(u8, @intCast(k - i - 1));
+            index += choose(n - 1 - @as(u8, @intCast(j)), remaining);
+        }
+        prev = @intCast(c);
+    }
+
+    return index;
+}
+
+fn combinationIndexDescending(n: u8, combo: []const u8) u16 {
+    const total = choose(n, @intCast(combo.len));
+    return total - 1 - combinationIndexAscending(n, combo);
+}
+
+fn rankToAvailableIndex(rank: u8, exclude_mask: u16) u8 {
+    var index: u8 = 0;
+    var r: u8 = 0;
+    while (r < rank) : (r += 1) {
+        const shift_r: u4 = @intCast(r);
+        if ((exclude_mask & (@as(u16, 1) << shift_r)) == 0) {
+            index += 1;
+        }
+    }
+    return index;
+}
+
+fn singleOrderDescending(rank: u8, exclude_mask: u16) u16 {
+    const total_allowed: u16 = 13 - @popCount(exclude_mask);
+    const idx = rankToAvailableIndex(rank, exclude_mask);
+    return (total_allowed - 1) - idx;
+}
+
+fn straightHighRank(mask: u16) u8 {
+    if (mask == 0x100F) { // Wheel
+        return 3; // Rank index for 5
+    }
+    return @intCast(15 - @clz(mask));
+}
+
+fn maskToRanksDescending(mask: u16) [5]u8 {
+    var result: [5]u8 = undefined;
+    var idx: usize = 0;
+    var rank: i8 = 12;
+
+    while (idx < 5 and rank >= 0) : (rank -= 1) {
+        const bit = @as(u16, 1) << @as(u4, @intCast(rank));
+        if ((mask & bit) != 0) {
+            result[idx] = @intCast(rank);
+            idx += 1;
+        }
+    }
+
+    return result;
+}
+
+fn compareRanksDesc(a: [5]u8, b: [5]u8) i2 {
+    for (0..5) |i| {
+        if (a[i] > b[i]) return 1;
+        if (a[i] < b[i]) return -1;
+    }
+    return 0;
+}
+
 // Simple 7-card hand evaluation (non-optimized)
 pub fn evaluateHand(hand: Hand) HandRank {
     const ranks = getRankMask(hand);
     const suits = getSuitMasks(hand);
 
-    // Check for flush
-    var flush_suit: ?u8 = null;
-    var flush_ranks: u16 = 0;
-    for (suits, 0..) |suit, i| {
-        if (@popCount(suit) >= 5) {
-            flush_suit = @intCast(i);
-            flush_ranks = getHighestRanks(suit, 5);
-            break;
+    var best_straight_flush_high: ?u8 = null;
+    var has_flush = false;
+    var best_flush_ranks: [5]u8 = undefined;
+
+    inline for (suits) |suit_mask| {
+        if (@popCount(suit_mask) >= 5) {
+            const straight_mask_suit = getStraightMask(suit_mask);
+            if (straight_mask_suit != 0) {
+                const high = straightHighRank(straight_mask_suit);
+                if (best_straight_flush_high == null or high > best_straight_flush_high.?) {
+                    best_straight_flush_high = high;
+                }
+            }
+
+            const top_mask = getHighestRanks(suit_mask, 5);
+            const top_ranks = maskToRanksDescending(top_mask);
+
+            if (!has_flush or compareRanksDesc(top_ranks, best_flush_ranks) == 1) {
+                best_flush_ranks = top_ranks;
+                has_flush = true;
+            }
         }
     }
 
-    // Check for straight
     const straight_mask = getStraightMask(ranks);
     const has_straight = straight_mask != 0;
+    const straight_high: u8 = if (has_straight) straightHighRank(straight_mask) else 0;
 
-    // Straight flush
-    if (flush_suit != null and has_straight) {
-        const straight_in_flush = getStraightMask(suits[flush_suit.?]);
-        if (straight_in_flush != 0) {
-            // Royal flush (AKQJT of same suit)
-            if (straight_in_flush == 0x1F00) { // 10,J,Q,K,A
-                return 0; // Royal flush (rank 0 = best possible hand)
-            }
-            // Wheel straight flush (A-2-3-4-5) - 5-high
-            if (straight_in_flush == 0x100F) { // A,2,3,4,5 wheel (full pattern)
-                return 9; // Worst straight flush
-            }
-            // Other straight flushes: K-high=1, Q-high=2, ..., 6-high=8
-            const high_card_bit = @clz(straight_in_flush);
-            const high_card_rank = 15 - high_card_bit; // Convert clz to rank (12=A, 11=K, etc.)
-            return @as(HandRank, 12 - high_card_rank); // Map K-high=1, Q-high=2, etc.
-        }
-    }
-
-    // Count rank frequencies
     var rank_counts = [_]u8{0} ** 13;
-    var i: u8 = 0;
-    while (i < 13) : (i += 1) {
-        if ((ranks & (@as(u16, 1) << @intCast(i))) != 0) {
-            // Count how many cards of this rank
-            var count: u8 = 0;
-            for (suits) |suit| {
-                if ((suit & (@as(u16, 1) << @intCast(i))) != 0) {
-                    count += 1;
-                }
-            }
-            rank_counts[i] = count;
+    for (0..13) |i| {
+        const bit = @as(u16, 1) << @as(u4, @intCast(i));
+        if ((ranks & bit) == 0) continue;
+
+        var count: u8 = 0;
+        for (suits) |suit_mask| {
+            if ((suit_mask & bit) != 0) count += 1;
         }
+        rank_counts[i] = count;
     }
 
-    // Find pairs, trips, quads
-    var quads: u8 = 0;
-    var trips: u8 = 0;
-    var pairs: u8 = 0;
+    var quads: ?u8 = null;
+    var trips_list: [3]u8 = undefined;
+    var trips_len: usize = 0;
+    var pairs_list: [4]u8 = undefined;
+    var pairs_len: usize = 0;
+    var singles_list: [7]u8 = undefined;
+    var singles_len: usize = 0;
 
-    for (rank_counts, 0..) |count, rank| {
+    var rank_iter: i8 = 12;
+    while (rank_iter >= 0) : (rank_iter -= 1) {
+        const idx: usize = @intCast(rank_iter);
+        const count = rank_counts[idx];
         switch (count) {
-            4 => quads += 1,
-            3 => trips += 1,
-            2 => pairs += 1,
+            4 => quads = @intCast(rank_iter),
+            3 => {
+                trips_list[trips_len] = @intCast(rank_iter);
+                trips_len += 1;
+            },
+            2 => {
+                pairs_list[pairs_len] = @intCast(rank_iter);
+                pairs_len += 1;
+            },
+            1 => {
+                singles_list[singles_len] = @intCast(rank_iter);
+                singles_len += 1;
+            },
             else => {},
         }
-        _ = rank;
     }
 
-    // Four of a kind (ranks 10-165: best quads are lower numbers)
-    if (quads > 0) {
-        // Find the quad rank and best kicker
-        var quad_rank: u8 = 0;
+    if (best_straight_flush_high) |high| {
+        return CATEGORY_STEP * 0 + rankOrder(high);
+    }
+
+    if (quads) |quad_rank| {
         var kicker_rank: u8 = 0;
-
-        for (rank_counts, 0..) |count, rank| {
-            if (count == 4) {
-                quad_rank = @intCast(rank);
-            } else if (count >= 1 and rank != quad_rank and rank > kicker_rank) {
-                kicker_rank = @intCast(rank);
+        var search: i8 = 12;
+        while (search >= 0) : (search -= 1) {
+            if (search == quad_rank) continue;
+            if (rank_counts[@intCast(search)] > 0) {
+                kicker_rank = @intCast(search);
+                break;
             }
         }
-
-        // Higher quad rank = better hand = lower rank number
-        // Aces quad = rank 10, 2s quad = rank ~165
-        return 10 + @as(HandRank, (12 - quad_rank)) * 12 + @as(HandRank, (12 - kicker_rank));
+        const exclude_mask = @as(u16, 1) << @as(u4, @intCast(quad_rank));
+        const kicker_order = singleOrderDescending(kicker_rank, exclude_mask);
+        const value = rankOrder(quad_rank) * 12 + kicker_order;
+        return CATEGORY_STEP * 1 + @as(HandRank, value);
     }
 
-    // Full house (ranks 166-321: best boats are lower numbers)
-    // Handle case with 2 trips (e.g., AAA KKK x) or trips + pairs
-    if (trips > 0 and (pairs > 0 or trips > 1)) {
-        var trip_rank: u8 = 0;
-        var pair_rank: u8 = 0;
-        var second_trip_rank: u8 = 0;
-
-        // Find the highest trip
-        for (rank_counts, 0..) |count, rank| {
-            if (count == 3 and rank > trip_rank) {
-                second_trip_rank = trip_rank;
-                trip_rank = @intCast(rank);
-            } else if (count == 3 and rank > second_trip_rank) {
-                second_trip_rank = @intCast(rank);
-            } else if (count == 2 and rank > pair_rank) {
-                pair_rank = @intCast(rank);
-            }
-        }
-
-        // If we have two trips, use the lower trip as the pair
-        if (trips > 1) {
-            pair_rank = second_trip_rank;
-        }
-
-        // Higher trip rank = better hand = lower rank number
-        return 166 + @as(HandRank, (12 - trip_rank)) * 12 + @as(HandRank, (12 - pair_rank));
+    if (trips_len > 0 and (pairs_len > 0 or trips_len > 1)) {
+        const primary_trip = trips_list[0];
+        const pair_rank = if (trips_len > 1) trips_list[1] else pairs_list[0];
+        const value = rankOrder(primary_trip) * 13 + rankOrder(pair_rank);
+        return CATEGORY_STEP * 2 + @as(HandRank, value);
     }
 
-    // Flush (not straight) (ranks 322-1598: best flushes are lower numbers)
-    if (flush_suit != null) {
-        // Simple flush ranking - A-high flush is rank 322, 7-high flush is ~1598
-        const high_card_bit = @clz(flush_ranks);
-        const high_card_rank = 15 - high_card_bit;
-        return 322 + @as(HandRank, (12 - high_card_rank)) * 100; // Approximate flush range
+    if (has_flush) {
+        var ascending: [5]u8 = undefined;
+        inline for (0..5) |i| ascending[i] = best_flush_ranks[4 - i];
+        const flush_value = combinationIndexDescending(13, ascending[0..]);
+        return CATEGORY_STEP * 3 + flush_value;
     }
 
-    // Straight (not flush) (ranks 1599-1608: A-high=1599, 5-high=1608)
     if (has_straight) {
-        if (straight_mask == 0x100F) { // A-2-3-4-5 wheel (5-high)
-            return 1608; // Worst straight
-        }
-        const high_card_bit = @clz(straight_mask);
-        const high_card_rank = 15 - high_card_bit;
-        return 1599 + @as(HandRank, (12 - high_card_rank)); // A-high=1599, K-high=1600, etc.
+        return CATEGORY_STEP * 4 + rankOrder(straight_high);
     }
 
-    // Three of a kind (ranks 1609-2466: AAA is better than 222)
-    if (trips > 0) {
-        var trip_rank: u8 = 0;
-        for (rank_counts, 0..) |count, rank| {
-            if (count == 3) {
-                trip_rank = @intCast(rank);
+    if (trips_len > 0) {
+        const trip_rank = trips_list[0];
+
+        var kicker_candidates: [2]u8 = undefined;
+        var kicker_len: usize = 0;
+        var scan: i8 = 12;
+        while (scan >= 0 and kicker_len < 2) : (scan -= 1) {
+            if (scan == trip_rank) continue;
+            if (rank_counts[@intCast(scan)] > 0) {
+                kicker_candidates[kicker_len] = @intCast(scan);
+                kicker_len += 1;
+            }
+        }
+
+        const exclude_mask = @as(u16, 1) << @as(u4, @intCast(trip_rank));
+        var combo: [2]u8 = undefined;
+        combo[0] = rankToAvailableIndex(kicker_candidates[1], exclude_mask);
+        combo[1] = rankToAvailableIndex(kicker_candidates[0], exclude_mask);
+        const kicker_index = combinationIndexDescending(12, combo[0..]);
+        const value = rankOrder(trip_rank) * 66 + kicker_index;
+        return CATEGORY_STEP * 5 + @as(HandRank, value);
+    }
+
+    if (pairs_len >= 2) {
+        const high_pair = pairs_list[0];
+        const low_pair = pairs_list[1];
+
+        var kicker_rank: u8 = 0;
+        var scan: i8 = 12;
+        while (scan >= 0) : (scan -= 1) {
+            if (scan == high_pair or scan == low_pair) continue;
+            if (rank_counts[@intCast(scan)] > 0) {
+                kicker_rank = @intCast(scan);
                 break;
             }
         }
-        return 1609 + @as(HandRank, (12 - trip_rank)) * 65; // Approximate trips range
+
+        var pair_combo: [2]u8 = .{ @intCast(low_pair), @intCast(high_pair) };
+        const pair_index = combinationIndexDescending(13, pair_combo[0..]);
+
+        const exclude_mask = (@as(u16, 1) << @as(u4, @intCast(high_pair))) | (@as(u16, 1) << @as(u4, @intCast(low_pair)));
+        const kicker_order = singleOrderDescending(kicker_rank, exclude_mask);
+        const value = pair_index * 11 + kicker_order;
+        return CATEGORY_STEP * 6 + @as(HandRank, value);
     }
 
-    // Two pair (ranks 2467-3324: AA22 is better than 3322)
-    if (pairs >= 2) {
-        var high_pair: u8 = 0;
-        var low_pair: u8 = 0;
+    if (pairs_len == 1) {
+        const pair_rank = pairs_list[0];
 
-        for (rank_counts, 0..) |count, rank| {
-            if (count == 2) {
-                if (rank > high_pair) {
-                    low_pair = high_pair;
-                    high_pair = @intCast(rank);
-                } else if (rank > low_pair) {
-                    low_pair = @intCast(rank);
-                }
+        var kicker_ranks: [3]u8 = undefined;
+        var kicker_len: usize = 0;
+        var scan: i8 = 12;
+        while (scan >= 0 and kicker_len < 3) : (scan -= 1) {
+            if (scan == pair_rank) continue;
+            if (rank_counts[@intCast(scan)] > 0) {
+                kicker_ranks[kicker_len] = @intCast(scan);
+                kicker_len += 1;
             }
         }
 
-        return 2467 + @as(HandRank, (12 - high_pair)) * 65 + @as(HandRank, (12 - low_pair));
+        const exclude_mask = @as(u16, 1) << @as(u4, @intCast(pair_rank));
+        var combo: [3]u8 = undefined;
+        combo[0] = rankToAvailableIndex(kicker_ranks[2], exclude_mask);
+        combo[1] = rankToAvailableIndex(kicker_ranks[1], exclude_mask);
+        combo[2] = rankToAvailableIndex(kicker_ranks[0], exclude_mask);
+        const kicker_index = combinationIndexDescending(12, combo[0..]);
+        const value = rankOrder(pair_rank) * 220 + kicker_index;
+        return CATEGORY_STEP * 7 + @as(HandRank, value);
     }
 
-    // One pair (ranks 3325-6184: AA is better than 22)
-    if (pairs == 1) {
-        var pair_rank: u8 = 0;
-        for (rank_counts, 0..) |count, rank| {
-            if (count == 2) {
-                pair_rank = @intCast(rank);
-                break;
-            }
-        }
-        return 3325 + @as(HandRank, (12 - pair_rank)) * 220; // Approximate pair range
-    }
-
-    // High card (ranks 6185-7461: AKQJ9 is better than 75432)
-    const high_card_bit = @clz(ranks);
-    const high_card_rank = 15 - high_card_bit;
-    return 6185 + @as(HandRank, (12 - high_card_rank)) * 100; // Approximate high card range
+    var high_ranks: [5]u8 = undefined;
+    inline for (0..5) |i| high_ranks[i] = singles_list[i];
+    var ascending_high: [5]u8 = undefined;
+    inline for (0..5) |i| ascending_high[i] = high_ranks[4 - i];
+    const high_index = combinationIndexDescending(13, ascending_high[0..]);
+    return CATEGORY_STEP * 8 + high_index;
 }
 
 // Get the hand category (0-8) for correctness verification
 pub fn getHandCategory(hand: Hand) u16 {
-    return evaluateHand(hand);
+    return evaluateHand(hand) / CATEGORY_STEP;
 }
 
 // Tests
@@ -305,7 +405,7 @@ test "four of a kind" {
         makeCard(.clubs, .king) | makeCard(.diamonds, .queen) | makeCard(.hearts, .jack);
 
     const rank = evaluateHand(four_aces);
-    try std.testing.expect(rank >= 10 and rank <= 165); // Four of a kind range
+    try std.testing.expect(rank / CATEGORY_STEP == 1); // Four of a kind
 }
 
 test "full house" {
@@ -313,7 +413,7 @@ test "full house" {
         makeCard(.clubs, .jack) | makeCard(.diamonds, .jack) | makeCard(.hearts, .ten) | makeCard(.spades, .nine);
 
     const rank = evaluateHand(full_house);
-    try std.testing.expect(rank >= 166 and rank <= 321); // Full house range
+    try std.testing.expect(rank / CATEGORY_STEP == 2); // Full house
 }
 
 test "flush" {
@@ -321,7 +421,7 @@ test "flush" {
         makeCard(.clubs, .king) | makeCard(.diamonds, .jack); // Add two random cards
 
     const rank = evaluateHand(flush);
-    try std.testing.expect(rank >= 322 and rank <= 1598); // Flush range
+    try std.testing.expect(rank / CATEGORY_STEP == 3); // Flush
 }
 
 test "straight" {
@@ -329,7 +429,7 @@ test "straight" {
         makeCard(.diamonds, .four) | makeCard(.hearts, .two); // Add two random cards (9-high straight)
 
     const rank = evaluateHand(straight);
-    try std.testing.expect(rank >= 1599 and rank <= 1608); // Straight range
+    try std.testing.expect(rank / CATEGORY_STEP == 4); // Straight
 }
 
 test "wheel straight (A-2-3-4-5)" {
@@ -337,7 +437,7 @@ test "wheel straight (A-2-3-4-5)" {
         makeCard(.diamonds, .king) | makeCard(.hearts, .queen); // Add two random cards
 
     const rank = evaluateHand(wheel);
-    try std.testing.expect(rank == 1608); // Wheel is worst straight
+    try std.testing.expect(rank / CATEGORY_STEP == 4); // Straight category
 }
 
 test "three of a kind" {
@@ -345,7 +445,7 @@ test "three of a kind" {
         makeCard(.clubs, .jack) | makeCard(.diamonds, .nine) | makeCard(.hearts, .seven) | makeCard(.spades, .four);
 
     const rank = evaluateHand(three_kings);
-    try std.testing.expect(rank >= 1609 and rank <= 2466); // Three of a kind range
+    try std.testing.expect(rank / CATEGORY_STEP == 5); // Three of a kind
 }
 
 test "two pair" {
@@ -353,7 +453,7 @@ test "two pair" {
         makeCard(.clubs, .eight) | makeCard(.diamonds, .six) | makeCard(.hearts, .four);
 
     const rank = evaluateHand(two_pair);
-    try std.testing.expect(rank >= 2467 and rank <= 3324); // Two pair range
+    try std.testing.expect(rank / CATEGORY_STEP == 6); // Two pair
 }
 
 test "one pair" {
@@ -361,7 +461,7 @@ test "one pair" {
         makeCard(.clubs, .six) | makeCard(.diamonds, .four) | makeCard(.hearts, .two);
 
     const rank = evaluateHand(one_pair);
-    try std.testing.expect(rank >= 3325 and rank <= 6184); // One pair range
+    try std.testing.expect(rank / CATEGORY_STEP == 7); // One pair
 }
 
 test "high card" {
@@ -369,7 +469,7 @@ test "high card" {
         makeCard(.clubs, .six) | makeCard(.diamonds, .four) | makeCard(.hearts, .two);
 
     const rank = evaluateHand(high_card);
-    try std.testing.expect(rank >= 6185 and rank <= 7461); // High card range (worst hands)
+    try std.testing.expect(rank / CATEGORY_STEP == 8); // High card
 }
 
 test "card utilities" {
@@ -457,10 +557,9 @@ test "two trips makes full house" {
 
     const rank = evaluateHand(hand);
 
-    // Should be a full house (rank 166-321)
-    try std.testing.expect(rank >= 166 and rank <= 321);
+    // Should be a full house
+    try std.testing.expect(rank / CATEGORY_STEP == 2);
 
     // Specifically, should be AAAKK which is a very strong full house
-    // Should be 166 + 0*12 + 1 = 167 (Aces over Kings)
-    try std.testing.expect(rank == 167);
+    try std.testing.expect(rank == CATEGORY_STEP * 2 + 1);
 }
