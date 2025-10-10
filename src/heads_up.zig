@@ -18,33 +18,68 @@ const range_mod = @import("range");
 // - Diagonal entries are pocket pairs
 // - Upper triangle are suited hands
 // - Lower triangle are offsuit hands
-//
-// Note: This module has its own simple notation parsing for converting
-// hand strings to indices (0-168). This avoids dependencies on the
-// more complex range/notation modules which generate actual card combinations.
 
-pub const HandIndex = struct {
-    // Convert two ranks to an index in the 169-hand table
-    // rank1 should be >= rank2
-    // suited: true for suited hands, false for offsuit
-    pub fn getIndex(rank1: u8, rank2: u8, suited: bool) u8 {
-        std.debug.assert(rank1 >= rank2);
-        std.debug.assert(rank1 < 13 and rank2 < 13);
+/// Represents one of the 169 unique starting hands in Texas Hold'em
+/// This is a semantic type for working with preflop hand classes (e.g., "AKs", "72o", "TT")
+/// rather than specific card combinations.
+pub const StartingHand = struct {
+    high: card.Rank,
+    low: card.Rank,
+    suited: bool,
 
-        if (rank1 == rank2) {
+    /// Compute the 0-168 index for this starting hand
+    /// Index maps to position in the 169-hand matrix
+    pub fn index(self: StartingHand) u8 {
+        const high_val: u16 = @intFromEnum(self.high);
+        const low_val: u16 = @intFromEnum(self.low);
+
+        std.debug.assert(high_val >= low_val);
+
+        if (high_val == low_val) {
             // Pocket pair - on the diagonal
-            return rank1 * 13 + rank1;
-        } else if (suited) {
+            return @intCast(high_val * 13 + high_val);
+        } else if (self.suited) {
             // Suited hand - upper triangle
-            return rank1 * 13 + rank2;
+            return @intCast(high_val * 13 + low_val);
         } else {
             // Offsuit hand - lower triangle
-            return rank2 * 13 + rank1;
+            return @intCast(low_val * 13 + high_val);
         }
     }
 
-    // Parse a hand string like "AKs" or "TT" to an index
-    pub fn parseHand(hand_str: []const u8) !u8 {
+    /// Create a StartingHand from a 0-168 index
+    pub fn fromIndex(idx: u8) StartingHand {
+        std.debug.assert(idx < 169);
+
+        const row = idx / 13;
+        const col = idx % 13;
+
+        if (row == col) {
+            // Pocket pair
+            return .{
+                .high = @enumFromInt(row),
+                .low = @enumFromInt(row),
+                .suited = false, // Pocket pairs don't have suited/offsuit distinction
+            };
+        } else if (row > col) {
+            // Suited - upper triangle
+            return .{
+                .high = @enumFromInt(row),
+                .low = @enumFromInt(col),
+                .suited = true,
+            };
+        } else {
+            // Offsuit - lower triangle
+            return .{
+                .high = @enumFromInt(col),
+                .low = @enumFromInt(row),
+                .suited = false,
+            };
+        }
+    }
+
+    /// Parse a hand string like "AKs", "72o", or "TT" into a StartingHand
+    pub fn parse(hand_str: []const u8) !StartingHand {
         if (hand_str.len < 2 or hand_str.len > 3) {
             return error.InvalidHandFormat;
         }
@@ -57,120 +92,153 @@ pub const HandIndex = struct {
         else
             rank1 == rank2; // pocket pairs are implicitly "suited"
 
-        const high = @max(rank1, rank2);
-        const low = @min(rank1, rank2);
+        const high = if (@intFromEnum(rank1) >= @intFromEnum(rank2)) rank1 else rank2;
+        const low = if (@intFromEnum(rank1) < @intFromEnum(rank2)) rank1 else rank2;
 
-        return getIndex(high, low, suited);
+        return .{
+            .high = high,
+            .low = low,
+            .suited = suited,
+        };
     }
 
-    fn rankFromChar(c: u8) !u8 {
+    /// Extract starting hand class from a specific card Hand (bitfield)
+    /// Takes exactly 2 hole cards and determines their starting hand classification
+    pub fn fromHand(hand: card.Hand) StartingHand {
+        // Extract the two cards from the hand bitfield
+        var cards_found: [2]struct { rank: card.Rank, suit: card.Suit } = undefined;
+        var count: usize = 0;
+
+        for (0..52) |i| {
+            if ((hand & (@as(u64, 1) << @intCast(i))) != 0) {
+                const suit_num: u2 = @intCast(i / 13);
+                const rank_num: u4 = @intCast(i % 13);
+                cards_found[count] = .{
+                    .rank = @enumFromInt(rank_num),
+                    .suit = @enumFromInt(suit_num),
+                };
+                count += 1;
+                if (count >= 2) break;
+            }
+        }
+
+        std.debug.assert(count == 2);
+
+        const suited = cards_found[0].suit == cards_found[1].suit;
+        const high = if (@intFromEnum(cards_found[0].rank) >= @intFromEnum(cards_found[1].rank))
+            cards_found[0].rank
+        else
+            cards_found[1].rank;
+        const low = if (@intFromEnum(cards_found[0].rank) < @intFromEnum(cards_found[1].rank))
+            cards_found[0].rank
+        else
+            cards_found[1].rank;
+
+        return .{
+            .high = high,
+            .low = low,
+            .suited = suited,
+        };
+    }
+
+    fn rankFromChar(c: u8) !card.Rank {
         return switch (c) {
-            '2' => 0,
-            '3' => 1,
-            '4' => 2,
-            '5' => 3,
-            '6' => 4,
-            '7' => 5,
-            '8' => 6,
-            '9' => 7,
-            'T', 't' => 8,
-            'J', 'j' => 9,
-            'Q', 'q' => 10,
-            'K', 'k' => 11,
-            'A', 'a' => 12,
+            '2' => .two,
+            '3' => .three,
+            '4' => .four,
+            '5' => .five,
+            '6' => .six,
+            '7' => .seven,
+            '8' => .eight,
+            '9' => .nine,
+            'T', 't' => .ten,
+            'J', 'j' => .jack,
+            'Q', 'q' => .queen,
+            'K', 'k' => .king,
+            'A', 'a' => .ace,
             else => error.InvalidRank,
         };
     }
 
-    /// Convert hand index (0-168) to poker notation string
+    /// Convert this starting hand to poker notation string
     /// Returns strings like "AA", "AKs", "72o", etc.
-    pub fn toNotation(index: u8) []const u8 {
-        const row = index / 13;
-        const col = index % 13;
+    pub fn toNotation(self: StartingHand) []const u8 {
+        const high_val = @intFromEnum(self.high);
+        const low_val = @intFromEnum(self.low);
 
-        if (row == col) {
-            // Pocket pair - diagonal
-            return switch (row) {
-                0 => "22",
-                1 => "33",
-                2 => "44",
-                3 => "55",
-                4 => "66",
-                5 => "77",
-                6 => "88",
-                7 => "99",
-                8 => "TT",
-                9 => "JJ",
-                10 => "QQ",
-                11 => "KK",
-                12 => "AA",
-                else => unreachable,
+        if (high_val == low_val) {
+            // Pocket pair
+            return switch (self.high) {
+                .two => "22",
+                .three => "33",
+                .four => "44",
+                .five => "55",
+                .six => "66",
+                .seven => "77",
+                .eight => "88",
+                .nine => "99",
+                .ten => "TT",
+                .jack => "JJ",
+                .queen => "QQ",
+                .king => "KK",
+                .ace => "AA",
             };
-        } else if (row > col) {
-            // Suited - upper triangle
-            return formatNotation(row, col, true);
         } else {
-            // Offsuit - lower triangle
-            return formatNotation(col, row, false);
+            // Generate static lookup table at comptime
+            const notations = comptime blk: {
+                var table: [13][13][2][]const u8 = undefined;
+
+                for (0..13) |h| {
+                    for (0..13) |l| {
+                        const h_char = switch (h) {
+                            0 => "2",
+                            1 => "3",
+                            2 => "4",
+                            3 => "5",
+                            4 => "6",
+                            5 => "7",
+                            6 => "8",
+                            7 => "9",
+                            8 => "T",
+                            9 => "J",
+                            10 => "Q",
+                            11 => "K",
+                            12 => "A",
+                            else => unreachable,
+                        };
+                        const l_char = switch (l) {
+                            0 => "2",
+                            1 => "3",
+                            2 => "4",
+                            3 => "5",
+                            4 => "6",
+                            5 => "7",
+                            6 => "8",
+                            7 => "9",
+                            8 => "T",
+                            9 => "J",
+                            10 => "Q",
+                            11 => "K",
+                            12 => "A",
+                            else => unreachable,
+                        };
+
+                        table[h][l][0] = h_char ++ l_char ++ "s";
+                        table[h][l][1] = h_char ++ l_char ++ "o";
+                    }
+                }
+                break :blk table;
+            };
+
+            const suit_idx: usize = if (self.suited) 0 else 1;
+            return notations[high_val][low_val][suit_idx];
         }
     }
 
-    /// Format two ranks into notation like "AKs" or "QJo"
-    fn formatNotation(high_rank: u8, low_rank: u8, suited: bool) []const u8 {
-        // Generate static lookup table at comptime
-        const notations = comptime blk: {
-            var table: [13][13][2][]const u8 = undefined;
-
-            for (0..13) |h| {
-                for (0..13) |l| {
-                    const h_char = switch (h) {
-                        0 => "2",
-                        1 => "3",
-                        2 => "4",
-                        3 => "5",
-                        4 => "6",
-                        5 => "7",
-                        6 => "8",
-                        7 => "9",
-                        8 => "T",
-                        9 => "J",
-                        10 => "Q",
-                        11 => "K",
-                        12 => "A",
-                        else => unreachable,
-                    };
-                    const l_char = switch (l) {
-                        0 => "2",
-                        1 => "3",
-                        2 => "4",
-                        3 => "5",
-                        4 => "6",
-                        5 => "7",
-                        6 => "8",
-                        7 => "9",
-                        8 => "T",
-                        9 => "J",
-                        10 => "Q",
-                        11 => "K",
-                        12 => "A",
-                        else => unreachable,
-                    };
-
-                    table[h][l][0] = h_char ++ l_char ++ "s";
-                    table[h][l][1] = h_char ++ l_char ++ "o";
-                }
-            }
-            break :blk table;
-        };
-
-        const idx: usize = if (suited) 0 else 1;
-        return notations[high_rank][low_rank][idx];
-    }
-
-    /// Create a Range containing all combinations for this hand index
-    /// Example: toRange(168, allocator) creates Range with all 6 AA combinations
-    pub fn toRange(index: u8, allocator: std.mem.Allocator) !range_mod.Range {
-        const notation = toNotation(index);
+    /// Create a Range containing all card combinations for this starting hand
+    /// Example: StartingHand.parse("AA").toRange(allocator) creates Range with all 6 AA combinations
+    pub fn toRange(self: StartingHand, allocator: std.mem.Allocator) !range_mod.Range {
+        const notation = self.toNotation();
         return range_mod.parseRange(notation, allocator);
     }
 };
@@ -194,8 +262,10 @@ pub const HeadsUpEquity = struct {
         loss: f32,
     };
 
-    // Get preflop equity for a specific matchup using exact 169x169 table
-    pub fn getPreflopEquity(hero_idx: u8, villain_idx: u8) Result {
+    /// Get preflop equity for a specific matchup using exact 169x169 table
+    pub fn getPreflopEquity(hero: StartingHand, villain: StartingHand) Result {
+        const hero_idx = hero.index();
+        const villain_idx = villain.index();
         const equity_data = HEADS_UP_MATRIX[hero_idx][villain_idx];
 
         const win_rate = @as(f32, @floatFromInt(equity_data[0])) / 1000.0;
@@ -209,100 +279,112 @@ pub const HeadsUpEquity = struct {
         };
     }
 
-    // Fast path for preflop all-in scenarios
+    /// Fast path for preflop all-in scenarios
+    /// Takes specific hole cards and returns equity based on their starting hand class
     pub fn evaluatePreflopAllIn(
         hero_cards: card.Hand,
         villain_cards: card.Hand,
     ) Result {
-        // Convert cards to hand indices
-        const hero_idx = getHandIndex(hero_cards);
-        const villain_idx = getHandIndex(villain_cards);
+        const hero = StartingHand.fromHand(hero_cards);
+        const villain = StartingHand.fromHand(villain_cards);
 
-        return getPreflopEquity(hero_idx, villain_idx);
-    }
-
-    fn getHandIndex(hand: card.Hand) u8 {
-        // Extract the two cards from the hand bitfield
-        var cards_found: [2]struct { rank: u8, suit: u8 } = undefined;
-        var count: usize = 0;
-
-        for (0..52) |i| {
-            if ((hand & (@as(u64, 1) << @intCast(i))) != 0) {
-                cards_found[count] = .{
-                    .rank = @intCast(i % 13),
-                    .suit = @intCast(i / 13),
-                };
-                count += 1;
-                if (count >= 2) break;
-            }
-        }
-
-        const suited = cards_found[0].suit == cards_found[1].suit;
-        const high = @max(cards_found[0].rank, cards_found[1].rank);
-        const low = @min(cards_found[0].rank, cards_found[1].rank);
-
-        return HandIndex.getIndex(high, low, suited);
+        return getPreflopEquity(hero, villain);
     }
 };
 
-test "hand index calculation" {
+test "StartingHand index calculation" {
     // Test pocket pairs
-    try std.testing.expectEqual(@as(u8, 0), HandIndex.getIndex(0, 0, false)); // 22
-    try std.testing.expectEqual(@as(u8, 168), HandIndex.getIndex(12, 12, false)); // AA
+    const deuces = StartingHand{ .high = .two, .low = .two, .suited = false };
+    try std.testing.expectEqual(@as(u8, 0), deuces.index());
+
+    const aces = StartingHand{ .high = .ace, .low = .ace, .suited = false };
+    try std.testing.expectEqual(@as(u8, 168), aces.index());
 
     // Test suited hands
-    try std.testing.expectEqual(@as(u8, 167), HandIndex.getIndex(12, 11, true)); // AKs
+    const aks = StartingHand{ .high = .ace, .low = .king, .suited = true };
+    try std.testing.expectEqual(@as(u8, 167), aks.index());
 
     // Test offsuit hands
-    try std.testing.expectEqual(@as(u8, 155), HandIndex.getIndex(12, 11, false)); // AKo
+    const ako = StartingHand{ .high = .ace, .low = .king, .suited = false };
+    try std.testing.expectEqual(@as(u8, 155), ako.index());
 }
 
-test "parse hand strings" {
-    try std.testing.expectEqual(@as(u8, 168), try HandIndex.parseHand("AA"));
-    try std.testing.expectEqual(@as(u8, 167), try HandIndex.parseHand("AKs"));
-    try std.testing.expectEqual(@as(u8, 155), try HandIndex.parseHand("AKo"));
-    try std.testing.expectEqual(@as(u8, 0), try HandIndex.parseHand("22"));
+test "StartingHand.parse" {
+    const aa = try StartingHand.parse("AA");
+    try std.testing.expectEqual(@as(u8, 168), aa.index());
+    try std.testing.expectEqual(card.Rank.ace, aa.high);
+    try std.testing.expectEqual(card.Rank.ace, aa.low);
+
+    const aks = try StartingHand.parse("AKs");
+    try std.testing.expectEqual(@as(u8, 167), aks.index());
+    try std.testing.expect(aks.suited);
+
+    const ako = try StartingHand.parse("AKo");
+    try std.testing.expectEqual(@as(u8, 155), ako.index());
+    try std.testing.expect(!ako.suited);
+
+    const twos = try StartingHand.parse("22");
+    try std.testing.expectEqual(@as(u8, 0), twos.index());
 }
 
-test "HandIndex.toNotation roundtrip" {
+test "StartingHand.fromIndex" {
+    const aa = StartingHand.fromIndex(168);
+    try std.testing.expectEqual(card.Rank.ace, aa.high);
+    try std.testing.expectEqual(card.Rank.ace, aa.low);
+
+    const aks = StartingHand.fromIndex(167);
+    try std.testing.expectEqual(card.Rank.ace, aks.high);
+    try std.testing.expectEqual(card.Rank.king, aks.low);
+    try std.testing.expect(aks.suited);
+
+    const ako = StartingHand.fromIndex(155);
+    try std.testing.expectEqual(card.Rank.ace, ako.high);
+    try std.testing.expectEqual(card.Rank.king, ako.low);
+    try std.testing.expect(!ako.suited);
+}
+
+test "StartingHand.toNotation" {
     // Test that toNotation produces correct strings
-    try std.testing.expectEqualStrings("AA", HandIndex.toNotation(168));
-    try std.testing.expectEqualStrings("KK", HandIndex.toNotation(154));
-    try std.testing.expectEqualStrings("QQ", HandIndex.toNotation(140));
-    try std.testing.expectEqualStrings("22", HandIndex.toNotation(0));
+    try std.testing.expectEqualStrings("AA", StartingHand.fromIndex(168).toNotation());
+    try std.testing.expectEqualStrings("KK", StartingHand.fromIndex(154).toNotation());
+    try std.testing.expectEqualStrings("QQ", StartingHand.fromIndex(140).toNotation());
+    try std.testing.expectEqualStrings("22", StartingHand.fromIndex(0).toNotation());
 
     // Test suited and offsuit
-    try std.testing.expectEqualStrings("AKs", HandIndex.toNotation(167));
-    try std.testing.expectEqualStrings("AKo", HandIndex.toNotation(155));
+    try std.testing.expectEqualStrings("AKs", StartingHand.fromIndex(167).toNotation());
+    try std.testing.expectEqualStrings("AKo", StartingHand.fromIndex(155).toNotation());
 
-    // Test roundtrip: notation -> index -> notation
-    const aa_idx = try HandIndex.parseHand("AA");
-    try std.testing.expectEqualStrings("AA", HandIndex.toNotation(aa_idx));
+    // Test roundtrip: notation -> parse -> toNotation
+    const aa = try StartingHand.parse("AA");
+    try std.testing.expectEqualStrings("AA", aa.toNotation());
 
-    const aks_idx = try HandIndex.parseHand("AKs");
-    try std.testing.expectEqualStrings("AKs", HandIndex.toNotation(aks_idx));
+    const aks = try StartingHand.parse("AKs");
+    try std.testing.expectEqualStrings("AKs", aks.toNotation());
 
-    const ako_idx = try HandIndex.parseHand("AKo");
-    try std.testing.expectEqualStrings("AKo", HandIndex.toNotation(ako_idx));
+    const ako = try StartingHand.parse("AKo");
+    try std.testing.expectEqualStrings("AKo", ako.toNotation());
 }
 
-test "HandIndex.toRange creates correct ranges" {
+test "StartingHand.toRange creates correct ranges" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
     // Test AA creates 6 combinations
-    var aa_range = try HandIndex.toRange(168, allocator);
+    const aa = StartingHand.fromIndex(168);
+    var aa_range = try aa.toRange(allocator);
     defer aa_range.deinit();
     try std.testing.expect(aa_range.handCount() == 6);
 
     // Test AKs creates 4 combinations
-    var aks_range = try HandIndex.toRange(167, allocator);
+    const aks = StartingHand.fromIndex(167);
+    var aks_range = try aks.toRange(allocator);
     defer aks_range.deinit();
     try std.testing.expect(aks_range.handCount() == 4);
 
     // Test AKo creates 12 combinations
-    var ako_range = try HandIndex.toRange(155, allocator);
+    const ako = StartingHand.fromIndex(155);
+    var ako_range = try ako.toRange(allocator);
     defer ako_range.deinit();
     try std.testing.expect(ako_range.handCount() == 12);
 }

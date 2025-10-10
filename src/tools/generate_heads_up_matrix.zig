@@ -194,14 +194,17 @@ fn workerThread(ctx: *ThreadContext) void {
         const hero_idx = matchup[0];
         const villain_idx = matchup[1];
 
-        // Use HandIndex.toRange() to create ranges for each hand index
-        var hero_range = poker.HandIndex.toRange(hero_idx, allocator) catch |err| {
+        // Use StartingHand.toRange() to create ranges for each hand index
+        const hero_hand = poker.StartingHand.fromIndex(hero_idx);
+        const villain_hand = poker.StartingHand.fromIndex(villain_idx);
+
+        var hero_range = hero_hand.toRange(allocator) catch |err| {
             print("Thread {} error creating range for hero index {}: {}\n", .{ ctx.thread_id, hero_idx, err });
             continue;
         };
         defer hero_range.deinit();
 
-        var villain_range = poker.HandIndex.toRange(villain_idx, allocator) catch |err| {
+        var villain_range = villain_hand.toRange(allocator) catch |err| {
             print("Thread {} error creating range for villain index {}: {}\n", .{ ctx.thread_id, villain_idx, err });
             continue;
         };
@@ -270,8 +273,8 @@ fn writeMatrixFile(matrix: [169][169][2]u16) !void {
 
         // Add comment for pocket pairs
         if (i % 13 == i / 13) {
-            const rank_name = getRankName(@intCast(i / 13));
-            try writer.print(" // {s}{s}\n", .{ rank_name, rank_name });
+            const notation = getHandName(@intCast(i));
+            try writer.print(" // {s}\n", .{notation});
         } else {
             try writer.print("\n", .{});
         }
@@ -282,23 +285,9 @@ fn writeMatrixFile(matrix: [169][169][2]u16) !void {
     try file.writeAll(fbs.getWritten());
 }
 
-fn getRankName(rank: u8) []const u8 {
-    return switch (rank) {
-        0 => "2",
-        1 => "3",
-        2 => "4",
-        3 => "5",
-        4 => "6",
-        5 => "7",
-        6 => "8",
-        7 => "9",
-        8 => "T",
-        9 => "J",
-        10 => "Q",
-        11 => "K",
-        12 => "A",
-        else => "?",
-    };
+fn getHandName(index: u8) []const u8 {
+    const hand = poker.StartingHand.fromIndex(index);
+    return hand.toNotation();
 }
 
 fn validateKnownMatchups(matrix: [169][169][2]u16) bool {

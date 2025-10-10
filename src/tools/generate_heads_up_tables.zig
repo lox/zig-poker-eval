@@ -49,22 +49,15 @@ const std = @import("std");
 const poker = @import("poker");
 const print = std.debug.print;
 
-const StartingHand = struct {
-    rank1: u8,
-    rank2: u8,
-    suited: bool,
-    index: u8,
-};
-
 const HandResult = struct {
-    index: u8,
+    hand: poker.StartingHand,
     wins: u64,
     losses: u64,
     ties: u64,
 };
 
 const ThreadContext = struct {
-    hands: []const StartingHand,
+    hands: []const poker.StartingHand,
     results: []HandResult,
     start_idx: usize,
     end_idx: usize,
@@ -102,7 +95,7 @@ pub fn main() !void {
     // Initialize results
     for (results, 0..) |*result, i| {
         result.* = .{
-            .index = @intCast(i),
+            .hand = hands[i],
             .wins = 0,
             .losses = 0,
             .ties = 0,
@@ -209,55 +202,34 @@ fn workerThread(ctx: *ThreadContext) void {
 
 // Old calculateEquityVsRandomFast function removed - now using equity.exactVsRandom()
 
-fn generateStartingHands() [169]StartingHand {
-    var hands: [169]StartingHand = undefined;
-    var index: u8 = 0;
+fn generateStartingHands() [169]poker.StartingHand {
+    var hands: [169]poker.StartingHand = undefined;
 
-    for (0..13) |r1| {
-        for (0..13) |r2| {
-            if (r1 == r2) {
-                hands[index] = .{
-                    .rank1 = @intCast(r1),
-                    .rank2 = @intCast(r2),
-                    .suited = false,
-                    .index = index,
-                };
-                index += 1;
-            } else if (r1 > r2) {
-                hands[index] = .{
-                    .rank1 = @intCast(r1),
-                    .rank2 = @intCast(r2),
-                    .suited = true,
-                    .index = index,
-                };
-                index += 1;
-            } else {
-                hands[index] = .{
-                    .rank1 = @intCast(r2),
-                    .rank2 = @intCast(r1),
-                    .suited = false,
-                    .index = index,
-                };
-                index += 1;
-            }
-        }
+    for (0..169) |i| {
+        hands[i] = poker.StartingHand.fromIndex(@intCast(i));
     }
 
     return hands;
 }
 
-fn createHand(hand: StartingHand) u64 {
-    if (hand.rank1 == hand.rank2) {
-        const card1 = hand.rank1 + (0 * 13);
-        const card2 = hand.rank1 + (1 * 13);
+fn createHand(hand: poker.StartingHand) u64 {
+    const high_val = @intFromEnum(hand.high);
+    const low_val = @intFromEnum(hand.low);
+
+    if (high_val == low_val) {
+        // Pocket pair - use clubs and diamonds
+        const card1 = high_val + (0 * 13); // clubs
+        const card2 = high_val + (1 * 13); // diamonds
         return (@as(u64, 1) << @intCast(card1)) | (@as(u64, 1) << @intCast(card2));
     } else if (hand.suited) {
-        const card1 = hand.rank1 + (0 * 13);
-        const card2 = hand.rank2 + (0 * 13);
+        // Suited - both cards same suit (clubs)
+        const card1 = high_val + (0 * 13);
+        const card2 = low_val + (0 * 13);
         return (@as(u64, 1) << @intCast(card1)) | (@as(u64, 1) << @intCast(card2));
     } else {
-        const card1 = hand.rank1 + (0 * 13);
-        const card2 = hand.rank2 + (1 * 13);
+        // Offsuit - different suits (clubs and diamonds)
+        const card1 = high_val + (0 * 13);
+        const card2 = low_val + (1 * 13);
         return (@as(u64, 1) << @intCast(card1)) | (@as(u64, 1) << @intCast(card2));
     }
 }
@@ -294,24 +266,17 @@ fn writeTableFile(equity_table: [169][2]u16) !void {
 }
 
 fn getHandComment(index: u8) []const u8 {
-    return switch (index) {
-        0 => "22",
-        14 => "33",
-        28 => "44",
-        42 => "55",
-        56 => "66",
-        70 => "77",
-        84 => "88",
-        98 => "99",
-        112 => "TT",
-        126 => "JJ",
-        140 => "QQ",
-        154 => "KK",
-        168 => "AA",
-        167 => "AKs",
-        155 => "AKo",
-        else => "",
-    };
+    const hand = poker.StartingHand.fromIndex(index);
+    const notation = hand.toNotation();
+
+    // Only show comments for pocket pairs and notable hands
+    if (hand.high == hand.low) {
+        return notation; // All pocket pairs
+    } else if (index == 167 or index == 155) {
+        return notation; // AKs and AKo
+    } else {
+        return "";
+    }
 }
 
 fn validateKnownEquities(equity_table: [169][2]u16) !bool {

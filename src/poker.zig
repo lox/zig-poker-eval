@@ -172,13 +172,13 @@ pub const heroVsFieldMonteCarlo = equity.heroVsFieldMonteCarlo;
 
 // === HEADS-UP EQUITY TABLES ===
 
+/// Represents one of the 169 unique starting hands in Texas Hold'em
+/// Used for preflop hand classification (e.g., "AKs", "72o", "TT")
+pub const StartingHand = heads_up_mod.StartingHand;
+
 /// Fast heads-up preflop equity using pre-computed tables
 /// 169 unique starting hands indexed for O(1) lookup
 pub const HeadsUpEquity = heads_up_mod.HeadsUpEquity;
-
-/// Index system for the 169 unique starting hands
-/// Handles pocket pairs, suited, and offsuit combinations
-pub const HandIndex = heads_up_mod.HandIndex;
 
 /// Pre-computed equity vs random opponent for all 169 hands
 /// Used as baseline for fast approximations
