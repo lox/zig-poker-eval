@@ -194,71 +194,152 @@ fn workerThread(ctx: *ThreadContext) void {
         const hero_idx = matchup[0];
         const villain_idx = matchup[1];
 
-        // Create canonical non-conflicting hands for this matchup
-        const hero_hand = createCanonicalHand(hero_idx, 0);
-        const villain_hand = createCanonicalHand(villain_idx, 2);
+        // Convert indices to notation strings
+        const hero_notation = indexToNotation(hero_idx);
+        const villain_notation = indexToNotation(villain_idx);
 
-        // Calculate exact head-to-head equity
-        const equity_result = poker.equity.exactHeadToHead(hero_hand, villain_hand, allocator) catch |err| {
+        // Use range API to create ranges and calculate equity
+        var hero_range = poker.parseRange(hero_notation, allocator) catch |err| {
+            print("Thread {} error parsing hero {s}: {}\n", .{ ctx.thread_id, hero_notation, err });
+            continue;
+        };
+        defer hero_range.deinit();
+
+        var villain_range = poker.parseRange(villain_notation, allocator) catch |err| {
+            print("Thread {} error parsing villain {s}: {}\n", .{ ctx.thread_id, villain_notation, err });
+            continue;
+        };
+        defer villain_range.deinit();
+
+        // Calculate exact equity using range API (handles all combinations and weighting)
+        const range_result = hero_range.equityExact(&villain_range, &.{}, allocator) catch |err| {
             print("Thread {} error on matchup [{},{}]: {}\n", .{ ctx.thread_id, hero_idx, villain_idx, err });
             continue;
         };
 
+        // Convert range equity to matchup result
+        const total_combos = range_result.total_simulations;
+        const wins = @as(u32, @intFromFloat(range_result.hero_equity * @as(f64, @floatFromInt(total_combos))));
+        const ties = 0; // Range API doesn't track ties separately, it's in the equity
+
         ctx.results[idx] = MatchupResult{
             .hero_idx = hero_idx,
             .villain_idx = villain_idx,
-            .wins = equity_result.wins,
-            .ties = equity_result.ties,
-            .total = equity_result.total_simulations,
+            .wins = wins,
+            .ties = ties,
+            .total = total_combos,
         };
 
         // Progress reporting
         progress_counter += 1;
         if (progress_counter % report_interval == 0) {
             const pct = (@as(f64, @floatFromInt(idx - ctx.start_idx + 1)) / @as(f64, @floatFromInt(ctx.end_idx - ctx.start_idx))) * 100.0;
-            print("Thread {} - {d:.1}% ({}/{})\n", .{
+            print("Thread {} - {d:.1}% ({}/{}) - {s} vs {s}: {d:.1}%\n", .{
                 ctx.thread_id,
                 pct,
                 idx - ctx.start_idx + 1,
                 ctx.end_idx - ctx.start_idx,
+                hero_notation,
+                villain_notation,
+                range_result.hero_equity * 100.0,
             });
         }
     }
 }
 
-/// Create a canonical non-conflicting hand for a given index
-/// suit_offset: 0=clubs/diamonds, 2=hearts/spades (ensures no conflicts)
-///
+/// Convert hand index (0-168) to poker notation string
 /// Index mapping (from HandIndex.getIndex):
 /// - Pocket pairs: rank * 13 + rank (diagonal, rank1 == rank2)
-/// - Suited: high_rank * 13 + low_rank (upper triangle, rank1 > rank2)
-/// - Offsuit: low_rank * 13 + high_rank (lower triangle, rank1 < rank2)
-fn createCanonicalHand(hand_idx: u8, suit_offset: u8) u64 {
-    const row = hand_idx / 13; // This is one of the ranks
-    const col = hand_idx % 13; // This is the other rank
+/// - Suited: high_rank * 13 + low_rank (upper triangle, row > col)
+/// - Offsuit: low_rank * 13 + high_rank (lower triangle, row < col)
+fn indexToNotation(hand_idx: u8) []const u8 {
+    const row = hand_idx / 13;
+    const col = hand_idx % 13;
 
     if (row == col) {
-        // Pocket pair - diagonal (e.g., AA, KK, etc.)
-        const rank = row;
-        const card1 = rank + (suit_offset * 13);
-        const card2 = rank + ((suit_offset + 1) * 13);
-        return (@as(u64, 1) << @intCast(card1)) | (@as(u64, 1) << @intCast(card2));
+        // Pocket pair - diagonal
+        return switch (row) {
+            0 => "22",
+            1 => "33",
+            2 => "44",
+            3 => "55",
+            4 => "66",
+            5 => "77",
+            6 => "88",
+            7 => "99",
+            8 => "TT",
+            9 => "JJ",
+            10 => "QQ",
+            11 => "KK",
+            12 => "AA",
+            else => unreachable,
+        };
     } else if (row > col) {
-        // Suited hand - upper triangle (e.g., AKs where A > K)
+        // Suited - upper triangle
         const high_rank = row;
         const low_rank = col;
-        const suit = suit_offset;
-        const card1 = high_rank + (suit * 13);
-        const card2 = low_rank + (suit * 13);
-        return (@as(u64, 1) << @intCast(card1)) | (@as(u64, 1) << @intCast(card2));
+        return formatHandNotation(high_rank, low_rank, true);
     } else {
-        // Offsuit hand - lower triangle (e.g., AKo where row=K, col=A)
-        const high_rank = col; // Column is the higher rank
-        const low_rank = row; // Row is the lower rank
-        const card1 = high_rank + (suit_offset * 13);
-        const card2 = low_rank + ((suit_offset + 1) * 13);
-        return (@as(u64, 1) << @intCast(card1)) | (@as(u64, 1) << @intCast(card2));
+        // Offsuit - lower triangle (col > row)
+        const high_rank = col;
+        const low_rank = row;
+        return formatHandNotation(high_rank, low_rank, false);
     }
+}
+
+/// Format two ranks into notation like "AKs" or "QJo"
+/// Returns a static string literal for each possible combination
+fn formatHandNotation(high_rank: u8, low_rank: u8, suited: bool) []const u8 {
+    // Generate static lookup table at comptime
+    const notations = comptime blk: {
+        var table: [13][13][2][]const u8 = undefined;
+
+        // For each high rank
+        for (0..13) |h| {
+            // For each low rank
+            for (0..13) |l| {
+                const h_char = switch (h) {
+                    0 => "2",
+                    1 => "3",
+                    2 => "4",
+                    3 => "5",
+                    4 => "6",
+                    5 => "7",
+                    6 => "8",
+                    7 => "9",
+                    8 => "T",
+                    9 => "J",
+                    10 => "Q",
+                    11 => "K",
+                    12 => "A",
+                    else => unreachable,
+                };
+                const l_char = switch (l) {
+                    0 => "2",
+                    1 => "3",
+                    2 => "4",
+                    3 => "5",
+                    4 => "6",
+                    5 => "7",
+                    6 => "8",
+                    7 => "9",
+                    8 => "T",
+                    9 => "J",
+                    10 => "Q",
+                    11 => "K",
+                    12 => "A",
+                    else => unreachable,
+                };
+
+                table[h][l][0] = h_char ++ l_char ++ "s";
+                table[h][l][1] = h_char ++ l_char ++ "o";
+            }
+        }
+        break :blk table;
+    };
+
+    const idx: usize = if (suited) 0 else 1;
+    return notations[high_rank][low_rank][idx];
 }
 
 fn writeMatrixFile(matrix: [169][169][2]u16) !void {
