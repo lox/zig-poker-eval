@@ -12,35 +12,16 @@ pub const Hand = card.Hand;
 pub const Suit = card.Suit;
 pub const Rank = card.Rank;
 
-/// Simple hand key for hash map - uses sorted card bits
-const HandKey = struct {
-    card1_bits: u64,
-    card2_bits: u64,
-
-    fn init(hole_hand: [2]Hand) HandKey {
-        // Sort cards to ensure consistent ordering regardless of input order
-        if (hole_hand[0] <= hole_hand[1]) {
-            return HandKey{ .card1_bits = hole_hand[0], .card2_bits = hole_hand[1] };
-        } else {
-            return HandKey{ .card1_bits = hole_hand[1], .card2_bits = hole_hand[0] };
-        }
-    }
-
-    fn toHand(self: HandKey) [2]Hand {
-        return [2]Hand{ self.card1_bits, self.card2_bits };
-    }
-};
-
 /// Efficient representation of a poker hand range
-/// Uses HashMap for simplicity and correctness
+/// Uses HashMap with combined Hand (u64) as key for performance
 pub const Range = struct {
-    /// Map from hand to probability
-    hands: std.AutoHashMap(HandKey, f32),
+    /// Map from combined hand to probability
+    hands: std.AutoHashMap(Hand, f32),
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) Range {
         return Range{
-            .hands = std.AutoHashMap(HandKey, f32).init(allocator),
+            .hands = std.AutoHashMap(Hand, f32).init(allocator),
             .allocator = allocator,
         };
     }
@@ -51,8 +32,8 @@ pub const Range = struct {
 
     /// Add a hand to the range with given probability
     pub fn addHand(self: *Range, hole_hand: [2]Hand, probability: f32) !void {
-        const hand_key = HandKey.init(hole_hand);
-        try self.hands.put(hand_key, probability);
+        const combined = hand.combine(hole_hand);
+        try self.hands.put(combined, probability);
     }
 
     /// Add a hand using poker notation (e.g., "AA", "AKs", "AKo")
@@ -62,15 +43,13 @@ pub const Range = struct {
     pub fn addHandNotation(self: *Range, notation: []const u8, probability: f32) !void {
         if (notation.len < 2 or notation.len > 3) return error.InvalidNotation;
 
-        const rank1 = parseRank(notation[0]) orelse return error.InvalidRank;
-        const rank2 = parseRank(notation[1]) orelse return error.InvalidRank;
-        const rank1_idx = @as(u8, @intCast(rank1 - 2)); // Convert poker rank to card rank (0-12)
-        const rank2_idx = @as(u8, @intCast(rank2 - 2));
+        const rank1 = hand.parseRank(notation[0]) orelse return error.InvalidRank;
+        const rank2 = hand.parseRank(notation[1]) orelse return error.InvalidRank;
 
         if (notation.len == 2) {
             if (rank1 == rank2) {
                 // Pocket pair - add all 6 combinations
-                const combinations = try hand.generatePocketPair(@enumFromInt(rank1_idx), self.allocator);
+                const combinations = try hand.generatePocketPair(rank1, self.allocator);
                 defer self.allocator.free(combinations);
 
                 for (combinations) |combo| {
@@ -78,11 +57,7 @@ pub const Range = struct {
                 }
             } else {
                 // Unpaired hand without modifier - add all 16 combinations (suited + offsuit)
-                const combinations = try hand.generateAllCombinations(
-                    @enumFromInt(rank1_idx),
-                    @enumFromInt(rank2_idx),
-                    self.allocator,
-                );
+                const combinations = try hand.generateAllCombinations(rank1, rank2, self.allocator);
                 defer self.allocator.free(combinations);
 
                 for (combinations) |combo| {
@@ -97,11 +72,7 @@ pub const Range = struct {
             switch (modifier) {
                 's', 'S' => {
                     // Suited - add 4 combinations
-                    const combinations = try hand.generateSuitedCombinations(
-                        @enumFromInt(rank1_idx),
-                        @enumFromInt(rank2_idx),
-                        self.allocator,
-                    );
+                    const combinations = try hand.generateSuitedCombinations(rank1, rank2, self.allocator);
                     defer self.allocator.free(combinations);
 
                     for (combinations) |combo| {
@@ -110,11 +81,7 @@ pub const Range = struct {
                 },
                 'o', 'O' => {
                     // Offsuit - add 12 combinations
-                    const combinations = try hand.generateOffsuitCombinations(
-                        @enumFromInt(rank1_idx),
-                        @enumFromInt(rank2_idx),
-                        self.allocator,
-                    );
+                    const combinations = try hand.generateOffsuitCombinations(rank1, rank2, self.allocator);
                     defer self.allocator.free(combinations);
 
                     for (combinations) |combo| {
@@ -137,8 +104,8 @@ pub const Range = struct {
 
     /// Get probability of a specific hand in range
     pub fn getHandProbability(self: *const Range, hole_hand: [2]Hand) f32 {
-        const hand_key = HandKey.init(hole_hand);
-        return self.hands.get(hand_key) orelse 0.0;
+        const combined = hand.combine(hole_hand);
+        return self.hands.get(combined) orelse 0.0;
     }
 
     /// Get total number of hand combinations in range
@@ -146,16 +113,16 @@ pub const Range = struct {
         return @intCast(self.hands.count());
     }
 
-    /// Iterator for efficient range traversal
+    /// Iterator for efficient range traversal (returns split hands for API compatibility)
     pub const Iterator = struct {
-        inner: std.AutoHashMap(HandKey, f32).Iterator,
+        inner: std.AutoHashMap(Hand, f32).Iterator,
 
         pub fn next(self: *Iterator) ?struct { hand: [2]Hand, probability: f32 } {
             if (self.inner.next()) |entry| {
-                const hand_key = entry.key_ptr.*;
+                const combined = entry.key_ptr.*;
                 const probability = entry.value_ptr.*;
 
-                return .{ .hand = hand_key.toHand(), .probability = probability };
+                return .{ .hand = hand.split(combined), .probability = probability };
             }
             return null;
         }
@@ -165,11 +132,32 @@ pub const Range = struct {
         return Iterator{ .inner = self.hands.iterator() };
     }
 
+    /// Internal iterator that returns combined hands for performance
+    const CombinedIterator = struct {
+        inner: std.AutoHashMap(Hand, f32).Iterator,
+
+        pub fn next(self: *CombinedIterator) ?struct { hand: Hand, probability: f32 } {
+            if (self.inner.next()) |entry| {
+                return .{ .hand = entry.key_ptr.*, .probability = entry.value_ptr.* };
+            }
+            return null;
+        }
+    };
+
+    fn combinedIterator(self: *const Range) CombinedIterator {
+        return CombinedIterator{ .inner = self.hands.iterator() };
+    }
+
     /// Sample a random hand from this range using weighted probability
     pub fn sample(self: *const Range, rng: std.Random) [2]Hand {
+        return hand.split(self.sampleCombined(rng));
+    }
+
+    /// Sample a random combined hand from this range (optimized for hot paths)
+    fn sampleCombined(self: *const Range, rng: std.Random) Hand {
         // Calculate total weight
         var total_weight: f64 = 0;
-        var iter = self.iterator();
+        var iter = self.combinedIterator();
         while (iter.next()) |entry| {
             total_weight += entry.probability;
         }
@@ -178,7 +166,7 @@ pub const Range = struct {
         const target = rng.float(f64) * total_weight;
         var cumulative: f64 = 0;
 
-        var sample_iter = self.iterator();
+        var sample_iter = self.combinedIterator();
         while (sample_iter.next()) |entry| {
             cumulative += entry.probability;
             if (cumulative >= target) {
@@ -187,7 +175,7 @@ pub const Range = struct {
         }
 
         // Fallback - return first hand (should not happen with proper weights)
-        var fallback_iter = self.iterator();
+        var fallback_iter = self.combinedIterator();
         if (fallback_iter.next()) |entry| {
             return entry.hand;
         }
@@ -211,13 +199,22 @@ pub const Range = struct {
         var total_weight: f64 = 0.0;
         var total_combinations: u32 = 0;
 
-        // Iterate through all combinations of hands from both ranges
-        var hero_iter = self.iterator();
+        // Combine board cards once
+        var board_hand: Hand = 0;
+        for (board) |board_card| {
+            board_hand |= board_card;
+        }
+
+        // Use combined iterator for better performance
+        var hero_iter = self.combinedIterator();
         while (hero_iter.next()) |hero_entry| {
-            var villain_iter = opponent.iterator();
+            var villain_iter = opponent.combinedIterator();
             while (villain_iter.next()) |villain_entry| {
-                // Check for card conflicts
-                if (hand.hasCardConflict(hero_entry.hand, villain_entry.hand, board)) {
+                // Check for card conflicts using combined hands
+                if ((hero_entry.hand & villain_entry.hand) != 0 or
+                    (hero_entry.hand & board_hand) != 0 or
+                    (villain_entry.hand & board_hand) != 0)
+                {
                     continue;
                 }
 
@@ -225,10 +222,8 @@ pub const Range = struct {
                 const weight = hero_entry.probability * villain_entry.probability;
                 total_weight += weight;
 
-                // Calculate equity for this matchup
-                const hero_combined = hero_entry.hand[0] | hero_entry.hand[1];
-                const villain_combined = villain_entry.hand[0] | villain_entry.hand[1];
-                const result = try equity.exact(hero_combined, villain_combined, board, allocator);
+                // Calculate equity for this matchup (already combined)
+                const result = try equity.exact(hero_entry.hand, villain_entry.hand, board, allocator);
 
                 // Accumulate weighted equity
                 total_hero_equity += result.equity() * weight;
@@ -260,20 +255,27 @@ pub const Range = struct {
         var ties: u32 = 0;
         var valid_simulations: u32 = 0;
 
+        // Combine board cards once
+        var board_hand: Hand = 0;
+        for (board) |board_card| {
+            board_hand |= board_card;
+        }
+
         var i: u32 = 0;
         while (i < simulations) : (i += 1) {
-            // Sample hands from ranges
-            const hero_hand = self.sample(rng);
-            const villain_hand = opponent.sample(rng);
+            // Sample combined hands directly (no split needed)
+            const hero_combined = self.sampleCombined(rng);
+            const villain_combined = opponent.sampleCombined(rng);
 
-            // Skip if hands conflict
-            if (hand.hasCardConflict(hero_hand, villain_hand, board)) {
+            // Check for card conflicts using combined hands
+            if ((hero_combined & villain_combined) != 0 or
+                (hero_combined & board_hand) != 0 or
+                (villain_combined & board_hand) != 0)
+            {
                 continue;
             }
 
             // Run Monte Carlo simulation for this matchup
-            const hero_combined = hero_hand[0] | hero_hand[1];
-            const villain_combined = villain_hand[0] | villain_hand[1];
             const result = try equity.monteCarlo(
                 hero_combined,
                 villain_combined,
@@ -310,26 +312,6 @@ pub const Range = struct {
         };
     }
 };
-
-/// Parse single rank character to numeric value (case-insensitive)
-fn parseRank(char: u8) ?u8 {
-    return switch (char) {
-        '2' => 2,
-        '3' => 3,
-        '4' => 4,
-        '5' => 5,
-        '6' => 6,
-        '7' => 7,
-        '8' => 8,
-        '9' => 9,
-        'T', 't' => 10,
-        'J', 'j' => 11,
-        'Q', 'q' => 12,
-        'K', 'k' => 13,
-        'A', 'a' => 14,
-        else => null,
-    };
-}
 
 /// Parse comma-delimited range notation (e.g., "AA,KK,QQ,AKs,AKo") into a Range
 pub fn parseRange(notation: []const u8, allocator: std.mem.Allocator) !Range {
@@ -431,18 +413,18 @@ test "range basic operations" {
     try testing.expect(range.getHandProbability(hole_hand) == 1.0);
 }
 
-test "hand key conversion" {
+test "combine and split round-trip" {
     const hand1 = [2]Hand{
         card.makeCard(.hearts, .ace), // Ace of hearts
         card.makeCard(.spades, .ace), // Ace of spades
     };
 
-    const hand_key = HandKey.init(hand1);
-    const reconstructed = hand_key.toHand();
+    const combined = hand.combine(hand1);
+    const reconstructed = hand.split(combined);
 
     // Check that the reconstructed bits match the original bits
-    const original_bits = hand1[0] | hand1[1];
-    const reconstructed_bits = reconstructed[0] | reconstructed[1];
+    const original_bits = hand.combine(hand1);
+    const reconstructed_bits = hand.combine(reconstructed);
     try testing.expect(original_bits == reconstructed_bits);
 }
 
@@ -451,11 +433,11 @@ test "range notation parsing" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Test parseRank function
-    try testing.expectEqual(@as(?u8, 2), parseRank('2'));
-    try testing.expectEqual(@as(?u8, 10), parseRank('T'));
-    try testing.expectEqual(@as(?u8, 14), parseRank('A'));
-    try testing.expectEqual(@as(?u8, null), parseRank('X'));
+    // Test parseRank function (now in hand.zig)
+    try testing.expectEqual(@as(?Rank, .two), hand.parseRank('2'));
+    try testing.expectEqual(@as(?Rank, .ten), hand.parseRank('T'));
+    try testing.expectEqual(@as(?Rank, .ace), hand.parseRank('A'));
+    try testing.expectEqual(@as(?Rank, null), hand.parseRank('X'));
 
     // Test range with different notations
     var range = Range.init(allocator);
