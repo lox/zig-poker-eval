@@ -85,52 +85,8 @@ pub const HandIndex = struct {
 // Pre-computed equity for all 169 starting hands vs random opponent
 // Each entry is (win_rate_x1000, tie_rate_x1000) - stored as u16 to save space
 // For example, (850, 23) means 85.0% win, 2.3% tie, 12.7% loss
-//
-// To generate real data:
-//   zig run src/tools/generate_heads_up_tables.zig
-// Then replace the placeholder data below with:
-//   const heads_up_tables = @import("heads_up_tables.zig");
-//   pub const PREFLOP_VS_RANDOM = heads_up_tables.PREFLOP_VS_RANDOM;
-pub const PREFLOP_VS_RANDOM: [169][2]u16 = computePreflopEquities();
-
-// Compute equities at compile time
-//
-// NOTE: Real equity calculation would require ~437 billion hand evaluations
-// (169 hands × 1225 opponents × 2.1M boards). This would make compilation
-// take hours/days. Options for production:
-//
-// 1. Pre-calculate offline: Generate once, save as data file (recommended)
-// 2. Monte Carlo sampling: ~10K simulations per hand (slower compilation)
-// 3. Use known values: Published equity data from poker literature
-//
-// Current implementation uses placeholder values for fast compilation.
-// TODO: Replace with actual equity data using one of the above methods.
-fn computePreflopEquities() [169][2]u16 {
-    @setEvalBranchQuota(10_000_000);
-    var result: [169][2]u16 = undefined;
-
-    // Placeholder values that approximate real equities
-    for (&result, 0..) |*entry, i| {
-        // Pocket pairs get progressively stronger
-        const is_pair = (i % 14) == 0;
-        if (is_pair) {
-            const pair_rank = i / 14;
-            // AA = ~85%, KK = ~82%, ..., 22 = ~50%
-            const win_rate = 850 - (12 - pair_rank) * 30;
-            entry.* = .{ win_rate, 5 };
-        } else {
-            // Non-pairs: suited slightly better than offsuit
-            const row = i / 13;
-            const col = i % 13;
-            const suited = col < row;
-            const base_win = 500 + (row + col) * 15;
-            const win_rate = if (suited) base_win + 30 else base_win;
-            entry.* = .{ @min(win_rate, 850), 20 };
-        }
-    }
-
-    return result;
-}
+const heads_up_tables = @import("heads_up_tables.zig");
+pub const PREFLOP_VS_RANDOM = heads_up_tables.PREFLOP_VS_RANDOM;
 
 // Fast heads-up equity calculation using pre-computed tables
 pub const HeadsUpEquity = struct {

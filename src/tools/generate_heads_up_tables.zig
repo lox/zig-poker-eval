@@ -1,6 +1,49 @@
-// Optimized heads-up equity table generator
-// Uses BoardContext + SIMD batch evaluation + multi-threading
-// Runtime: ~15 minutes for exact enumeration of all 354 billion showdowns
+// Heads-Up Equity Table Generator
+// ================================
+//
+// PURPOSE:
+// Generates precomputed equity tables for all 169 unique Texas Hold'em starting hands
+// when playing heads-up (1v1) against a random opponent. These tables enable instant
+// equity lookups during gameplay without requiring expensive real-time calculations.
+//
+// WHY WE NEED THIS:
+// Calculating exact equity requires enumerating millions of possible outcomes per hand.
+// For real-time applications (poker bots, training tools, analysis software), doing this
+// calculation on-demand is too slow. By precomputing these values once and storing them
+// in a lookup table, we can get instant O(1) equity lookups.
+//
+// ALGORITHM:
+// For each of the 169 starting hands, we perform EXACT enumeration (not Monte Carlo):
+//
+// 1. Fix hero's 2 hole cards (e.g., Ac Ad for pocket aces)
+// 2. Enumerate all possible villain hands: C(50,2) = 1,225 combinations
+// 3. For each villain hand, enumerate all boards: C(48,5) = 1,712,304 combinations
+// 4. For each scenario, determine winner using our fast evaluator
+// 5. Sum up wins/losses/ties to calculate exact equity
+//
+// Total scenarios per hand: 1,225 × 1,712,304 = 2,097,572,400
+// Total for all 169 hands: ~354 billion evaluations
+//
+// OPTIMIZATIONS:
+// - BoardContext: Precompute board analysis once, reuse for all villain hands
+// - SIMD Batch Evaluation: Process multiple hands in parallel using CPU vectorization
+// - Multi-threading: Distribute the 169 hands across available CPU cores
+// - Smart buffering: Reuse allocated arrays to minimize memory allocation
+//
+// KEY FIXES FROM INITIAL VERSION:
+// 1. BoardContext must contain ONLY the 5 board cards, not hero's hole cards
+// 2. Villain hands must be copied fresh from master list for each board (not overwritten)
+//
+// OUTPUT:
+// Generates src/heads_up_tables.zig with a 169-entry lookup table where each entry
+// contains (win_rate × 1000, tie_rate × 1000) as u16 values for space efficiency.
+// Example: {852, 18} means 85.2% win, 1.8% tie, 13.0% loss (implied)
+//
+// VALIDATION:
+// Before writing output, validates against known poker equities to ensure correctness.
+// If any validation fails, the generation aborts to prevent bad data from being used.
+//
+// Runtime: ~15-25 minutes on modern multi-core CPU
 
 const std = @import("std");
 const poker = @import("poker");
@@ -113,6 +156,18 @@ pub fn main() !void {
         }
     }
 
+    // Validate against known values before writing
+    print("\nValidating against known equities...\n", .{});
+    const valid = try validateKnownEquities(equity_table);
+
+    if (!valid) {
+        print("\n❌ VALIDATION FAILED: Generated values don't match known equities!\n", .{});
+        print("   Please check the calculation logic.\n", .{});
+        return error.ValidationFailed;
+    }
+
+    print("✓ All validations passed!\n\n", .{});
+
     // Write output
     print("Writing to src/heads_up_tables.zig...\n", .{});
     try writeTableFile(equity_table);
@@ -162,18 +217,18 @@ fn calculateEquityVsRandomFast(hand: StartingHand) !HandResult {
 
     // Pre-allocate villain hands array for batch processing
     const max_villain_hands = 1225; // C(50,2)
+    var all_villain_holes: [max_villain_hands]poker.Hand = undefined;
     var villain_holes_buffer: [max_villain_hands]poker.Hand = undefined;
     var hero_holes_buffer: [max_villain_hands]poker.Hand = undefined;
     var results_buffer: [max_villain_hands]i8 = undefined;
 
-    // Generate all villain hands once
+    // Generate all villain hands once and store in all_villain_holes
     var villain_count: usize = 0;
     for (0..available_count - 1) |v1| {
         for (v1 + 1..available_count) |v2| {
             const villain_card1 = @as(u64, 1) << @intCast(available[v1]);
             const villain_card2 = @as(u64, 1) << @intCast(available[v2]);
-            villain_holes_buffer[villain_count] = villain_card1 | villain_card2;
-            hero_holes_buffer[villain_count] = hero_hole;
+            all_villain_holes[villain_count] = villain_card1 | villain_card2;
             villain_count += 1;
         }
     }
@@ -197,16 +252,17 @@ fn calculateEquityVsRandomFast(hand: StartingHand) !HandResult {
 
                         const board = board1 | board2 | board3 | board4 | board5;
 
-                        // Create board context once for this board
-                        const board_with_hero = hero_hole | board;
-                        const ctx = poker.initBoardContext(board_with_hero);
+                        // Create board context once for this board (board only, not hole cards)
+                        const ctx = poker.initBoardContext(board);
 
                         // Filter villain hands that don't conflict with board
+                        // Copy valid hands from all_villain_holes to villain_holes_buffer
                         var valid_villain_count: usize = 0;
                         for (0..villain_count) |v| {
-                            const villain_hole = villain_holes_buffer[v];
+                            const villain_hole = all_villain_holes[v];
                             if ((villain_hole & board) == 0) {
                                 villain_holes_buffer[valid_villain_count] = villain_hole;
+                                hero_holes_buffer[valid_villain_count] = hero_hole;
                                 valid_villain_count += 1;
                             }
                         }
@@ -348,4 +404,67 @@ fn getHandComment(index: u8) []const u8 {
         155 => "AKo",
         else => "",
     };
+}
+
+fn validateKnownEquities(equity_table: [169][2]u16) !bool {
+    const KnownEquity = struct {
+        index: u8,
+        hand: []const u8,
+        expected_win: u16, // x10 (852 = 85.2%)
+        tolerance: u16, // x10 (10 = 1.0%)
+    };
+
+    // Known equities from poker literature and calculators
+    const known_values = [_]KnownEquity{
+        .{ .index = 168, .hand = "AA", .expected_win = 852, .tolerance = 10 },
+        .{ .index = 154, .hand = "KK", .expected_win = 824, .tolerance = 10 },
+        .{ .index = 140, .hand = "QQ", .expected_win = 799, .tolerance = 10 },
+        .{ .index = 126, .hand = "JJ", .expected_win = 775, .tolerance = 10 },
+        .{ .index = 112, .hand = "TT", .expected_win = 750, .tolerance = 10 },
+        .{ .index = 98, .hand = "99", .expected_win = 721, .tolerance = 10 },
+        .{ .index = 84, .hand = "88", .expected_win = 691, .tolerance = 10 },
+        .{ .index = 70, .hand = "77", .expected_win = 662, .tolerance = 10 },
+        .{ .index = 56, .hand = "66", .expected_win = 633, .tolerance = 10 },
+        .{ .index = 42, .hand = "55", .expected_win = 603, .tolerance = 10 },
+        .{ .index = 28, .hand = "44", .expected_win = 570, .tolerance = 10 },
+        .{ .index = 14, .hand = "33", .expected_win = 537, .tolerance = 10 },
+        .{ .index = 0, .hand = "22", .expected_win = 503, .tolerance = 10 },
+        .{ .index = 167, .hand = "AKs", .expected_win = 670, .tolerance = 10 },
+        .{ .index = 155, .hand = "AKo", .expected_win = 653, .tolerance = 10 },
+    };
+
+    var all_valid = true;
+    print("\n  Hand  | Expected | Generated | Diff  | Status\n", .{});
+    print("  ------|----------|-----------|-------|--------\n", .{});
+
+    for (known_values) |kv| {
+        const generated_win = equity_table[kv.index][0];
+        const diff = if (generated_win > kv.expected_win)
+            generated_win - kv.expected_win
+        else
+            kv.expected_win - generated_win;
+
+        const is_valid = diff <= kv.tolerance;
+        const status = if (is_valid) "✓ PASS" else "✗ FAIL";
+
+        print("  {s:5} | {d:7.1}% | {d:8.1}% | {d:4.1}% | {s}\n", .{
+            kv.hand,
+            @as(f64, @floatFromInt(kv.expected_win)) / 10.0,
+            @as(f64, @floatFromInt(generated_win)) / 10.0,
+            @as(f64, @floatFromInt(diff)) / 10.0,
+            status,
+        });
+
+        if (!is_valid) {
+            all_valid = false;
+            print("    ⚠️  {s} equity {d:.1}% is outside tolerance of {d:.1}%±{d:.1}%\n", .{
+                kv.hand,
+                @as(f64, @floatFromInt(generated_win)) / 10.0,
+                @as(f64, @floatFromInt(kv.expected_win)) / 10.0,
+                @as(f64, @floatFromInt(kv.tolerance)) / 10.0,
+            });
+        }
+    }
+
+    return all_valid;
 }
