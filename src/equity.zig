@@ -636,7 +636,8 @@ fn enumerateEquityBoardCompletions(hero_hole_cards: Hand, villain_hole_cards: Ha
         var i: i8 = @intCast(num_cards - 1);
         while (i >= 0) : (i -= 1) {
             const idx = @as(usize, @intCast(i));
-            if (indices[idx] < remaining_count - (num_cards - idx)) {
+            const idx_u8 = @as(u8, @intCast(idx));
+            if (indices[idx] < remaining_count - (num_cards - idx_u8)) {
                 indices[idx] += 1;
                 for (idx + 1..num_cards) |j| {
                     indices[j] = indices[j - 1] + 1;
