@@ -77,7 +77,6 @@ Apple M1 results:
 
 ## Documentation
 
-- [docs/development.md](docs/development.md) - Setup, building, testing, code style
 - [docs/design.md](docs/design.md) - Architecture, algorithms, implementation
 - [docs/performance.md](docs/performance.md) - Benchmarking and profiling
 - [docs/experiments.md](docs/experiments.md) - Optimization experiments log
