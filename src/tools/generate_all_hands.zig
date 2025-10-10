@@ -129,7 +129,13 @@ pub fn main() !void {
     try stdout.print("File written successfully!\n", .{});
 
     // Compute some statistics
-    var rank_counts = [_]u32{0} ** 7462;
+    // With CATEGORY_STEP=4096, max rank is 8*4096 + max_combination
+    // High card category (8) has C(13,5)=1287 combinations, so max is ~34075
+    const max_rank = 9 * 4096; // Conservative upper bound (36864)
+    var rank_counts = try allocator.alloc(u32, max_rank);
+    defer allocator.free(rank_counts);
+    @memset(rank_counts, 0);
+
     for (results) |result| {
         rank_counts[result.rank] += 1;
     }

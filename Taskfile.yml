@@ -114,3 +114,34 @@ tasks:
       - mkdir -p "{{.PROFILE_DIR}}"
       - command -v dsymutil >/dev/null 2>&1 && dsymutil zig-out/bin/poker-eval || true
       - uniprof record --platform native -o "{{.PROFILE_JSON}}" -- zig-out/bin/poker-eval bench --showdown
+
+  gen:all-hands:
+    desc: Generate all 133M hand evaluations to binary file
+    sources:
+      - src/**/*.zig
+      - build.zig
+    generates:
+      - all_hands.dat
+    cmds:
+      - zig build gen-all -Doptimize={{.ZIG_OPTIMIZE}}
+
+  verify:all-hands:
+    desc: Verify evaluator against all 133M hands
+    deps:
+      - gen:all-hands
+    sources:
+      - src/**/*.zig
+      - build.zig
+      - all_hands.dat
+    cmds:
+      - zig build verify-all -Doptimize={{.ZIG_OPTIMIZE}}
+
+  gen:heads-up:
+    desc: Generate heads-up equity tables (~15 min)
+    sources:
+      - src/**/*.zig
+      - build.zig
+    generates:
+      - src/heads_up_tables.zig
+    cmds:
+      - zig build gen-heads-up -Doptimize={{.ZIG_OPTIMIZE}}
