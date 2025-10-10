@@ -82,6 +82,10 @@ const EquityCommand = struct {
             while (i < 52) : (i += 1) {
                 const card_bit = @as(u64, 1) << i;
                 if (board_hand & card_bit != 0) {
+                    if (board_cards_count >= 5) {
+                        print("Error: Board has more than 5 cards\n", .{});
+                        return;
+                    }
                     board_cards_buf[board_cards_count] = card_bit;
                     board_cards_count += 1;
                 }
@@ -632,6 +636,11 @@ fn formatCard(card: poker.Hand) [2]u8 {
 fn parseBoardCards(board_str: []const u8) !poker.Hand {
     if (board_str.len % 2 != 0) {
         return error.InvalidBoardFormat;
+    }
+
+    const num_cards = board_str.len / 2;
+    if (num_cards > 5) {
+        return error.TooManyBoardCards;
     }
 
     var board: poker.Hand = 0;
