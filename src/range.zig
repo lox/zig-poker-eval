@@ -6,6 +6,41 @@ const equity = @import("equity");
 /// Range representation and poker notation parsing
 /// Handles range strings like "AA,KK,AKs,AKo" and converts them to hand combinations
 /// Notation parsing is implemented inline for efficient direct insertion into range HashMap
+///
+/// ## Supported Range Notation
+///
+/// ### 1. Pocket Pairs (6 combinations each)
+/// - "AA" - All pocket aces: AcAd, AcAh, AcAs, AdAh, AdAs, AhAs
+/// - "KK", "QQ", "JJ", "TT", "99", "88", "77", "66", "55", "44", "33", "22"
+///
+/// ### 2. Suited Hands (4 combinations each)
+/// - "AKs" - All suited AK: AcKc, AdKd, AhKh, AsKs
+/// - Works with any two different ranks: "KQs", "JTs", "98s", "72s", etc.
+///
+/// ### 3. Offsuit Hands (12 combinations each)
+/// - "AKo" - All offsuit AK: AcKd, AcKh, AcKs, AdKc, AdKh, AdKs, AhKc, AhKd, AhKs, AsKc, AsKd, AsKh
+/// - Works with any two different ranks: "KQo", "JTo", "98o", "72o", etc.
+///
+/// ### 4. Unpaired Without Modifier (16 combinations = suited + offsuit)
+/// - "AK" - All AK hands (both suited and offsuit)
+/// - Expands to all 16 possible combinations of two different ranks
+///
+/// ### 5. Specific Card Combinations (1 combination each)
+/// - "AhAs" - Exact hand: Ace of hearts and Ace of spades
+/// - "KdKc" - Exact hand: King of diamonds and King of clubs
+/// - Format: Two cards with explicit suits (rank+suit for each card)
+/// - Suits: h=hearts, d=diamonds, c=clubs, s=spades
+///
+/// ### 6. Comma-Separated Ranges (mix any of the above)
+/// - "AA,KK,AKs" - All AA, all KK, and all suited AK (6+6+4 = 16 combos)
+/// - "AhAs,KdKc,QQ" - Two specific hands plus all QQ (1+1+6 = 8 combos)
+/// - "AA,AKs,AKo,AhAs" - Mix range notation with specific hands
+/// - Spaces are trimmed, so "AA, KK, QQ" works fine
+///
+/// ### Notes
+/// - Notation is case-insensitive: "aa", "AA", "Aa" all work
+/// - Ranks: A, K, Q, J, T (ten), 9, 8, 7, 6, 5, 4, 3, 2
+/// - Pocket pairs cannot have suit modifiers ("AAs" is invalid)
 
 // Re-export core types for convenience
 pub const Hand = card.Hand;
@@ -36,11 +71,21 @@ pub const Range = struct {
         try self.hands.put(combined, probability);
     }
 
-    /// Add a hand using poker notation (e.g., "AA", "AKs", "AKo")
+    /// Add a hand using poker notation (e.g., "AA", "AKs", "AKo", "AhAs")
     /// For pocket pairs like "AA", this adds ALL possible combinations (6 for AA)
     /// For suited/offsuit like "AKs"/"AKo", this adds all combinations
     /// For unpaired notation like "AK", adds all combinations (16 total)
+    /// For specific cards like "AhAs", adds just that single combination
     pub fn addHandNotation(self: *Range, notation: []const u8, probability: f32) !void {
+        // Handle specific card notation (4 chars like "AhAs")
+        if (notation.len == 4) {
+            const parsed_hand = hand.maybeParseHand(notation) catch return error.InvalidSpecificHand;
+            if (card.countCards(parsed_hand) != 2) return error.InvalidSpecificHand;
+            const hole_hand = hand.split(parsed_hand);
+            try self.addHand(hole_hand, probability);
+            return;
+        }
+
         if (notation.len < 2 or notation.len > 3) return error.InvalidNotation;
 
         const rank1 = hand.parseRank(notation[0]) orelse return error.InvalidRank;
@@ -817,6 +862,40 @@ test "pocket pair cannot be suited" {
 
     try testing.expectError(error.CannotBeSuited, range.addHandNotation("AAs", 1.0));
     try testing.expectError(error.CannotBeSuited, range.addHandNotation("KKo", 1.0));
+}
+
+test "specific card notation" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var range = Range.init(allocator);
+    defer range.deinit();
+
+    // Add specific hole cards
+    try range.addHandNotation("AhAs", 1.0);
+    try testing.expect(range.handCount() == 1); // Only 1 specific combination
+
+    // Add another specific hand
+    try range.addHandNotation("KdKc", 1.0);
+    try testing.expect(range.handCount() == 2);
+
+    // Mix specific and range notation
+    try range.addHandNotation("QQ", 1.0);
+    try testing.expect(range.handCount() == 8); // 2 specific + 6 QQ combos
+}
+
+test "parseRange with specific cards" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    // Test mixed notation
+    var range = try parseRange("AA,KdKc,QhQs", allocator);
+    defer range.deinit();
+
+    // AA = 6 combos, KdKc = 1 combo, QhQs = 1 combo (total 8)
+    try testing.expect(range.handCount() == 8);
 }
 
 // Ensure all tests in this module are discovered
