@@ -78,8 +78,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     print("\n========================================\n", .{});
-    print("FAST Heads-Up Equity Table Generator\n", .{});
-    print("Using BoardContext + Batch + Threading\n", .{});
+    print("Heads-Up Equity Table Generator\n", .{});
     print("========================================\n\n", .{});
 
     const hands = generateStartingHands();
@@ -89,7 +88,6 @@ pub fn main() !void {
     const villain_hands_per_board = 1225; // C(50,2)
     const total_showdowns = 169 * boards_per_hand * villain_hands_per_board;
     print("Total showdowns: {} billion\n", .{total_showdowns / 1_000_000_000});
-    print("Expected runtime: 15-25 minutes\n\n", .{});
 
     const start_time = std.time.milliTimestamp();
 
@@ -121,7 +119,7 @@ pub fn main() !void {
     var wait_group = std.Thread.WaitGroup{};
 
     for (0..thread_count) |i| {
-        const start_idx = i * hands_per_thread;
+        const start_idx = i * hands_per_thread + @min(i, remaining_hands);
         const extra = if (i < remaining_hands) @as(usize, 1) else 0;
         const end_idx = start_idx + hands_per_thread + extra;
 
@@ -177,129 +175,39 @@ pub fn main() !void {
 fn workerThread(ctx: *ThreadContext) void {
     defer ctx.wait_group.finish();
 
+    // Thread-local allocator for equity calculations
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
     for (ctx.start_idx..ctx.end_idx) |i| {
         const hand = ctx.hands[i];
-        const result = calculateEquityVsRandomFast(hand) catch |err| {
+        const hero_hole = createHand(hand);
+
+        // Use the new exactVsRandom function from equity module
+        const equity_result = poker.equity.exactVsRandom(hero_hole, allocator) catch |err| {
             print("Thread {} error on hand {}: {}\n", .{ ctx.thread_id, i, err });
             return;
         };
 
-        ctx.results[i] = result;
+        ctx.results[i] = HandResult{
+            .index = hand.index,
+            .wins = @intCast(equity_result.wins),
+            .losses = equity_result.total_simulations - equity_result.wins - equity_result.ties,
+            .ties = @intCast(equity_result.ties),
+        };
 
         // Progress reporting
-        const total = result.wins + result.losses + result.ties;
         print("Thread {} - Hand {}/169: Win={d:.2}% Tie={d:.2}%\n", .{
             ctx.thread_id,
             i + 1,
-            @as(f64, @floatFromInt(result.wins)) * 100.0 / @as(f64, @floatFromInt(total)),
-            @as(f64, @floatFromInt(result.ties)) * 100.0 / @as(f64, @floatFromInt(total)),
+            equity_result.winRate() * 100.0,
+            equity_result.tieRate() * 100.0,
         });
     }
 }
 
-fn calculateEquityVsRandomFast(hand: StartingHand) !HandResult {
-    var wins: u64 = 0;
-    var losses: u64 = 0;
-    var ties: u64 = 0;
-
-    const hero_hole = createHand(hand);
-
-    // Build available cards (all except hero's 2 cards)
-    var available: [50]u8 = undefined;
-    var available_count: u8 = 0;
-    for (0..52) |card_idx| {
-        const card_bit = @as(u64, 1) << @intCast(card_idx);
-        if ((hero_hole & card_bit) == 0) {
-            available[available_count] = @intCast(card_idx);
-            available_count += 1;
-        }
-    }
-
-    // Pre-allocate villain hands array for batch processing
-    const max_villain_hands = 1225; // C(50,2)
-    var all_villain_holes: [max_villain_hands]poker.Hand = undefined;
-    var villain_holes_buffer: [max_villain_hands]poker.Hand = undefined;
-    var hero_holes_buffer: [max_villain_hands]poker.Hand = undefined;
-    var results_buffer: [max_villain_hands]i8 = undefined;
-
-    // Generate all villain hands once and store in all_villain_holes
-    var villain_count: usize = 0;
-    for (0..available_count - 1) |v1| {
-        for (v1 + 1..available_count) |v2| {
-            const villain_card1 = @as(u64, 1) << @intCast(available[v1]);
-            const villain_card2 = @as(u64, 1) << @intCast(available[v2]);
-            all_villain_holes[villain_count] = villain_card1 | villain_card2;
-            villain_count += 1;
-        }
-    }
-
-    // Enumerate all boards: C(48,5)
-    // For each board, batch-evaluate against all villain hands
-    for (0..available_count - 4) |b1| {
-        const board1 = @as(u64, 1) << @intCast(available[b1]);
-
-        for (b1 + 1..available_count - 3) |b2| {
-            const board2 = @as(u64, 1) << @intCast(available[b2]);
-
-            for (b2 + 1..available_count - 2) |b3| {
-                const board3 = @as(u64, 1) << @intCast(available[b3]);
-
-                for (b3 + 1..available_count - 1) |b4| {
-                    const board4 = @as(u64, 1) << @intCast(available[b4]);
-
-                    for (b4 + 1..available_count) |b5| {
-                        const board5 = @as(u64, 1) << @intCast(available[b5]);
-
-                        const board = board1 | board2 | board3 | board4 | board5;
-
-                        // Create board context once for this board (board only, not hole cards)
-                        const ctx = poker.initBoardContext(board);
-
-                        // Filter villain hands that don't conflict with board
-                        // Copy valid hands from all_villain_holes to villain_holes_buffer
-                        var valid_villain_count: usize = 0;
-                        for (0..villain_count) |v| {
-                            const villain_hole = all_villain_holes[v];
-                            if ((villain_hole & board) == 0) {
-                                villain_holes_buffer[valid_villain_count] = villain_hole;
-                                hero_holes_buffer[valid_villain_count] = hero_hole;
-                                valid_villain_count += 1;
-                            }
-                        }
-
-                        // Batch evaluate all valid villain hands
-                        if (valid_villain_count > 0) {
-                            poker.evaluateShowdownBatch(
-                                &ctx,
-                                hero_holes_buffer[0..valid_villain_count],
-                                villain_holes_buffer[0..valid_villain_count],
-                                results_buffer[0..valid_villain_count],
-                            );
-
-                            // Accumulate results
-                            for (results_buffer[0..valid_villain_count]) |result| {
-                                if (result > 0) {
-                                    wins += 1;
-                                } else if (result < 0) {
-                                    losses += 1;
-                                } else {
-                                    ties += 1;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    return HandResult{
-        .index = hand.index,
-        .wins = wins,
-        .losses = losses,
-        .ties = ties,
-    };
-}
+// Old calculateEquityVsRandomFast function removed - now using equity.exactVsRandom()
 
 fn generateStartingHands() [169]StartingHand {
     var hands: [169]StartingHand = undefined;
