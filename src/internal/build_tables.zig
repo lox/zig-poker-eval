@@ -1,6 +1,7 @@
 const std = @import("std");
 const print = std.debug.print;
 const evaluator = @import("slow_evaluator.zig");
+const card = @import("card");
 const mphf = @import("mphf.zig");
 
 // Table generation constants
@@ -255,7 +256,7 @@ fn buildTables(allocator: std.mem.Allocator) !void {
     // Verify CHD lookup works for our problem RPC
     print("Verifying CHD lookup...\n", .{});
     const test_rpc: u32 = 742203275;
-    const expected_rank: u16 = 2389;
+    const expected_rank: u16 = evaluator.evaluateHand(@as(evaluator.Hand, problem_hands[0]));
     const actual_rank = mphf.lookup(test_rpc, chd_result.magic_constant, chd_result.g_array, chd_result.value_table, mphf.DEFAULT_TABLE_SIZE);
     print("  RPC {} -> expected rank {}, got rank {}\n", .{ test_rpc, expected_rank, actual_rank });
     if (actual_rank != expected_rank) {
@@ -334,6 +335,71 @@ fn getTop5Ranks(suit_mask: u16) u16 {
     return result;
 }
 
+inline fn rankOrder(rank: u8) u16 {
+    return @intCast(12 - rank);
+}
+
+fn straightHighRank(pattern: u16) u8 {
+    if (pattern == 0x100F) {
+        return 3;
+    }
+    return @intCast(15 - @clz(pattern));
+}
+
+fn maskToRanksDescending(pattern: u16) [5]u8 {
+    var result: [5]u8 = undefined;
+    var idx: usize = 0;
+    var rank: i8 = 12;
+
+    while (idx < 5 and rank >= 0) : (rank -= 1) {
+        const bit = @as(u16, 1) << @intCast(rank);
+        if ((pattern & bit) != 0) {
+            result[idx] = @intCast(rank);
+            idx += 1;
+        }
+    }
+
+    return result;
+}
+
+fn choose(n: u8, k: u8) u16 {
+    if (k > n) return 0;
+    if (k == 0 or k == n) return 1;
+
+    const kk = if (k > n - k) n - k else k;
+    var result: u32 = 1;
+    var i: u8 = 0;
+
+    while (i < kk) : (i += 1) {
+        result = result * (@as(u32, n) - @as(u32, i));
+        result /= @as(u32, i) + 1;
+    }
+
+    return @intCast(result);
+}
+
+fn combinationIndexAscending(n: u8, combo: []const u8) u16 {
+    var index: u16 = 0;
+    var prev: i16 = -1;
+    const len = combo.len;
+
+    for (combo, 0..) |c, i| {
+        var j: i16 = prev + 1;
+        while (j < c) : (j += 1) {
+            const remaining = @as(u8, @intCast(len - i - 1));
+            index += choose(n - 1 - @as(u8, @intCast(j)), remaining);
+        }
+        prev = @intCast(c);
+    }
+
+    return index;
+}
+
+fn combinationIndexDescending(n: u8, combo: []const u8) u16 {
+    const total = choose(n, @intCast(combo.len));
+    return total - 1 - combinationIndexAscending(n, combo);
+}
+
 fn evaluateFlushPattern(pattern: u16) u16 {
     // Check if this pattern is a straight flush first
     const straight_patterns = [_]u16{
@@ -349,79 +415,73 @@ fn evaluateFlushPattern(pattern: u16) u16 {
         0x100F, // A-5-4-3-2 (wheel)
     };
 
-    for (straight_patterns, 0..) |straight_pattern, i| {
+    for (straight_patterns) |straight_pattern| {
         if (pattern == straight_pattern) {
-            // This is a straight flush
-            if (straight_pattern == 0x1F00) {
-                return 0; // Royal flush (best possible hand)
-            } else if (straight_pattern == 0x100F) {
-                return 9; // Wheel straight flush (worst straight flush)
-            } else {
-                // Other straight flushes: K-high=1, Q-high=2, ..., 6-high=8
-                return @as(u16, @intCast(i));
-            }
+            const high = straightHighRank(straight_pattern);
+            return evaluator.CATEGORY_STEP * 0 + rankOrder(high);
         }
     }
 
-    // Not a straight flush, so it's a regular flush
-    // Find the highest card in the pattern
-    const high_card_bit = @clz(pattern);
-    const high_card_rank = 15 - high_card_bit;
-
-    // Use the same formula as slow_evaluator for flush ranking:
-    // Flush ranks are 322-1598, with A-high=322, K-high=422, etc.
-    return 322 + @as(u16, (12 - high_card_rank)) * 100;
+    const desc = maskToRanksDescending(pattern);
+    var ascending: [5]u8 = undefined;
+    inline for (0..5) |idx| ascending[idx] = desc[4 - idx];
+    const combo_value = combinationIndexDescending(13, ascending[0..]);
+    return evaluator.CATEGORY_STEP * 3 + combo_value;
 }
 
 fn writeTablesFile() !void {
     const file = try std.fs.cwd().createFile("src/internal/tables.zig", .{});
     defer file.close();
-    const w = file.writer();
+    var buffer: [5_000_000]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&buffer);
+    const stream = fbs.writer();
 
-    try w.print("// Generated lookup tables for poker evaluator\n\n", .{});
+    try stream.print("// Generated lookup tables for poker evaluator\n\n", .{});
 
-    try w.print("const mphf = @import(\"mphf.zig\");\n\n", .{});
+    try stream.print("const mphf = @import(\"mphf.zig\");\n\n", .{});
 
     // Write CHD tables (private)
-    try w.print("const chd_g_array = [_]u8{{\n", .{});
+    try stream.print("const chd_g_array = [_]u8{{\n", .{});
     for (chd_result.g_array, 0..) |val, i| {
-        if (i % 16 == 0) try w.print("    ", .{});
-        try w.print("{}, ", .{val});
-        if (i % 16 == 15) try w.print("\n", .{});
+        if (i % 16 == 0) try stream.print("    ", .{});
+        try stream.print("{}, ", .{val});
+        if (i % 16 == 15) try stream.print("\n", .{});
     }
-    try w.print("}};\n\n", .{});
+    try stream.print("}};\n\n", .{});
 
-    try w.print("const chd_value_table = [_]u16{{\n", .{});
+    try stream.print("const chd_value_table = [_]u16{{\n", .{});
     for (chd_result.value_table, 0..) |val, i| {
-        if (i % 16 == 0) try w.print("    ", .{});
-        try w.print("{}, ", .{val});
-        if (i % 16 == 15) try w.print("\n", .{});
+        if (i % 16 == 0) try stream.print("    ", .{});
+        try stream.print("{}, ", .{val});
+        if (i % 16 == 15) try stream.print("\n", .{});
     }
-    try w.print("}};\n\n", .{});
+    try stream.print("}};\n\n", .{});
 
-    try w.print("const flush_lookup_table = [_]u16{{\n", .{});
+    try stream.print("const flush_lookup_table = [_]u16{{\n", .{});
     for (flush_lookup_table, 0..) |val, i| {
-        if (i % 16 == 0) try w.print("    ", .{});
-        try w.print("{}, ", .{val});
-        if (i % 16 == 15) try w.print("\n", .{});
+        if (i % 16 == 0) try stream.print("    ", .{});
+        try stream.print("{}, ", .{val});
+        if (i % 16 == 15) try stream.print("\n", .{});
     }
-    try w.print("}};\n\n", .{});
+    try stream.print("}};\n\n", .{});
 
     // Write all CHD constants (private)
-    try w.print("// CHD constants\n", .{});
-    try w.print("const CHD_MAGIC_CONSTANT: u64 = 0x{X};\n", .{chd_result.magic_constant});
-    try w.print("const CHD_NUM_BUCKETS: u32 = {};\n", .{mphf.DEFAULT_NUM_BUCKETS});
-    try w.print("const CHD_TABLE_SIZE: u32 = {};\n", .{mphf.DEFAULT_TABLE_SIZE});
-    try w.print("\n", .{});
+    try stream.print("// CHD constants\n", .{});
+    try stream.print("const CHD_MAGIC_CONSTANT: u64 = 0x{X};\n", .{chd_result.magic_constant});
+    try stream.print("const CHD_NUM_BUCKETS: u32 = {};\n", .{mphf.DEFAULT_NUM_BUCKETS});
+    try stream.print("const CHD_TABLE_SIZE: u32 = {};\n", .{mphf.DEFAULT_TABLE_SIZE});
+    try stream.print("\n", .{});
 
     // Write public API functions
-    try w.print("// Public API - only expose the functions needed by evaluator\n", .{});
-    try w.print("pub inline fn lookup(rpc: u32) u16 {{\n", .{});
-    try w.print("    return mphf.lookup(rpc, CHD_MAGIC_CONSTANT, &chd_g_array, &chd_value_table, CHD_TABLE_SIZE);\n", .{});
-    try w.print("}}\n\n", .{});
-    try w.print("pub inline fn flushLookup(pattern: u16) u16 {{\n", .{});
-    try w.print("    return flush_lookup_table[pattern];\n", .{});
-    try w.print("}}\n", .{});
+    try stream.print("// Public API - only expose the functions needed by evaluator\n", .{});
+    try stream.print("pub inline fn lookup(rpc: u32) u16 {{\n", .{});
+    try stream.print("    return mphf.lookup(rpc, CHD_MAGIC_CONSTANT, &chd_g_array, &chd_value_table, CHD_TABLE_SIZE);\n", .{});
+    try stream.print("}}\n\n", .{});
+    try stream.print("pub inline fn flushLookup(pattern: u16) u16 {{\n", .{});
+    try stream.print("    return flush_lookup_table[pattern];\n", .{});
+    try stream.print("}}\n", .{});
+
+    try file.writeAll(fbs.getWritten());
 }
 
 // Remove old Pattern type - using mphf.Pattern now
@@ -442,9 +502,9 @@ const HandIterator = struct {
 
         var hand: evaluator.Hand = 0;
         for (self.combination) |card_idx| {
-            const suit: evaluator.Suit = @enumFromInt(card_idx / 13);
-            const rank: evaluator.Rank = @enumFromInt(card_idx % 13);
-            hand |= evaluator.makeCard(suit, rank);
+            const suit: card.Suit = @enumFromInt(card_idx / 13);
+            const rank: card.Rank = @enumFromInt(card_idx % 13);
+            hand |= card.makeCard(suit, rank);
         }
 
         if (!self.nextCombination()) self.finished = true;
