@@ -194,19 +194,15 @@ fn workerThread(ctx: *ThreadContext) void {
         const hero_idx = matchup[0];
         const villain_idx = matchup[1];
 
-        // Convert indices to notation strings
-        const hero_notation = indexToNotation(hero_idx);
-        const villain_notation = indexToNotation(villain_idx);
-
-        // Use range API to create ranges and calculate equity
-        var hero_range = poker.parseRange(hero_notation, allocator) catch |err| {
-            print("Thread {} error parsing hero {s}: {}\n", .{ ctx.thread_id, hero_notation, err });
+        // Use HandIndex.toRange() to create ranges for each hand index
+        var hero_range = poker.HandIndex.toRange(hero_idx, allocator) catch |err| {
+            print("Thread {} error creating range for hero index {}: {}\n", .{ ctx.thread_id, hero_idx, err });
             continue;
         };
         defer hero_range.deinit();
 
-        var villain_range = poker.parseRange(villain_notation, allocator) catch |err| {
-            print("Thread {} error parsing villain {s}: {}\n", .{ ctx.thread_id, villain_notation, err });
+        var villain_range = poker.HandIndex.toRange(villain_idx, allocator) catch |err| {
+            print("Thread {} error creating range for villain index {}: {}\n", .{ ctx.thread_id, villain_idx, err });
             continue;
         };
         defer villain_range.deinit();
@@ -234,13 +230,13 @@ fn workerThread(ctx: *ThreadContext) void {
         progress_counter += 1;
         if (progress_counter % report_interval == 0) {
             const pct = (@as(f64, @floatFromInt(idx - ctx.start_idx + 1)) / @as(f64, @floatFromInt(ctx.end_idx - ctx.start_idx))) * 100.0;
-            print("Thread {} - {d:.1}% ({}/{}) - {s} vs {s}: {d:.1}%\n", .{
+            print("Thread {} - {d:.1}% ({}/{}) - {} vs {}: {d:.1}%\n", .{
                 ctx.thread_id,
                 pct,
                 idx - ctx.start_idx + 1,
                 ctx.end_idx - ctx.start_idx,
-                hero_notation,
-                villain_notation,
+                hero_idx,
+                villain_idx,
                 range_result.hero_equity * 100.0,
             });
         }

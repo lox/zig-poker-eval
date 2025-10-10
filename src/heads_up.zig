@@ -7,6 +7,7 @@
 const std = @import("std");
 const card = @import("card");
 const evaluator = @import("evaluator");
+const range_mod = @import("range");
 
 // There are 169 unique starting hands in Texas Hold'em:
 // - 13 pocket pairs (AA, KK, QQ, ..., 22)
@@ -79,6 +80,98 @@ pub const HandIndex = struct {
             'A', 'a' => 12,
             else => error.InvalidRank,
         };
+    }
+
+    /// Convert hand index (0-168) to poker notation string
+    /// Returns strings like "AA", "AKs", "72o", etc.
+    pub fn toNotation(index: u8) []const u8 {
+        const row = index / 13;
+        const col = index % 13;
+
+        if (row == col) {
+            // Pocket pair - diagonal
+            return switch (row) {
+                0 => "22",
+                1 => "33",
+                2 => "44",
+                3 => "55",
+                4 => "66",
+                5 => "77",
+                6 => "88",
+                7 => "99",
+                8 => "TT",
+                9 => "JJ",
+                10 => "QQ",
+                11 => "KK",
+                12 => "AA",
+                else => unreachable,
+            };
+        } else if (row > col) {
+            // Suited - upper triangle
+            return formatNotation(row, col, true);
+        } else {
+            // Offsuit - lower triangle
+            return formatNotation(col, row, false);
+        }
+    }
+
+    /// Format two ranks into notation like "AKs" or "QJo"
+    fn formatNotation(high_rank: u8, low_rank: u8, suited: bool) []const u8 {
+        // Generate static lookup table at comptime
+        const notations = comptime blk: {
+            var table: [13][13][2][]const u8 = undefined;
+
+            for (0..13) |h| {
+                for (0..13) |l| {
+                    const h_char = switch (h) {
+                        0 => "2",
+                        1 => "3",
+                        2 => "4",
+                        3 => "5",
+                        4 => "6",
+                        5 => "7",
+                        6 => "8",
+                        7 => "9",
+                        8 => "T",
+                        9 => "J",
+                        10 => "Q",
+                        11 => "K",
+                        12 => "A",
+                        else => unreachable,
+                    };
+                    const l_char = switch (l) {
+                        0 => "2",
+                        1 => "3",
+                        2 => "4",
+                        3 => "5",
+                        4 => "6",
+                        5 => "7",
+                        6 => "8",
+                        7 => "9",
+                        8 => "T",
+                        9 => "J",
+                        10 => "Q",
+                        11 => "K",
+                        12 => "A",
+                        else => unreachable,
+                    };
+
+                    table[h][l][0] = h_char ++ l_char ++ "s";
+                    table[h][l][1] = h_char ++ l_char ++ "o";
+                }
+            }
+            break :blk table;
+        };
+
+        const idx: usize = if (suited) 0 else 1;
+        return notations[high_rank][low_rank][idx];
+    }
+
+    /// Create a Range containing all combinations for this hand index
+    /// Example: toRange(168, allocator) creates Range with all 6 AA combinations
+    pub fn toRange(index: u8, allocator: std.mem.Allocator) !range_mod.Range {
+        const notation = toNotation(index);
+        return range_mod.parseRange(notation, allocator);
     }
 };
 
@@ -169,6 +262,49 @@ test "parse hand strings" {
     try std.testing.expectEqual(@as(u8, 167), try HandIndex.parseHand("AKs"));
     try std.testing.expectEqual(@as(u8, 155), try HandIndex.parseHand("AKo"));
     try std.testing.expectEqual(@as(u8, 0), try HandIndex.parseHand("22"));
+}
+
+test "HandIndex.toNotation roundtrip" {
+    // Test that toNotation produces correct strings
+    try std.testing.expectEqualStrings("AA", HandIndex.toNotation(168));
+    try std.testing.expectEqualStrings("KK", HandIndex.toNotation(154));
+    try std.testing.expectEqualStrings("QQ", HandIndex.toNotation(140));
+    try std.testing.expectEqualStrings("22", HandIndex.toNotation(0));
+
+    // Test suited and offsuit
+    try std.testing.expectEqualStrings("AKs", HandIndex.toNotation(167));
+    try std.testing.expectEqualStrings("AKo", HandIndex.toNotation(155));
+
+    // Test roundtrip: notation -> index -> notation
+    const aa_idx = try HandIndex.parseHand("AA");
+    try std.testing.expectEqualStrings("AA", HandIndex.toNotation(aa_idx));
+
+    const aks_idx = try HandIndex.parseHand("AKs");
+    try std.testing.expectEqualStrings("AKs", HandIndex.toNotation(aks_idx));
+
+    const ako_idx = try HandIndex.parseHand("AKo");
+    try std.testing.expectEqualStrings("AKo", HandIndex.toNotation(ako_idx));
+}
+
+test "HandIndex.toRange creates correct ranges" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    // Test AA creates 6 combinations
+    var aa_range = try HandIndex.toRange(168, allocator);
+    defer aa_range.deinit();
+    try std.testing.expect(aa_range.handCount() == 6);
+
+    // Test AKs creates 4 combinations
+    var aks_range = try HandIndex.toRange(167, allocator);
+    defer aks_range.deinit();
+    try std.testing.expect(aks_range.handCount() == 4);
+
+    // Test AKo creates 12 combinations
+    var ako_range = try HandIndex.toRange(155, allocator);
+    defer ako_range.deinit();
+    try std.testing.expect(ako_range.handCount() == 12);
 }
 
 test "evaluatePreflopAllIn integration" {

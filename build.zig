@@ -55,12 +55,13 @@ pub fn build(b: *std.Build) void {
     });
     draws_mod.addImport("card", card_mod);
 
-    // Level 4: Heads-up module (depends on card, evaluator)
+    // Level 4: Heads-up module (depends on card, evaluator, range)
     const heads_up_mod = b.addModule("heads_up", .{
         .root_source_file = b.path("src/heads_up.zig"),
     });
     heads_up_mod.addImport("card", card_mod);
     heads_up_mod.addImport("evaluator", evaluator_mod);
+    heads_up_mod.addImport("range", range_mod);
 
     // Level 5: Main poker module (depends on all others)
     const poker_mod = b.addModule("poker", .{
@@ -314,6 +315,7 @@ pub fn build(b: *std.Build) void {
     });
     heads_up_tests.root_module.addImport("card", card_mod);
     heads_up_tests.root_module.addImport("evaluator", evaluator_mod);
+    heads_up_tests.root_module.addImport("range", range_mod);
     const run_heads_up_tests = b.addRunArtifact(heads_up_tests);
     test_step.dependOn(&run_heads_up_tests.step);
 
