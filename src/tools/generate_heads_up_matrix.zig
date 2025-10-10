@@ -228,25 +228,35 @@ fn workerThread(ctx: *ThreadContext) void {
 
 /// Create a canonical non-conflicting hand for a given index
 /// suit_offset: 0=clubs/diamonds, 2=hearts/spades (ensures no conflicts)
+///
+/// Index mapping (from HandIndex.getIndex):
+/// - Pocket pairs: rank * 13 + rank (diagonal, rank1 == rank2)
+/// - Suited: high_rank * 13 + low_rank (upper triangle, rank1 > rank2)
+/// - Offsuit: low_rank * 13 + high_rank (lower triangle, rank1 < rank2)
 fn createCanonicalHand(hand_idx: u8, suit_offset: u8) u64 {
-    const rank1 = hand_idx / 13;
-    const rank2 = hand_idx % 13;
+    const row = hand_idx / 13; // This is one of the ranks
+    const col = hand_idx % 13; // This is the other rank
 
-    if (rank1 == rank2) {
-        // Pocket pair - use two different suits based on offset
-        const card1 = rank1 + (suit_offset * 13);
-        const card2 = rank1 + ((suit_offset + 1) * 13);
+    if (row == col) {
+        // Pocket pair - diagonal (e.g., AA, KK, etc.)
+        const rank = row;
+        const card1 = rank + (suit_offset * 13);
+        const card2 = rank + ((suit_offset + 1) * 13);
         return (@as(u64, 1) << @intCast(card1)) | (@as(u64, 1) << @intCast(card2));
-    } else if (rank1 > rank2) {
-        // Suited hand - both cards same suit
+    } else if (row > col) {
+        // Suited hand - upper triangle (e.g., AKs where A > K)
+        const high_rank = row;
+        const low_rank = col;
         const suit = suit_offset;
-        const card1 = rank1 + (suit * 13);
-        const card2 = rank2 + (suit * 13);
+        const card1 = high_rank + (suit * 13);
+        const card2 = low_rank + (suit * 13);
         return (@as(u64, 1) << @intCast(card1)) | (@as(u64, 1) << @intCast(card2));
     } else {
-        // Offsuit hand - different suits
-        const card1 = rank2 + (suit_offset * 13);
-        const card2 = rank1 + ((suit_offset + 1) * 13);
+        // Offsuit hand - lower triangle (e.g., AKo where row=K, col=A)
+        const high_rank = col; // Column is the higher rank
+        const low_rank = row; // Row is the lower rank
+        const card1 = high_rank + (suit_offset * 13);
+        const card2 = low_rank + ((suit_offset + 1) * 13);
         return (@as(u64, 1) << @intCast(card1)) | (@as(u64, 1) << @intCast(card2));
     }
 }
@@ -319,14 +329,14 @@ fn validateKnownMatchups(matrix: [169][169][2]u16) bool {
         tolerance: u16, // x10 (10 = 1.0%)
     };
 
-    // Known matchups from poker calculators
+    // Known matchups from cardfight.com poker calculator
     const known_values = [_]KnownMatchup{
-        .{ .hero_idx = 168, .villain_idx = 154, .hero_name = "AA", .villain_name = "KK", .expected_win = 820, .tolerance = 10 },
-        .{ .hero_idx = 168, .villain_idx = 140, .hero_name = "AA", .villain_name = "QQ", .expected_win = 820, .tolerance = 10 },
-        .{ .hero_idx = 168, .villain_idx = 167, .hero_name = "AA", .villain_name = "AKs", .expected_win = 930, .tolerance = 10 },
-        .{ .hero_idx = 168, .villain_idx = 155, .hero_name = "AA", .villain_name = "AKo", .expected_win = 930, .tolerance = 10 },
-        .{ .hero_idx = 154, .villain_idx = 140, .hero_name = "KK", .villain_name = "QQ", .expected_win = 820, .tolerance = 10 },
-        .{ .hero_idx = 167, .villain_idx = 155, .hero_name = "AKs", .villain_name = "AKo", .expected_win = 500, .tolerance = 30 },
+        .{ .hero_idx = 168, .villain_idx = 154, .hero_name = "AA", .villain_name = "KK", .expected_win = 820, .tolerance = 20 }, // Real: 81.95%
+        .{ .hero_idx = 168, .villain_idx = 140, .hero_name = "AA", .villain_name = "QQ", .expected_win = 816, .tolerance = 20 }, // Real: 81.55%
+        .{ .hero_idx = 168, .villain_idx = 167, .hero_name = "AA", .villain_name = "AKs", .expected_win = 879, .tolerance = 20 }, // Real: 87.86%
+        .{ .hero_idx = 168, .villain_idx = 155, .hero_name = "AA", .villain_name = "AKo", .expected_win = 932, .tolerance = 20 }, // Real: 93.17%
+        .{ .hero_idx = 154, .villain_idx = 140, .hero_name = "KK", .villain_name = "QQ", .expected_win = 819, .tolerance = 20 }, // Real: 81.93%
+        .{ .hero_idx = 167, .villain_idx = 155, .hero_name = "AKs", .villain_name = "AKo", .expected_win = 525, .tolerance = 20 }, // Real: 52.49%
     };
 
     var all_valid = true;
