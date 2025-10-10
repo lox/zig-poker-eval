@@ -27,20 +27,21 @@ const EquityCommand = struct {
 
     const meta = cli_lib.CommandMeta{
         .name = "equity",
-        .description = "Calculate hand vs hand equity using Monte Carlo simulation",
+        .description = "Calculate hand vs hand or range vs range equity using Monte Carlo simulation",
         .usage = "poker-eval equity <hand1> <hand2> [options]",
         .examples = &.{
-            "poker-eval equity \"AhAs\" \"KdKc\"",
+            "poker-eval equity \"AhAs\" \"KdKc\"              # Specific hands",
+            "poker-eval equity \"AA\" \"KK\"                  # Range vs range",
             "poker-eval equity \"AhAs\" \"KdKc\" --board \"AdKh7s\"",
-            "poker-eval equity \"AhAs\" \"KdKc\" --sims 50000 --verbose",
+            "poker-eval equity \"AA\" \"KK\" --sims 50000 --verbose",
         },
     };
 
     const positional_fields = &[_][]const u8{ "hand1", "hand2" };
 
     fn getFieldDescription(field_name: []const u8) []const u8 {
-        if (std.mem.eql(u8, field_name, "hand1")) return "First player's hole cards (e.g., \"AhAs\")";
-        if (std.mem.eql(u8, field_name, "hand2")) return "Second player's hole cards (e.g., \"KdKc\")";
+        if (std.mem.eql(u8, field_name, "hand1")) return "First player's hole cards or range (e.g., \"AhAs\" or \"AA\")";
+        if (std.mem.eql(u8, field_name, "hand2")) return "Second player's hole cards or range (e.g., \"KdKc\" or \"KK\")";
         if (std.mem.eql(u8, field_name, "board")) return "Community board cards (e.g., \"AdKh7s\")";
         if (std.mem.eql(u8, field_name, "sims")) return "Number of Monte Carlo simulations to run";
         if (std.mem.eql(u8, field_name, "format")) return "Output format: table or json";
@@ -52,34 +53,23 @@ const EquityCommand = struct {
         ansi.printBold("🎯 Equity Analysis\n", .{});
         print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
 
-        // Parse hands - try specific cards first, then range notation
-        var hand1_cards: poker.Hand = undefined;
-        var hand2_cards: poker.Hand = undefined;
-        const is_range_vs_range = false;
-        _ = is_range_vs_range; // Future use for range vs range calculations
-
-        // Try parsing as specific hole cards (e.g., "AhAs")
-        if (opts.hand1.len == 4 and opts.hand2.len == 4) {
-            const hole1 = parseHoleCards(opts.hand1) catch |err| {
-                print("Error parsing hand1 '{s}': {}\n", .{ opts.hand1, err });
-                return;
-            };
-            hand1_cards = hole1[0] | hole1[1];
-
-            const hole2 = parseHoleCards(opts.hand2) catch |err| {
-                print("Error parsing hand2 '{s}': {}\n", .{ opts.hand2, err });
-                return;
-            };
-            hand2_cards = hole2[0] | hole2[1];
-        } else {
-            // Try range notation (AA, KK, AKs, etc.)
-            print("Error: Range notation not yet implemented. Use specific cards like \"AhAs\" \"KdKc\"\n", .{});
-            print("Coming soon: Range vs range equity calculations\n", .{});
+        // Parse both hands as ranges (supports both range notation and specific cards)
+        var hero_range = poker.parseRange(opts.hand1, allocator) catch |err| {
+            print("Error parsing hand '{s}': {}\n", .{ opts.hand1, err });
             return;
-        }
+        };
+        defer hero_range.deinit();
+
+        var villain_range = poker.parseRange(opts.hand2, allocator) catch |err| {
+            print("Error parsing hand '{s}': {}\n", .{ opts.hand2, err });
+            return;
+        };
+        defer villain_range.deinit();
 
         // Parse board if provided
         var board_cards: []const poker.Hand = &.{};
+        var board_cards_buf: [5]poker.Hand = undefined;
+        var board_cards_count: usize = 0;
         var board_hand: poker.Hand = 0;
         if (opts.board) |board_str| {
             board_hand = parseBoardCards(board_str) catch |err| {
@@ -87,47 +77,37 @@ const EquityCommand = struct {
                 return;
             };
 
-            // Convert to slice for equity function
-            var board_list: std.ArrayList(poker.Hand) = .empty;
-            defer board_list.deinit(allocator);
-
-            // Extract individual cards from board_hand
+            // Extract individual cards from board_hand into fixed buffer
             var i: u6 = 0;
             while (i < 52) : (i += 1) {
                 const card_bit = @as(u64, 1) << i;
                 if (board_hand & card_bit != 0) {
-                    try board_list.append(allocator, card_bit);
+                    if (board_cards_count >= 5) {
+                        print("Error: Board has more than 5 cards\n", .{});
+                        return;
+                    }
+                    board_cards_buf[board_cards_count] = card_bit;
+                    board_cards_count += 1;
                 }
             }
-            board_cards = try board_list.toOwnedSlice(allocator);
-            defer allocator.free(board_cards);
-        }
-
-        // Check for card conflicts
-        const all_cards = hand1_cards | hand2_cards | board_hand;
-        const total_cards = poker.countCards(all_cards);
-        const expected_cards = 4 + poker.countCards(board_hand);
-
-        if (total_cards != expected_cards) {
-            print("Error: Duplicate cards detected\n", .{});
-            return;
+            board_cards = board_cards_buf[0..board_cards_count];
         }
 
         // Display setup
-        print("Hand 1: {s}\n", .{opts.hand1});
-        print("Hand 2: {s}\n", .{opts.hand2});
+        print("Hand 1: {s} ({} combo{s})\n", .{ opts.hand1, hero_range.handCount(), if (hero_range.handCount() == 1) @as([]const u8, "") else "s" });
+        print("Hand 2: {s} ({} combo{s})\n", .{ opts.hand2, villain_range.handCount(), if (villain_range.handCount() == 1) @as([]const u8, "") else "s" });
         if (opts.board) |board| {
             print("Board:  {s} ({} cards)\n", .{ board, poker.countCards(board_hand) });
         }
         print("Simulations: {}\n", .{opts.sims});
 
-        // Run Monte Carlo simulation
+        // Run equity calculation
         print("\nRunning simulation...\n", .{});
 
         var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
         const rng = prng.random();
 
-        const result = poker.monteCarlo(hand1_cards, hand2_cards, board_cards, opts.sims, rng, allocator) catch |err| {
+        const range_result = hero_range.equityMonteCarlo(&villain_range, board_cards, opts.sims, rng, allocator) catch |err| {
             print("Error running simulation: {}\n", .{err});
             return;
         };
@@ -138,18 +118,18 @@ const EquityCommand = struct {
 
         switch (opts.format) {
             .table => {
-                ansi.printGreen("Hand 1 equity: {d:.1}%\n", .{result.equity() * 100});
-                ansi.printYellow("Hand 2 equity: {d:.1}%\n", .{(1.0 - result.equity()) * 100});
+                ansi.printGreen("Hand 1 equity: {d:.1}%\n", .{range_result.hero_equity * 100});
+                ansi.printYellow("Hand 2 equity: {d:.1}%\n", .{range_result.villain_equity * 100});
 
                 if (opts.verbose) {
                     print("\nDetailed breakdown:\n", .{});
-                    print("  Hand 1 wins: {} ({d:.1}%)\n", .{ result.wins, result.winRate() * 100 });
-                    print("  Ties:        {} ({d:.1}%)\n", .{ result.ties, result.tieRate() * 100 });
-                    print("  Hand 2 wins: {} ({d:.1}%)\n", .{ result.total_simulations - result.wins - result.ties, result.lossRate() * 100 });
+                    print("  Hand 1: {s} ({} combo{s})\n", .{ opts.hand1, hero_range.handCount(), if (hero_range.handCount() == 1) @as([]const u8, "") else "s" });
+                    print("  Hand 2: {s} ({} combo{s})\n", .{ opts.hand2, villain_range.handCount(), if (villain_range.handCount() == 1) @as([]const u8, "") else "s" });
+                    print("  Valid simulations: {}\n", .{range_result.total_simulations});
                 }
             },
             .json => {
-                print("{{\"hand1_equity\": {d:.4}, \"hand2_equity\": {d:.4}, \"simulations\": {}}}\n", .{ result.equity(), 1.0 - result.equity(), result.total_simulations });
+                print("{{\"hand1_equity\": {d:.4}, \"hand2_equity\": {d:.4}, \"simulations\": {}, \"hand1_combos\": {}, \"hand2_combos\": {}}}\n", .{ range_result.hero_equity, range_result.villain_equity, range_result.total_simulations, hero_range.handCount(), villain_range.handCount() });
             },
         }
     }
@@ -204,7 +184,7 @@ const EvalCommand = struct {
             };
         } else if (cards_str.len == 4 and opts.board != null) {
             // Hole cards + board format
-            const hole_cards = parseHoleCards(cards_str) catch |err| {
+            const hole_cards_hand = poker.maybeParseHand(cards_str) catch |err| {
                 print("Error parsing hole cards '{s}': {}\n", .{ cards_str, err });
                 return;
             };
@@ -214,7 +194,7 @@ const EvalCommand = struct {
                 return;
             };
 
-            hand = hole_cards[0] | hole_cards[1] | board;
+            hand = hole_cards_hand | board;
             is_hole_and_board = true;
         } else {
             print("Error: Invalid format. Use 7 cards (14 chars) or 2 hole cards + --board option\n", .{});
@@ -652,21 +632,15 @@ fn formatCard(card: poker.Hand) [2]u8 {
     return poker.formatCard(card);
 }
 
-/// Parse hole cards from string (e.g., "AsKd" -> [As, Kd])
-fn parseHoleCards(cards_str: []const u8) ![2]poker.Hand {
-    if (cards_str.len != 4) {
-        return error.InvalidHoleCardFormat;
-    }
-
-    const card1 = poker.maybeParseCard(cards_str[0..2]) catch return error.InvalidCard1;
-    const card2 = poker.maybeParseCard(cards_str[2..4]) catch return error.InvalidCard2;
-    return [2]poker.Hand{ card1, card2 };
-}
-
 /// Parse board cards from string (e.g., "AsKdQh" -> combined Hand)
 fn parseBoardCards(board_str: []const u8) !poker.Hand {
     if (board_str.len % 2 != 0) {
         return error.InvalidBoardFormat;
+    }
+
+    const num_cards = board_str.len / 2;
+    if (num_cards > 5) {
+        return error.TooManyBoardCards;
     }
 
     var board: poker.Hand = 0;
