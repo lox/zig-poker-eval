@@ -391,6 +391,15 @@ pub fn exact(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Han
     };
 }
 
+/// Exact head-to-head equity calculation between two specific hands (preflop only)
+/// Enumerates all C(48,5) = 1,712,304 possible boards
+/// @param hero_hole_cards Combined bitmask of hero's exactly 2 hole cards
+/// @param villain_hole_cards Combined bitmask of villain's exactly 2 hole cards
+/// @param allocator Memory allocator for board enumeration
+pub fn exactHeadToHead(hero_hole_cards: Hand, villain_hole_cards: Hand, allocator: std.mem.Allocator) !EquityResult {
+    return exact(hero_hole_cards, villain_hole_cards, &.{}, allocator);
+}
+
 /// Exact equity calculation against random opponent (all possible villain hands and boards)
 /// Optimized with board-first enumeration and SIMD batching for performance
 /// @param hero_hole_cards Combined bitmask of hero's exactly 2 hole cards

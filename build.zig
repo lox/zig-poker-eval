@@ -193,6 +193,23 @@ pub fn build(b: *std.Build) void {
     const gen_heads_up_step = b.step("gen-heads-up", "Generate heads-up equity tables (~15 min)");
     gen_heads_up_step.dependOn(&run_gen_heads_up.step);
 
+    // Generate heads-up 169x169 matrix tool
+    const gen_heads_up_matrix = b.addExecutable(.{
+        .name = "generate-heads-up-matrix",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/generate_heads_up_matrix.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .use_llvm = use_llvm,
+    });
+    gen_heads_up_matrix.root_module.addImport("poker", poker_mod);
+    b.installArtifact(gen_heads_up_matrix);
+
+    const run_gen_matrix = b.addRunArtifact(gen_heads_up_matrix);
+    const gen_matrix_step = b.step("gen-heads-up-matrix", "Generate 169x169 heads-up equity matrix (~20 min)");
+    gen_matrix_step.dependOn(&run_gen_matrix.step);
+
     // Test step - run tests from all modules
     const test_step = b.step("test", "Run all unit tests");
 

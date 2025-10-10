@@ -145,3 +145,13 @@ tasks:
       - src/heads_up_tables.zig
     cmds:
       - zig build gen-heads-up -Doptimize={{.ZIG_OPTIMIZE}}
+
+  gen:heads-up-matrix:
+    desc: Generate 169x169 heads-up equity matrix (~20 min)
+    sources:
+      - src/**/*.zig
+      - build.zig
+    generates:
+      - src/heads_up_matrix.zig
+    cmds:
+      - zig build gen-heads-up-matrix -Doptimize={{.ZIG_OPTIMIZE}}
