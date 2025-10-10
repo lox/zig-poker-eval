@@ -714,13 +714,24 @@ pub fn benchmarkRangeEquity(allocator: std.mem.Allocator) !void {
 
         // Benchmark exact equity (if feasible)
         if (total_combos <= 100) {
-            const start = std.time.nanoTimestamp();
-            const result = try hero_range.equityExact(&villain_range, board[0..test_case.board_size], allocator);
-            const end = std.time.nanoTimestamp();
+            // Run multiple iterations for better timing accuracy
+            const exact_iterations: u32 = 100;
 
-            const elapsed_ns = @as(f64, @floatFromInt(end - start));
+            const start = std.time.nanoTimestamp();
+            var checksum: u64 = 0;
+            for (0..exact_iterations) |_| {
+                const result = try hero_range.equityExact(&villain_range, board[0..test_case.board_size], allocator);
+                checksum +%= @intFromFloat(result.hero_equity * 1000000.0);
+            }
+            const end = std.time.nanoTimestamp();
+            std.mem.doNotOptimizeAway(checksum);
+
+            const elapsed_ns = @as(f64, @floatFromInt(end - start)) / @as(f64, @floatFromInt(exact_iterations));
             const elapsed_ms = elapsed_ns / 1_000_000.0;
-            const combos_per_sec = @as(f64, @floatFromInt(result.total_simulations)) / (elapsed_ns / 1_000_000_000.0);
+
+            // Get one result for simulation count
+            const sample_result = try hero_range.equityExact(&villain_range, board[0..test_case.board_size], allocator);
+            const combos_per_sec = @as(f64, @floatFromInt(sample_result.total_simulations)) / (elapsed_ns / 1_000_000_000.0);
 
             try stdout.print("Exact              | {d:>3}×{d:<3}    | {d}card | {d:>9.2} | {d:>10.0}\n", .{
                 hero_range.handCount(),

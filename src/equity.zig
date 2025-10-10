@@ -570,6 +570,21 @@ pub fn evaluateEquityShowdown(hero_hand: Hand, villain_hand: Hand) i8 {
     return if (hero_rank < villain_rank) 1 else if (hero_rank > villain_rank) -1 else 0;
 }
 
+/// Calculate binomial coefficient C(n, k)
+inline fn binomial(n: u32, k: u32) u32 {
+    if (k > n) return 0;
+    if (k == 0 or k == n) return 1;
+    if (k == 1) return n;
+
+    const k_use = if (k > n - k) n - k else k;
+    var result: u32 = 1;
+    var i: u32 = 0;
+    while (i < k_use) : (i += 1) {
+        result = result * (n - i) / (i + 1);
+    }
+    return result;
+}
+
 /// Enumerate all possible board completions for exact equity
 fn enumerateEquityBoardCompletions(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Hand, num_cards: u8, allocator: std.mem.Allocator) ![]Hand {
     // Special case: if board is complete, return single empty combination
@@ -596,44 +611,45 @@ fn enumerateEquityBoardCompletions(hero_hole_cards: Hand, villain_hole_cards: Ha
         }
     }
 
-    // Generate all combinations of num_cards from remaining cards
-    var combinations: std.ArrayList(Hand) = .empty;
-    errdefer combinations.deinit(allocator);
+    // Pre-calculate total combinations and pre-allocate
+    const total_combos = binomial(remaining_count, num_cards);
+    const combinations = try allocator.alloc(Hand, total_combos);
+    errdefer allocator.free(combinations);
 
-    // Use recursion to generate combinations
+    // Generate combinations iteratively
     var indices: [5]u8 = undefined;
-    try generateCombinationsHelper(&combinations, allocator, &remaining_cards, remaining_count, num_cards, &indices, 0, 0);
+    for (0..num_cards) |i| {
+        indices[i] = @intCast(i);
+    }
 
-    return try combinations.toOwnedSlice(allocator);
-}
-
-// Helper function to recursively generate combinations
-fn generateCombinationsHelper(
-    combinations: *std.ArrayList(Hand),
-    allocator: std.mem.Allocator,
-    cards: []const u64,
-    total_cards: u8,
-    num_needed: u8,
-    indices: []u8,
-    start_idx: u8,
-    current_depth: u8,
-) !void {
-    if (current_depth == num_needed) {
-        // We have a complete combination - OR all the selected cards together
+    var combo_idx: usize = 0;
+    while (true) {
+        // Generate current combination
         var combo: u64 = 0;
-        for (0..num_needed) |i| {
-            combo |= cards[indices[i]];
+        for (0..num_cards) |i| {
+            combo |= remaining_cards[indices[i]];
         }
-        try combinations.append(allocator, combo);
-        return;
+        combinations[combo_idx] = combo;
+        combo_idx += 1;
+
+        // Find next combination
+        var i: i8 = @intCast(num_cards - 1);
+        while (i >= 0) : (i -= 1) {
+            const idx = @as(usize, @intCast(i));
+            const idx_u8 = @as(u8, @intCast(idx));
+            if (indices[idx] < remaining_count - (num_cards - idx_u8)) {
+                indices[idx] += 1;
+                for (idx + 1..num_cards) |j| {
+                    indices[j] = indices[j - 1] + 1;
+                }
+                break;
+            }
+        } else {
+            break;
+        }
     }
 
-    // Generate combinations by selecting cards
-    var i = start_idx;
-    while (i <= total_cards - (num_needed - current_depth)) : (i += 1) {
-        indices[current_depth] = i;
-        try generateCombinationsHelper(combinations, allocator, cards, total_cards, num_needed, indices, i + 1, current_depth + 1);
-    }
+    return combinations;
 }
 
 // === THREADED EQUITY CALCULATION ===
