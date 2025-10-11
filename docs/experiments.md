@@ -806,9 +806,9 @@ Applied to both `exact()` (line 401-418) and `exactDetailed()` (line 454-477) in
 
 ## Experiment 17: SIMD Batching for Board Evaluation
 
-**[Exact Equity]** Expected: 4-6× faster | Complexity: Medium | Status: Proposed
+**[Exact Equity]** **✅ Success** | 5.9× faster over Exp 16 (0.10s→0.017s), 14.1× total | Complexity: Medium
 
-**Approach**: Process boards in batches of 32, using SIMD to evaluate multiple boards simultaneously. Similar to Experiment 6's SIMD batching success (2.66× speedup), but applied to board enumeration rather than hand evaluation.
+**Approach**: Process boards in batches of 32, using SIMD to evaluate multiple boards simultaneously. Batch create 32 full 7-card hands for hero and villain, then use `evaluateBatch(32, ...)` to evaluate all hands in parallel.
 
 **Motivation**: After Experiment 16 reduces per-board overhead, the next bottleneck becomes function call overhead for 1.7M boards. Experiment 6 proved SIMD batching delivers 2.66× speedup by processing multiple items simultaneously. Apply the same pattern to board evaluation.
 
@@ -856,16 +856,29 @@ pub fn exact(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Han
 }
 ```
 
-**Why it should work**:
-- Experiment 6 proved SIMD batching delivers 2.66× speedup (11.95→4.5 ns/hand)
-- Leverages existing optimized `evaluateBatch` infrastructure
-- Amortizes function call overhead across 32 boards
-- Respects ARM64 NEON sweet spot (4-wide operations scale to 32-batch)
+**Benchmark Results**: ReleaseFast, Apple M1
 
-**Expected benchmark** (AA vs KK preflop, building on Exp 16):
-- **Baseline (after Exp 16)**: 2.9-4.3 seconds
-- **With SIMD batching**: 1.4-2.2 seconds (2× additional speedup)
-- **Total improvement**: 4-6× faster than original (8.67s → 1.4-2.2s)
+**Preflop (1,712,304 boards)**:
+- **Time**: 0.017s (17ms)
+- **Speedup over Exp 16**: 5.9× faster (100ms → 17ms)
+- **Total speedup**: 14.1× faster than pre-Exp16 baseline
+- **Throughput**: ~100M boards/second
+- **Per-board time**: ~10 ns/board (down from ~58 ns in Exp 16)
+
+**Other scenarios**:
+- Flop (990 boards): <1ms (sub-millisecond)
+- Turn (44 boards): <1ms (sub-millisecond)
+
+**Why it succeeded**:
+- SIMD batching processes 32 boards in parallel, amortizing overhead across all evaluations
+- Leverages existing highly-optimized `evaluateBatch` (Experiment 6's 2.66× SIMD gains)
+- Batch creation is cache-friendly with sequential memory access
+- ARM64 NEON executes 4-wide operations; 32-batch = 8 SIMD passes per side
+- Each batch does 64 evaluations (32 hero + 32 villain) with minimal overhead
+
+**Key insight**: SIMD batching scales exceptionally well for exact equity because board enumeration is embarrassingly parallel. Unlike Experiment 16's board context (which optimizes per-board work), SIMD batching achieves true data parallelism across multiple boards. The 5.9× improvement (vs expected 2×) suggests the combination of reduced overhead + SIMD efficiency + cache locality creates multiplicative gains.
+
+**Trade-off**: Loses Experiment 16's board context optimization for batched boards (creates full 7-card hands instead), but the SIMD parallelism more than compensates. Remainder boards use board context as fallback.
 
 ---
 
