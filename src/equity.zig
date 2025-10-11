@@ -404,8 +404,8 @@ pub fn exact(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Han
 
     var batch_idx: usize = 0;
     while (batch_idx < num_batches) : (batch_idx += 1) {
-        var hero_batch: [BATCH_SIZE]u64 = undefined;
-        var villain_batch: [BATCH_SIZE]u64 = undefined;
+        var hero_batch: @Vector(BATCH_SIZE, u64) = undefined;
+        var villain_batch: @Vector(BATCH_SIZE, u64) = undefined;
 
         // Prepare batch of full 7-card hands
         inline for (0..BATCH_SIZE) |j| {
@@ -484,8 +484,8 @@ pub fn exactDetailed(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []c
 
     var batch_idx: usize = 0;
     while (batch_idx < num_batches) : (batch_idx += 1) {
-        var hero_batch: [BATCH_SIZE]u64 = undefined;
-        var villain_batch: [BATCH_SIZE]u64 = undefined;
+        var hero_batch: @Vector(BATCH_SIZE, u64) = undefined;
+        var villain_batch: @Vector(BATCH_SIZE, u64) = undefined;
 
         // Prepare batch of full 7-card hands
         inline for (0..BATCH_SIZE) |j| {
