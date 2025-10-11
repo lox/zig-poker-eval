@@ -360,6 +360,7 @@ const BenchCommand = struct {
         batch_sizes: bool = false,
         equity: bool = false,
         range_equity: bool = false,
+        exact_equity: bool = false,
         showdown: bool = false,
         format: OutputFormat = .table,
     };
@@ -376,6 +377,7 @@ const BenchCommand = struct {
             "poker-eval bench --batch_sizes",
             "poker-eval bench --equity",
             "poker-eval bench --range_equity",
+            "poker-eval bench --exact_equity",
             "poker-eval bench --showdown",
         },
     };
@@ -396,6 +398,7 @@ const BenchCommand = struct {
         if (std.mem.eql(u8, field_name, "batch_sizes")) return "Compare performance across different batch sizes";
         if (std.mem.eql(u8, field_name, "equity")) return "Benchmark equity calculation performance";
         if (std.mem.eql(u8, field_name, "range_equity")) return "Benchmark range vs range equity calculation";
+        if (std.mem.eql(u8, field_name, "exact_equity")) return "Benchmark exact equity calculation (Experiments 16+17)";
         if (std.mem.eql(u8, field_name, "showdown")) return "Benchmark showdown evaluation (scalar vs batched)";
         if (std.mem.eql(u8, field_name, "format")) return "Output format: table or json";
         return "No description available";
@@ -462,6 +465,12 @@ const BenchCommand = struct {
         // Run range equity benchmark if requested
         if (opts.range_equity) {
             try benchmark.benchmarkRangeEquity(allocator);
+            return;
+        }
+
+        // Run exact equity benchmark if requested
+        if (opts.exact_equity) {
+            try benchmark.benchmarkExactEquity(allocator);
             return;
         }
 
