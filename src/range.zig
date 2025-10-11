@@ -319,10 +319,10 @@ pub const Range = struct {
         var total_weight: f64 = 0.0;
         var total_combinations: u32 = 0;
 
-        // Accumulators for win/tie/loss
-        var total_hero_wins: u32 = 0;
-        var total_ties: u32 = 0;
-        var total_hero_losses: u32 = 0;
+        // Accumulators for win/tie/loss (u64 to prevent overflow with large ranges)
+        var total_hero_wins: u64 = 0;
+        var total_ties: u64 = 0;
+        var total_hero_losses: u64 = 0;
 
         // Hand category accumulators
         var hero_categories = equity.HandCategories{};
@@ -540,12 +540,12 @@ pub const RangeEquityResult = struct {
 pub const DetailedRangeEquityResult = struct {
     hero_equity: f64,
     villain_equity: f64,
-    total_simulations: u32,
+    total_simulations: u64,
 
-    // Win/tie/loss breakdown
-    hero_wins: u32,
-    ties: u32,
-    hero_losses: u32,
+    // Win/tie/loss breakdown (u64 to handle large range enumerations)
+    hero_wins: u64,
+    ties: u64,
+    hero_losses: u64,
 
     // Hand category tracking
     hero_categories: equity.HandCategories = equity.HandCategories{},
