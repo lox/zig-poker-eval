@@ -189,6 +189,76 @@ inline for (0..13) |rank| {
 
 SIMD amortizes steps 1-3 across multiple hands.
 
+## Equity Calculations
+
+The equity module provides both Monte Carlo simulation and exact enumeration for calculating hand equity.
+
+### API Design
+
+**Unified Result Type:**
+All equity functions return `EquityResult` with optional category tracking:
+
+```zig
+pub const EquityResult = struct {
+    wins: u32,
+    ties: u32,
+    total_simulations: u32,
+    hand1_categories: ?HandCategories = null,  // Populated by detailed variants
+    hand2_categories: ?HandCategories = null,  // Populated by detailed variants
+
+    pub fn equity(self: EquityResult) f64 { ... }
+    pub fn winRate(self: EquityResult) f64 { ... }
+    pub fn tieRate(self: EquityResult) f64 { ... }
+    pub fn confidenceInterval(self: EquityResult) ?struct { lower: f64, upper: f64 } { ... }
+};
+```
+
+**Monte Carlo Functions:**
+- `monteCarlo()`: Basic simulation without category tracking
+- `detailedMonteCarlo()`: With hand category frequencies and confidence intervals
+
+**Exact Enumeration:**
+- `exact()`: Deterministic calculation enumerating all board completions
+- `exactDetailed()`: With hand category frequencies
+
+**Implementation:**
+Internal `*Impl()` functions use `comptime` branching for zero-cost abstraction:
+
+```zig
+fn monteCarloImpl(comptime track_categories: bool, ...) !EquityResult {
+    var hand1_cat_storage = HandCategories{};
+    var hand2_cat_storage = HandCategories{};
+
+    // ... simulation loop ...
+
+    if (track_categories) {
+        hand1_cat_storage.addHand(category);  // Eliminated at compile time if false
+    }
+
+    return EquityResult{
+        .wins = wins,
+        .ties = ties,
+        .total_simulations = simulations,
+        .hand1_categories = if (track_categories) hand1_cat_storage else null,
+        .hand2_categories = if (track_categories) hand2_cat_storage else null,
+    };
+}
+
+pub fn monteCarlo(...) !EquityResult {
+    return monteCarloImpl(false, ...);  // Category tracking compiled out
+}
+
+pub fn detailedMonteCarlo(...) !EquityResult {
+    return monteCarloImpl(true, ...);   // Category tracking included
+}
+```
+
+This design provides:
+- Single source of truth (no code duplication)
+- Type-safe API (separate functions, not runtime bool parameter)
+- Zero runtime cost (comptime branches eliminated)
+- Backward compatibility (type aliases for old names)
+
 ## Component Diagram
 
 ```

@@ -38,11 +38,20 @@ const poker = @import("poker");
 const hand = poker.parseHand("AsKsQsJsTs5h2d");
 const rank = poker.evaluateHand(hand);  // Returns 1 (royal flush)
 
-// Calculate equity
+// Calculate equity - Monte Carlo simulation
 const aa = poker.parseHand("AhAs");
 const kk = poker.parseHand("KdKc");
 const result = try poker.monteCarlo(aa, kk, &.{}, 100000, rng, allocator);
-// result.equity() ≈ 0.80 (AA wins ~80% vs KK)
+// result.equity() ≈ 0.82 (AA wins ~82% vs KK)
+
+// Detailed equity with hand category tracking
+const detailed = try poker.detailedMonteCarlo(aa, kk, &.{}, 100000, rng, allocator);
+// detailed.hand1_categories.?.pair - frequency of hero making a pair
+// detailed.confidenceInterval() - 95% confidence interval for equity
+
+// Exact equity enumeration (slower but deterministic)
+const exact_result = try poker.exact(aa, kk, &.{}, allocator);
+// exact_result.equity() - exact equity (no sampling variance)
 ```
 
 ## Development
