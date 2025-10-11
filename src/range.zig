@@ -249,7 +249,7 @@ pub const Range = struct {
         return RangeEquityResult{
             .hero_equity = hero_equity,
             .villain_equity = 1.0 - hero_equity,
-            .total_simulations = total_combinations,
+            .total_simulations = total_hero_wins + total_ties + total_hero_losses,
             .hero_wins = total_hero_wins,
             .ties = total_ties,
             .hero_losses = total_hero_losses,
@@ -611,6 +611,42 @@ test "Range.equityExact AA vs KK on turn" {
     // AA should beat KK with this board
     // 6 AA combos * 6 KK combos = 36 matchups (some may conflict with board)
     try testing.expect(result.hero_equity > 0.90);
+}
+
+test "Range.equityExact rate methods return valid values" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var hero_range = Range.init(allocator);
+    defer hero_range.deinit();
+    try hero_range.addHandNotation("AA", 1.0);
+
+    var villain_range = Range.init(allocator);
+    defer villain_range.deinit();
+    try villain_range.addHandNotation("KK", 1.0);
+
+    // Turn board for fast test
+    const board = [_]Hand{
+        card.makeCard(.spades, .seven),
+        card.makeCard(.hearts, .eight),
+        card.makeCard(.diamonds, .nine),
+        card.makeCard(.clubs, .two),
+    };
+
+    const result = try hero_range.equityExact(&villain_range, &board, allocator);
+
+    // Verify rate methods return values in [0, 1] range (not > 1)
+    try testing.expect(result.winRate() >= 0.0 and result.winRate() <= 1.0);
+    try testing.expect(result.tieRate() >= 0.0 and result.tieRate() <= 1.0);
+    try testing.expect(result.lossRate() >= 0.0 and result.lossRate() <= 1.0);
+
+    // Verify rates sum to 1.0 (within floating point tolerance)
+    const rate_sum = result.winRate() + result.tieRate() + result.lossRate();
+    try testing.expect(rate_sum >= 0.99 and rate_sum <= 1.01);
+
+    // Verify total_simulations matches sum of win/tie/loss
+    try testing.expect(result.total_simulations == result.hero_wins + result.ties + result.hero_losses);
 }
 
 test "Range.equityMonteCarlo AA vs 22" {
