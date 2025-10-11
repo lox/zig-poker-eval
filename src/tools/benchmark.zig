@@ -728,24 +728,46 @@ fn benchEvalBatch(allocator: std.mem.Allocator) !f64 {
 
 fn benchShowdownContext(allocator: std.mem.Allocator) !f64 {
     const iterations = 100000;
+    const repeats = 10; // Repeat measurement 10x for stability
+
     var prng = std.Random.DefaultPrng.init(99);
     const rng = prng.random();
 
     const cases = try generateShowdownCases(allocator, iterations, rng);
     defer allocator.free(cases);
 
-    return timeScalarShowdown(cases);
+    var timer = try std.time.Timer.start();
+
+    for (0..repeats) |_| {
+        const result = timeScalarShowdown(cases);
+        std.mem.doNotOptimizeAway(result);
+    }
+
+    const total_ns: f64 = @floatFromInt(timer.read());
+    const total_ops: f64 = @floatFromInt(iterations * repeats);
+    return total_ns / total_ops;
 }
 
 fn benchShowdownBatch(allocator: std.mem.Allocator) !f64 {
     const iterations = 100000;
+    const repeats = 10; // Repeat measurement 10x for stability
+
     var prng = std.Random.DefaultPrng.init(99);
     const rng = prng.random();
 
     const cases = try generateShowdownCases(allocator, iterations, rng);
     defer allocator.free(cases);
 
-    return timeBatchedShowdown(cases);
+    var timer = try std.time.Timer.start();
+
+    for (0..repeats) |_| {
+        const result = timeBatchedShowdown(cases);
+        std.mem.doNotOptimizeAway(result);
+    }
+
+    const total_ns: f64 = @floatFromInt(timer.read());
+    const total_ops: f64 = @floatFromInt(iterations * repeats);
+    return total_ns / total_ops;
 }
 
 fn benchEquityMonteCarlo(allocator: std.mem.Allocator) !f64 {
