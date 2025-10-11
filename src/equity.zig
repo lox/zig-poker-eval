@@ -10,11 +10,14 @@ pub const Hand = card.Hand;
 pub const HandRank = evaluator.HandRank;
 pub const HandCategory = evaluator.HandCategory;
 
-/// Basic equity result for head-to-head calculations
+/// Unified equity result for all calculation types
+/// Supports both basic and detailed (category-tracking) calculations
 pub const EquityResult = struct {
     wins: u32,
     ties: u32,
     total_simulations: u32,
+    hand1_categories: ?HandCategories = null,
+    hand2_categories: ?HandCategories = null,
 
     pub fn winRate(self: EquityResult) f64 {
         return @as(f64, @floatFromInt(self.wins)) / @as(f64, @floatFromInt(self.total_simulations));
@@ -33,6 +36,27 @@ pub const EquityResult = struct {
         const win_equity = @as(f64, @floatFromInt(self.wins));
         const tie_equity = @as(f64, @floatFromInt(self.ties)) * 0.5;
         return (win_equity + tie_equity) / @as(f64, @floatFromInt(self.total_simulations));
+    }
+
+    /// Calculate 95% confidence interval for Monte Carlo equity
+    /// Returns null for exact calculations or results without category tracking
+    pub fn confidenceInterval(self: EquityResult) ?struct { lower: f64, upper: f64 } {
+        // Only valid for Monte Carlo results with categories
+        if (self.hand1_categories == null) return null;
+
+        const equity_val = self.equity();
+        const n = @as(f64, @floatFromInt(self.total_simulations));
+
+        // Standard error for binomial proportion
+        const se = @sqrt((equity_val * (1.0 - equity_val)) / n);
+
+        // 95% confidence interval (±1.96 * SE)
+        const margin = 1.96 * se;
+
+        return .{
+            .lower = @max(0.0, equity_val - margin),
+            .upper = @min(1.0, equity_val + margin),
+        };
     }
 };
 
@@ -70,80 +94,10 @@ pub const HandCategories = struct {
     }
 };
 
-/// Enhanced equity result with detailed statistics
-pub const DetailedEquityResult = struct {
-    wins: u32,
-    ties: u32,
-    total_simulations: u32,
-    hand1_categories: HandCategories = HandCategories{},
-    hand2_categories: HandCategories = HandCategories{},
-
-    pub fn equity(self: DetailedEquityResult) f64 {
-        const win_equity = @as(f64, @floatFromInt(self.wins));
-        const tie_equity = @as(f64, @floatFromInt(self.ties)) * 0.5;
-        return (win_equity + tie_equity) / @as(f64, @floatFromInt(self.total_simulations));
-    }
-
-    pub fn winRate(self: DetailedEquityResult) f64 {
-        return @as(f64, @floatFromInt(self.wins)) / @as(f64, @floatFromInt(self.total_simulations));
-    }
-
-    pub fn tieRate(self: DetailedEquityResult) f64 {
-        return @as(f64, @floatFromInt(self.ties)) / @as(f64, @floatFromInt(self.total_simulations));
-    }
-
-    pub fn lossRate(self: DetailedEquityResult) f64 {
-        const losses = self.total_simulations - self.wins - self.ties;
-        return @as(f64, @floatFromInt(losses)) / @as(f64, @floatFromInt(self.total_simulations));
-    }
-
-    /// Calculate 95% confidence interval for equity
-    pub fn confidenceInterval(self: DetailedEquityResult) struct { lower: f64, upper: f64 } {
-        const equity_val = self.equity();
-        const n = @as(f64, @floatFromInt(self.total_simulations));
-
-        // Standard error for binomial proportion
-        const se = @sqrt((equity_val * (1.0 - equity_val)) / n);
-
-        // 95% confidence interval (±1.96 * SE)
-        const margin = 1.96 * se;
-
-        return .{
-            .lower = @max(0.0, equity_val - margin),
-            .upper = @min(1.0, equity_val + margin),
-        };
-    }
-};
-
-/// Detailed exact equity result with hand category tracking
-/// Unlike DetailedEquityResult (Monte Carlo), this has no confidence intervals
-/// since exact calculation enumerates all possible boards deterministically
-pub const DetailedExactResult = struct {
-    wins: u32,
-    ties: u32,
-    total_simulations: u32,
-    hand1_categories: HandCategories = HandCategories{},
-    hand2_categories: HandCategories = HandCategories{},
-
-    pub fn equity(self: DetailedExactResult) f64 {
-        const win_equity = @as(f64, @floatFromInt(self.wins));
-        const tie_equity = @as(f64, @floatFromInt(self.ties)) * 0.5;
-        return (win_equity + tie_equity) / @as(f64, @floatFromInt(self.total_simulations));
-    }
-
-    pub fn winRate(self: DetailedExactResult) f64 {
-        return @as(f64, @floatFromInt(self.wins)) / @as(f64, @floatFromInt(self.total_simulations));
-    }
-
-    pub fn tieRate(self: DetailedExactResult) f64 {
-        return @as(f64, @floatFromInt(self.ties)) / @as(f64, @floatFromInt(self.total_simulations));
-    }
-
-    pub fn lossRate(self: DetailedExactResult) f64 {
-        const losses = self.total_simulations - self.wins - self.ties;
-        return @as(f64, @floatFromInt(losses)) / @as(f64, @floatFromInt(self.total_simulations));
-    }
-};
+// Backward compatibility type aliases
+// These can be removed in a future major version
+pub const DetailedEquityResult = EquityResult;
+pub const DetailedExactResult = EquityResult;
 
 /// Precomputed deck for fast sampling
 const PrecomputedDeck = struct {
@@ -200,14 +154,8 @@ fn sampleCardsPrecomputed(deck: anytype, num_cards: u8, rng: std.Random) u64 {
     return sampled;
 }
 
-/// Head-to-head Monte Carlo equity calculation - optimized with SIMD batching
-/// @param hero_hole_cards Combined bitmask of hero's exactly 2 hole cards
-/// @param villain_hole_cards Combined bitmask of villain's exactly 2 hole cards
-/// @param board Array of community cards (0-5 cards)
-/// @param simulations Number of Monte Carlo simulations to run
-/// @param rng Random number generator
-/// @param allocator Memory allocator (unused but kept for API compatibility)
-pub fn monteCarlo(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Hand, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) !EquityResult {
+/// Internal Monte Carlo implementation with comptime category tracking and SIMD batching
+fn monteCarloImpl(comptime track_categories: bool, hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Hand, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) !EquityResult {
     // Validate hole cards
     if (card.countCards(hero_hole_cards) != 2) return error.InvalidHeroHoleCards;
     if (card.countCards(villain_hole_cards) != 2) return error.InvalidVillainHoleCards;
@@ -219,12 +167,10 @@ pub fn monteCarlo(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []cons
     const cards_needed = 5 - @as(u8, @intCast(board.len));
 
     // No allocator needed for head-to-head equity
-    _ = allocator; // Mark as unused
+    _ = allocator;
 
-    // Precompute
+    // Precompute available cards
     const used_mask = hero_hole_cards | villain_hole_cards | board_hand;
-
-    // Create lookup table for available cards
     var available_cards: [52]u8 = undefined;
     var available_count: u8 = 0;
     for (0..52) |i| {
@@ -238,7 +184,11 @@ pub fn monteCarlo(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []cons
     var wins: u32 = 0;
     var ties: u32 = 0;
 
-    // Use smaller batch size for better cache locality
+    // Storage for categories (always allocated, but only used if track_categories is true)
+    var hand1_cat_storage = HandCategories{};
+    var hand2_cat_storage = HandCategories{};
+
+    // Use SIMD batching for performance
     const BATCH_SIZE = 16;
     const num_batches = simulations / BATCH_SIZE;
     const remainder = simulations % BATCH_SIZE;
@@ -253,7 +203,6 @@ pub fn monteCarlo(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []cons
             var sampled: u64 = 0;
             var cards_sampled: u8 = 0;
 
-            // Optimized sampling using available cards array
             while (cards_sampled < cards_needed) {
                 const idx = rng.uintLessThan(u8, available_count);
                 const card_bit = @as(u64, 1) << @intCast(available_cards[idx]);
@@ -273,8 +222,13 @@ pub fn monteCarlo(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []cons
         const hero_ranks = evaluator.evaluateBatch(BATCH_SIZE, hero_batch);
         const villain_ranks = evaluator.evaluateBatch(BATCH_SIZE, villain_batch);
 
-        // Vectorized comparison
+        // Vectorized comparison with optional category tracking (comptime branching)
         inline for (0..BATCH_SIZE) |i| {
+            if (track_categories) {
+                hand1_cat_storage.addHand(evaluator.getHandCategory(hero_ranks[i]));
+                hand2_cat_storage.addHand(evaluator.getHandCategory(villain_ranks[i]));
+            }
+
             if (hero_ranks[i] < villain_ranks[i]) {
                 wins += 1;
             } else if (hero_ranks[i] == villain_ranks[i]) {
@@ -305,6 +259,11 @@ pub fn monteCarlo(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []cons
         const hero_rank = evaluator.evaluateHand(hero_hand);
         const villain_rank = evaluator.evaluateHand(villain_hand);
 
+        if (track_categories) {
+            hand1_cat_storage.addHand(evaluator.getHandCategory(hero_rank));
+            hand2_cat_storage.addHand(evaluator.getHandCategory(villain_rank));
+        }
+
         if (hero_rank < villain_rank) {
             wins += 1;
         } else if (hero_rank == villain_rank) {
@@ -316,69 +275,31 @@ pub fn monteCarlo(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []cons
         .wins = wins,
         .ties = ties,
         .total_simulations = simulations,
+        .hand1_categories = if (track_categories) hand1_cat_storage else null,
+        .hand2_categories = if (track_categories) hand2_cat_storage else null,
     };
+}
+
+/// Head-to-head Monte Carlo equity calculation - optimized with SIMD batching
+/// @param hero_hole_cards Combined bitmask of hero's exactly 2 hole cards
+/// @param villain_hole_cards Combined bitmask of villain's exactly 2 hole cards
+/// @param board Array of community cards (0-5 cards)
+/// @param simulations Number of Monte Carlo simulations to run
+/// @param rng Random number generator
+/// @param allocator Memory allocator (unused but kept for API compatibility)
+pub fn monteCarlo(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Hand, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) !EquityResult {
+    return monteCarloImpl(false, hero_hole_cards, villain_hole_cards, board, simulations, rng, allocator);
 }
 
 /// Detailed Monte Carlo with hand category tracking
 /// @param hero_hole_cards Combined bitmask of hero's exactly 2 hole cards
 /// @param villain_hole_cards Combined bitmask of villain's exactly 2 hole cards
-pub fn detailedMonteCarlo(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Hand, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) !DetailedEquityResult {
-    // Validate hole cards
-    if (card.countCards(hero_hole_cards) != 2) return error.InvalidHeroHoleCards;
-    if (card.countCards(villain_hole_cards) != 2) return error.InvalidVillainHoleCards;
-    if ((hero_hole_cards & villain_hole_cards) != 0) return error.ConflictingHoleCards;
-    var board_hand: Hand = 0;
-    for (board) |board_card| {
-        board_hand |= board_card;
-    }
-    const cards_needed = 5 - @as(u8, @intCast(board.len));
-
-    var wins: u32 = 0;
-    var ties: u32 = 0;
-    var hand1_categories = HandCategories{};
-    var hand2_categories = HandCategories{};
-
-    // No allocator needed for head-to-head equity
-    _ = allocator; // Mark as unused
-
-    for (0..simulations) |_| {
-        // Sample remaining board cards
-        const board_completion = sampleRemainingCardsForEquityDirect(hero_hole_cards, villain_hole_cards, board_hand, cards_needed, rng);
-
-        // Create final hands and evaluate showdown
-        const hero_hand = hero_hole_cards | board_completion;
-        const villain_hand = villain_hole_cards | board_completion;
-
-        // Track hand categories
-        const hero_rank = evaluator.evaluateHand(hero_hand);
-        hand1_categories.addHand(evaluator.getHandCategory(hero_rank));
-        const villain_rank = evaluator.evaluateHand(villain_hand);
-        hand2_categories.addHand(evaluator.getHandCategory(villain_rank));
-
-        const result = evaluateEquityShowdown(hero_hand, villain_hand);
-
-        if (result != 0) {
-            if (result > 0) {
-                wins += 1;
-            }
-        } else {
-            ties += 1;
-        }
-    }
-
-    return DetailedEquityResult{
-        .wins = wins,
-        .ties = ties,
-        .total_simulations = simulations,
-        .hand1_categories = hand1_categories,
-        .hand2_categories = hand2_categories,
-    };
+pub fn detailedMonteCarlo(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Hand, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) !EquityResult {
+    return monteCarloImpl(true, hero_hole_cards, villain_hole_cards, board, simulations, rng, allocator);
 }
 
-/// Head-to-head exact equity calculation
-/// @param hero_hole_cards Combined bitmask of hero's exactly 2 hole cards
-/// @param villain_hole_cards Combined bitmask of villain's exactly 2 hole cards
-pub fn exact(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Hand, allocator: std.mem.Allocator) !EquityResult {
+/// Internal exact equity implementation with comptime category tracking
+fn exactImpl(comptime track_categories: bool, hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Hand, allocator: std.mem.Allocator) !EquityResult {
     // Validate hole cards
     if (card.countCards(hero_hole_cards) != 2) return error.InvalidHeroHoleCards;
     if (card.countCards(villain_hole_cards) != 2) return error.InvalidVillainHoleCards;
@@ -398,87 +319,11 @@ pub fn exact(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Han
     var wins: u32 = 0;
     var ties: u32 = 0;
 
-    // NEW: SIMD batching for board evaluation (Experiment 17)
-    const BATCH_SIZE = 32;
-    const num_batches = board_completions.len / BATCH_SIZE;
+    // Storage for categories (always allocated, but only used if track_categories is true)
+    var hand1_cat_storage = HandCategories{};
+    var hand2_cat_storage = HandCategories{};
 
-    var batch_idx: usize = 0;
-    while (batch_idx < num_batches) : (batch_idx += 1) {
-        var hero_batch: @Vector(BATCH_SIZE, u64) = undefined;
-        var villain_batch: @Vector(BATCH_SIZE, u64) = undefined;
-
-        // Prepare batch of full 7-card hands
-        inline for (0..BATCH_SIZE) |j| {
-            const complete_board = board_hand | board_completions[batch_idx * BATCH_SIZE + j];
-            hero_batch[j] = hero_hole_cards | complete_board;
-            villain_batch[j] = villain_hole_cards | complete_board;
-        }
-
-        // SIMD batch evaluation (existing optimized code path)
-        const hero_ranks = evaluator.evaluateBatch(BATCH_SIZE, hero_batch);
-        const villain_ranks = evaluator.evaluateBatch(BATCH_SIZE, villain_batch);
-
-        // Compare results
-        inline for (0..BATCH_SIZE) |j| {
-            if (hero_ranks[j] < villain_ranks[j]) {
-                wins += 1;
-            } else if (hero_ranks[j] == villain_ranks[j]) {
-                ties += 1;
-            }
-        }
-    }
-
-    // Handle remainder with board context (Experiment 16 approach)
-    const remainder_start = num_batches * BATCH_SIZE;
-    for (board_completions[remainder_start..]) |board_completion| {
-        const complete_board = board_hand | board_completion;
-        const ctx = evaluator.initBoardContext(complete_board);
-        const result = evaluator.evaluateShowdownWithContext(&ctx, hero_hole_cards, villain_hole_cards);
-
-        if (result != 0) {
-            if (result > 0) {
-                wins += 1;
-            }
-        } else {
-            ties += 1;
-        }
-    }
-
-    return EquityResult{
-        .wins = wins,
-        .ties = ties,
-        .total_simulations = @intCast(board_completions.len),
-    };
-}
-
-/// Detailed exact equity calculation with hand category tracking
-/// @param hero_hole_cards Combined bitmask of hero's exactly 2 hole cards
-/// @param villain_hole_cards Combined bitmask of villain's exactly 2 hole cards
-/// @param board Array of community cards (0-5 cards)
-/// @param allocator Memory allocator for board enumeration
-pub fn exactDetailed(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Hand, allocator: std.mem.Allocator) !DetailedExactResult {
-    // Validate hole cards
-    if (card.countCards(hero_hole_cards) != 2) return error.InvalidHeroHoleCards;
-    if (card.countCards(villain_hole_cards) != 2) return error.InvalidVillainHoleCards;
-    if ((hero_hole_cards & villain_hole_cards) != 0) return error.ConflictingHoleCards;
-    const cards_needed = 5 - @as(u8, @intCast(board.len));
-
-    // Combine existing board cards
-    var board_hand: Hand = 0;
-    for (board) |board_card| {
-        board_hand |= board_card;
-    }
-
-    // Enumerate all possible board completions
-    const board_completions = try enumerateEquityBoardCompletions(hero_hole_cards, villain_hole_cards, board, cards_needed, allocator);
-    defer allocator.free(board_completions);
-
-    var wins: u32 = 0;
-    var ties: u32 = 0;
-    var hand1_categories = HandCategories{};
-    var hand2_categories = HandCategories{};
-
-    // NEW: SIMD batching for board evaluation (Experiment 17)
+    // SIMD batching for board evaluation (Experiment 17)
     const BATCH_SIZE = 32;
     const num_batches = board_completions.len / BATCH_SIZE;
 
@@ -498,10 +343,12 @@ pub fn exactDetailed(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []c
         const hero_ranks = evaluator.evaluateBatch(BATCH_SIZE, hero_batch);
         const villain_ranks = evaluator.evaluateBatch(BATCH_SIZE, villain_batch);
 
-        // Track hand categories and compare results
+        // Compare results and track categories (comptime branching)
         inline for (0..BATCH_SIZE) |j| {
-            hand1_categories.addHand(evaluator.getHandCategory(hero_ranks[j]));
-            hand2_categories.addHand(evaluator.getHandCategory(villain_ranks[j]));
+            if (track_categories) {
+                hand1_cat_storage.addHand(evaluator.getHandCategory(hero_ranks[j]));
+                hand2_cat_storage.addHand(evaluator.getHandCategory(villain_ranks[j]));
+            }
 
             if (hero_ranks[j] < villain_ranks[j]) {
                 wins += 1;
@@ -517,13 +364,14 @@ pub fn exactDetailed(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []c
         const complete_board = board_hand | board_completion;
         const ctx = evaluator.initBoardContext(complete_board);
 
-        // Track hand categories
-        const hero_rank = evaluator.evaluateHoleWithContext(&ctx, hero_hole_cards);
-        hand1_categories.addHand(evaluator.getHandCategory(hero_rank));
-        const villain_rank = evaluator.evaluateHoleWithContext(&ctx, villain_hole_cards);
-        hand2_categories.addHand(evaluator.getHandCategory(villain_rank));
+        // Track hand categories (comptime branching)
+        if (track_categories) {
+            const hero_rank = evaluator.evaluateHoleWithContext(&ctx, hero_hole_cards);
+            hand1_cat_storage.addHand(evaluator.getHandCategory(hero_rank));
+            const villain_rank = evaluator.evaluateHoleWithContext(&ctx, villain_hole_cards);
+            hand2_cat_storage.addHand(evaluator.getHandCategory(villain_rank));
+        }
 
-        // Evaluate showdown with board context
         const result = evaluator.evaluateShowdownWithContext(&ctx, hero_hole_cards, villain_hole_cards);
 
         if (result != 0) {
@@ -535,22 +383,29 @@ pub fn exactDetailed(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []c
         }
     }
 
-    return DetailedExactResult{
+    return EquityResult{
         .wins = wins,
         .ties = ties,
         .total_simulations = @intCast(board_completions.len),
-        .hand1_categories = hand1_categories,
-        .hand2_categories = hand2_categories,
+        .hand1_categories = if (track_categories) hand1_cat_storage else null,
+        .hand2_categories = if (track_categories) hand2_cat_storage else null,
     };
 }
 
-/// Exact head-to-head equity calculation between two specific hands (preflop only)
-/// Enumerates all C(48,5) = 1,712,304 possible boards
+/// Head-to-head exact equity calculation
 /// @param hero_hole_cards Combined bitmask of hero's exactly 2 hole cards
 /// @param villain_hole_cards Combined bitmask of villain's exactly 2 hole cards
+pub fn exact(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Hand, allocator: std.mem.Allocator) !EquityResult {
+    return exactImpl(false, hero_hole_cards, villain_hole_cards, board, allocator);
+}
+
+/// Detailed exact equity calculation with hand category tracking
+/// @param hero_hole_cards Combined bitmask of hero's exactly 2 hole cards
+/// @param villain_hole_cards Combined bitmask of villain's exactly 2 hole cards
+/// @param board Array of community cards (0-5 cards)
 /// @param allocator Memory allocator for board enumeration
-pub fn exactHeadToHead(hero_hole_cards: Hand, villain_hole_cards: Hand, allocator: std.mem.Allocator) !EquityResult {
-    return exact(hero_hole_cards, villain_hole_cards, &.{}, allocator);
+pub fn exactDetailed(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Hand, allocator: std.mem.Allocator) !EquityResult {
+    return exactImpl(true, hero_hole_cards, villain_hole_cards, board, allocator);
 }
 
 /// Exact equity calculation against random opponent (all possible villain hands and boards)
@@ -701,7 +556,7 @@ pub fn multiway(hands: []const Hand, board: []const Hand, simulations: u32, rng:
 
     for (0..simulations) |_| {
         // Sample remaining board cards
-        const board_completion = sampleRemainingCardsForEquity(hands, board_hand, cards_needed, rng);
+        const board_completion = sampleRemainingCards(hands, board_hand, cards_needed, rng);
 
         // Reuse final_hands buffer
         for (hands, 0..) |hole_cards, i| {
@@ -779,35 +634,10 @@ pub fn heroVsFieldMonteCarlo(hero_hole_cards: Hand, villain_holes: []const Hand,
 
 // === EQUITY-SPECIFIC HELPER FUNCTIONS ===
 
-/// Fast path for head-to-head equity sampling (no array allocation)
-fn sampleRemainingCardsHeadToHead(hero_hole_cards: Hand, villain_hole_cards: Hand, board: Hand, num_cards: u8, rng: std.Random) Hand {
-    // Direct bit manipulation for maximum performance - use board directly
-    const used_bits: u64 = hero_hole_cards | villain_hole_cards | board;
-
-    var sampled_bits: u64 = 0;
-    var cards_sampled: u8 = 0;
-
-    while (cards_sampled < num_cards) {
-        const card_idx = rng.uintLessThan(u8, 52);
-        const card_bit = @as(u64, 1) << @intCast(card_idx);
-
-        if ((used_bits & card_bit) == 0 and (sampled_bits & card_bit) == 0) {
-            sampled_bits |= card_bit;
-            cards_sampled += 1;
-        }
-    }
-
-    return sampled_bits;
-}
-
-/// Sample remaining cards for equity calculations (performance optimized)
-fn sampleRemainingCardsForEquity(hands: []const Hand, board: Hand, num_cards: u8, rng: std.Random) Hand {
-    // Fast path for head-to-head (most common case)
-    if (hands.len == 2) {
-        return sampleRemainingCardsHeadToHead(hands[0], hands[1], board, num_cards, rng);
-    }
-
-    // For multiway, use the same bit manipulation approach as head-to-head
+/// Sample remaining cards for equity calculations (unified implementation)
+/// Supports both head-to-head and multiway scenarios
+fn sampleRemainingCards(hands: []const Hand, board: Hand, num_cards: u8, rng: std.Random) Hand {
+    // Calculate used cards bitmask
     var used_bits: u64 = board;
     for (hands) |hole_cards| {
         used_bits |= hole_cards;
@@ -827,11 +657,6 @@ fn sampleRemainingCardsForEquity(hands: []const Hand, board: Hand, num_cards: u8
     }
 
     return sampled_bits;
-}
-
-/// Direct sampling for head-to-head equity (used by detailedMonteCarlo)
-fn sampleRemainingCardsForEquityDirect(hero_hole_cards: Hand, villain_hole_cards: Hand, board: Hand, num_cards: u8, rng: std.Random) Hand {
-    return sampleRemainingCardsHeadToHead(hero_hole_cards, villain_hole_cards, board, num_cards, rng);
 }
 
 /// Evaluate equity showdown between two hands
@@ -966,7 +791,7 @@ fn workerThread(ctx: *ThreadContext) void {
     // Run simulations assigned to this thread
     for (0..ctx.simulations) |_| {
         // Sample remaining board cards
-        const board_completion = sampleRemainingCardsForEquityDirect(ctx.hero_hole_cards, ctx.villain_hole_cards, ctx.board, cards_needed, rng);
+        const board_completion = sampleRemainingCards(&[_]Hand{ ctx.hero_hole_cards, ctx.villain_hole_cards }, ctx.board, cards_needed, rng);
 
         // Create final hands and evaluate showdown
         const hero_hand = ctx.hero_hole_cards | board_completion;
@@ -1229,14 +1054,16 @@ test "EquityResult helper methods" {
     try testing.expect(result.equity() == 0.85); // 80 + 10*0.5 = 85%
 }
 
-test "DetailedEquityResult confidence interval" {
-    const result = DetailedEquityResult{
+test "EquityResult confidence interval" {
+    const result = EquityResult{
         .wins = 500,
         .ties = 0,
         .total_simulations = 1000,
+        .hand1_categories = HandCategories{}, // Must provide categories for CI calculation
+        .hand2_categories = HandCategories{},
     };
 
-    const ci = result.confidenceInterval();
+    const ci = result.confidenceInterval().?; // Unwrap because we know categories are present
 
     // 50% equity, should have reasonable confidence bounds
     try testing.expect(ci.lower >= 0.0);
