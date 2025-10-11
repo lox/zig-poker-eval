@@ -1,8 +1,0 @@
-🚀 Performance Benchmark
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-🤺 Showdown Benchmark
-  Iterations:             100000
-  Context path:          32.93 ns/eval
-  Batched path:          8.40 ns/eval
-  Speedup:               3.92x
