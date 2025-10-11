@@ -144,8 +144,9 @@ pub fn main() !void {
     // Fill matrix from results
     for (results) |result| {
         if (result.total > 0) {
-            const win_rate: u16 = @intCast((result.wins * 1000) / result.total);
-            const tie_rate: u16 = @intCast((result.ties * 1000) / result.total);
+            // Use u64 to avoid overflow when multiplying by 1000
+            const win_rate: u16 = @intCast((@as(u64, result.wins) * 1000) / result.total);
+            const tie_rate: u16 = @intCast((@as(u64, result.ties) * 1000) / result.total);
 
             const i = result.hero_idx;
             const j = result.villain_idx;
@@ -286,6 +287,31 @@ fn getHandName(index: u8) []const u8 {
     return hand.toNotation();
 }
 
+test "verify no overflow in win rate calculation" {
+    // Simulate realistic values from AA vs KK
+    const result = MatchupResult{
+        .hero_idx = 168,
+        .villain_idx = 154,
+        .wins = 50_371_344, // Realistic wins from AA vs KK
+        .ties = 285_228, // Realistic ties
+        .total = 61_642_944, // Total boards evaluated
+    };
+
+    // This is what the code does now (with u64)
+    const win_rate: u16 = @intCast((@as(u64, result.wins) * 1000) / result.total);
+    const tie_rate: u16 = @intCast((@as(u64, result.ties) * 1000) / result.total);
+
+    // Expected: 50,371,344 / 61,642,944 = 0.8171 = 817 per mille
+    try std.testing.expect(win_rate >= 815 and win_rate <= 820);
+
+    // Expected: 285,228 / 61,642,944 = 0.0046 = 4-5 per mille
+    try std.testing.expect(tie_rate >= 3 and tie_rate <= 6);
+
+    // The loss rate should complete to ~1000
+    const loss_rate: u16 = 1000 - win_rate - tie_rate;
+    try std.testing.expect(loss_rate >= 175 and loss_rate <= 185);
+}
+
 fn validateKnownMatchups(matrix: [169][169][2]u16) bool {
     const KnownMatchup = struct {
         hero_idx: u8,
@@ -312,10 +338,16 @@ fn validateKnownMatchups(matrix: [169][169][2]u16) bool {
 
     for (known_values) |kv| {
         const generated_win = matrix[kv.hero_idx][kv.villain_idx][0];
-        const diff = if (generated_win > kv.expected_win)
-            generated_win - kv.expected_win
+        const generated_tie = matrix[kv.hero_idx][kv.villain_idx][1];
+
+        // Calculate equity from win rate and tie rate
+        // Equity = win_rate + (tie_rate / 2)
+        const generated_equity = generated_win + (generated_tie / 2);
+
+        const diff = if (generated_equity > kv.expected_win)
+            generated_equity - kv.expected_win
         else
-            kv.expected_win - generated_win;
+            kv.expected_win - generated_equity;
 
         const is_valid = diff <= kv.tolerance;
         const status = if (is_valid) "✓ PASS" else "✗ FAIL";
@@ -324,7 +356,7 @@ fn validateKnownMatchups(matrix: [169][169][2]u16) bool {
             kv.hero_name,
             kv.villain_name,
             @as(f64, @floatFromInt(kv.expected_win)) / 10.0,
-            @as(f64, @floatFromInt(generated_win)) / 10.0,
+            @as(f64, @floatFromInt(generated_equity)) / 10.0,
             @as(f64, @floatFromInt(diff)) / 10.0,
             status,
         });

@@ -135,13 +135,17 @@ pub fn main() !void {
     const minutes = @as(f64, @floatFromInt(elapsed_ms)) / 1000.0 / 60.0;
     print("\n✓ Completed in {d:.1} minutes\n", .{minutes});
 
-    // Convert to win percentages
+    // Convert to win percentages (using u64 intermediate to avoid overflow)
     var equity_table: [169][2]u16 = undefined;
     for (results, 0..) |result, i| {
         const total = result.wins + result.losses + result.ties;
         if (total > 0) {
-            equity_table[i][0] = @intCast((result.wins * 1000) / total);
-            equity_table[i][1] = @intCast((result.ties * 1000) / total);
+            // Use explicit u64 cast to prevent overflow when multiplying by 1000
+            // (result.wins can be ~2 billion from exactVsRandom)
+            const wins_u64: u64 = result.wins;
+            const ties_u64: u64 = result.ties;
+            equity_table[i][0] = @intCast((wins_u64 * 1000) / total);
+            equity_table[i][1] = @intCast((ties_u64 * 1000) / total);
         } else {
             equity_table[i] = .{ 500, 0 };
         }
@@ -184,7 +188,7 @@ fn workerThread(ctx: *ThreadContext) void {
         };
 
         ctx.results[i] = HandResult{
-            .index = hand.index,
+            .hand = hand,
             .wins = @intCast(equity_result.wins),
             .losses = equity_result.total_simulations - equity_result.wins - equity_result.ties,
             .ties = @intCast(equity_result.ties),
