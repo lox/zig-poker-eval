@@ -176,6 +176,10 @@ pub const heroVsFieldMonteCarlo = equity.heroVsFieldMonteCarlo;
 /// Used for preflop hand classification (e.g., "AKs", "72o", "TT")
 pub const StartingHand = heads_up_mod.StartingHand;
 
+/// All 169 unique starting hands in canonical order (index 0-168)
+/// Comptime-generated for zero runtime cost
+pub const ALL_STARTING_HANDS = heads_up_mod.ALL_STARTING_HANDS;
+
 /// Fast heads-up preflop equity using pre-computed tables
 /// 169 unique starting hands indexed for O(1) lookup
 pub const HeadsUpEquity = heads_up_mod.HeadsUpEquity;

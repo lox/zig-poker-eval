@@ -74,7 +74,7 @@ pub fn main() !void {
     print("Heads-Up Equity Table Generator\n", .{});
     print("========================================\n\n", .{});
 
-    const hands = generateStartingHands();
+    const hands = poker.ALL_STARTING_HANDS;
 
     // Estimate performance
     const boards_per_hand = 1712304; // C(48,5)
@@ -201,16 +201,6 @@ fn workerThread(ctx: *ThreadContext) void {
 }
 
 // Old calculateEquityVsRandomFast function removed - now using equity.exactVsRandom()
-
-fn generateStartingHands() [169]poker.StartingHand {
-    var hands: [169]poker.StartingHand = undefined;
-
-    for (0..169) |i| {
-        hands[i] = poker.StartingHand.fromIndex(@intCast(i));
-    }
-
-    return hands;
-}
 
 fn createHand(hand: poker.StartingHand) u64 {
     const high_val = @intFromEnum(hand.high);

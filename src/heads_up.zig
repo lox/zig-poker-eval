@@ -19,6 +19,16 @@ const range_mod = @import("range");
 // - Upper triangle are suited hands
 // - Lower triangle are offsuit hands
 
+/// All 169 unique starting hands in canonical order (index 0-168)
+/// Generated at compile time for zero runtime cost
+pub const ALL_STARTING_HANDS: [169]StartingHand = blk: {
+    var hands: [169]StartingHand = undefined;
+    for (0..169) |i| {
+        hands[i] = StartingHand.fromIndex(@intCast(i));
+    }
+    break :blk hands;
+};
+
 /// Represents one of the 169 unique starting hands in Texas Hold'em
 /// This is a semantic type for working with preflop hand classes (e.g., "AKs", "72o", "TT")
 /// rather than specific card combinations.
@@ -387,6 +397,24 @@ test "StartingHand.toRange creates correct ranges" {
     var ako_range = try ako.toRange(allocator);
     defer ako_range.deinit();
     try std.testing.expect(ako_range.handCount() == 12);
+}
+
+test "ALL_STARTING_HANDS contains all 169 hands" {
+    // Verify we have all 169 hands
+    try std.testing.expectEqual(@as(usize, 169), ALL_STARTING_HANDS.len);
+
+    // Verify indices are correct
+    try std.testing.expectEqual(@as(u8, 0), ALL_STARTING_HANDS[0].index());
+    try std.testing.expectEqual(@as(u8, 168), ALL_STARTING_HANDS[168].index());
+
+    // Verify first and last hands
+    try std.testing.expectEqualStrings("22", ALL_STARTING_HANDS[0].toNotation());
+    try std.testing.expectEqualStrings("AA", ALL_STARTING_HANDS[168].toNotation());
+
+    // Verify all indices match their position
+    for (ALL_STARTING_HANDS, 0..) |hand, i| {
+        try std.testing.expectEqual(@as(u8, @intCast(i)), hand.index());
+    }
 }
 
 test "evaluatePreflopAllIn integration" {
