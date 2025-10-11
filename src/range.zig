@@ -192,12 +192,20 @@ pub const Range = struct {
                 .hero_equity = 0.0,
                 .villain_equity = 0.0,
                 .total_simulations = 0,
+                .hero_wins = 0,
+                .ties = 0,
+                .hero_losses = 0,
             };
         }
 
         var total_hero_equity: f64 = 0.0;
         var total_weight: f64 = 0.0;
         var total_combinations: u32 = 0;
+
+        // Accumulators for win/tie/loss
+        var total_hero_wins: u32 = 0;
+        var total_ties: u32 = 0;
+        var total_hero_losses: u32 = 0;
 
         // Combine board cards once
         var board_hand: Hand = 0;
@@ -228,6 +236,11 @@ pub const Range = struct {
                 // Accumulate weighted equity
                 total_hero_equity += result.equity() * weight;
                 total_combinations += 1;
+
+                // Accumulate win/tie/loss counts
+                total_hero_wins += result.wins;
+                total_ties += result.ties;
+                total_hero_losses += (result.total_simulations - result.wins - result.ties);
             }
         }
 
@@ -237,6 +250,9 @@ pub const Range = struct {
             .hero_equity = hero_equity,
             .villain_equity = 1.0 - hero_equity,
             .total_simulations = total_combinations,
+            .hero_wins = total_hero_wins,
+            .ties = total_ties,
+            .hero_losses = total_hero_losses,
         };
     }
 
@@ -248,11 +264,15 @@ pub const Range = struct {
                 .hero_equity = 0.0,
                 .villain_equity = 0.0,
                 .total_simulations = 0,
+                .hero_wins = 0,
+                .ties = 0,
+                .hero_losses = 0,
             };
         }
 
         var hero_wins: u32 = 0;
         var ties: u32 = 0;
+        var hero_losses: u32 = 0;
         var valid_simulations: u32 = 0;
 
         // Combine board cards once
@@ -291,6 +311,8 @@ pub const Range = struct {
                 hero_wins += 1;
             } else if (result.ties > 0) {
                 ties += 1;
+            } else {
+                hero_losses += 1;
             }
         }
 
@@ -300,6 +322,9 @@ pub const Range = struct {
                 .hero_equity = 0.0,
                 .villain_equity = 0.0,
                 .total_simulations = 0,
+                .hero_wins = 0,
+                .ties = 0,
+                .hero_losses = 0,
             };
         }
 
@@ -309,6 +334,9 @@ pub const Range = struct {
             .hero_equity = hero_equity,
             .villain_equity = 1.0 - hero_equity,
             .total_simulations = valid_simulations,
+            .hero_wins = hero_wins,
+            .ties = ties,
+            .hero_losses = hero_losses,
         };
     }
 };
@@ -337,8 +365,28 @@ pub const RangeEquityResult = struct {
     villain_equity: f64,
     total_simulations: u32,
 
+    // Win/tie/loss breakdown
+    hero_wins: u32,
+    ties: u32,
+    hero_losses: u32,
+
     pub fn sum(self: RangeEquityResult) f64 {
         return self.hero_equity + self.villain_equity;
+    }
+
+    pub fn winRate(self: RangeEquityResult) f64 {
+        if (self.total_simulations == 0) return 0.0;
+        return @as(f64, @floatFromInt(self.hero_wins)) / @as(f64, @floatFromInt(self.total_simulations));
+    }
+
+    pub fn tieRate(self: RangeEquityResult) f64 {
+        if (self.total_simulations == 0) return 0.0;
+        return @as(f64, @floatFromInt(self.ties)) / @as(f64, @floatFromInt(self.total_simulations));
+    }
+
+    pub fn lossRate(self: RangeEquityResult) f64 {
+        if (self.total_simulations == 0) return 0.0;
+        return @as(f64, @floatFromInt(self.hero_losses)) / @as(f64, @floatFromInt(self.total_simulations));
     }
 };
 
@@ -788,9 +836,14 @@ test "RangeEquityResult methods" {
         .hero_equity = 0.6,
         .villain_equity = 0.4,
         .total_simulations = 1000,
+        .hero_wins = 600,
+        .ties = 0,
+        .hero_losses = 400,
     };
 
     try testing.expect(result.sum() == 1.0);
+    try testing.expect(result.winRate() == 0.6);
+    try testing.expect(result.lossRate() == 0.4);
 }
 
 test "invalid range notation" {

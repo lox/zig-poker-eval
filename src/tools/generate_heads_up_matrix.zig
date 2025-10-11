@@ -216,17 +216,13 @@ fn workerThread(ctx: *ThreadContext) void {
             continue;
         };
 
-        // Convert range equity to matchup result
-        const total_combos = range_result.total_simulations;
-        const wins = @as(u32, @intFromFloat(range_result.hero_equity * @as(f64, @floatFromInt(total_combos))));
-        const ties = 0; // Range API doesn't track ties separately, it's in the equity
-
+        // Use the win/tie/loss breakdown from range result
         ctx.results[idx] = MatchupResult{
             .hero_idx = hero_idx,
             .villain_idx = villain_idx,
-            .wins = wins,
-            .ties = ties,
-            .total = total_combos,
+            .wins = range_result.hero_wins,
+            .ties = range_result.ties,
+            .total = range_result.hero_wins + range_result.ties + range_result.hero_losses,
         };
 
         // Progress reporting
