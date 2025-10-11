@@ -115,6 +115,36 @@ pub const DetailedEquityResult = struct {
     }
 };
 
+/// Detailed exact equity result with hand category tracking
+/// Unlike DetailedEquityResult (Monte Carlo), this has no confidence intervals
+/// since exact calculation enumerates all possible boards deterministically
+pub const DetailedExactResult = struct {
+    wins: u32,
+    ties: u32,
+    total_simulations: u32,
+    hand1_categories: HandCategories = HandCategories{},
+    hand2_categories: HandCategories = HandCategories{},
+
+    pub fn equity(self: DetailedExactResult) f64 {
+        const win_equity = @as(f64, @floatFromInt(self.wins));
+        const tie_equity = @as(f64, @floatFromInt(self.ties)) * 0.5;
+        return (win_equity + tie_equity) / @as(f64, @floatFromInt(self.total_simulations));
+    }
+
+    pub fn winRate(self: DetailedExactResult) f64 {
+        return @as(f64, @floatFromInt(self.wins)) / @as(f64, @floatFromInt(self.total_simulations));
+    }
+
+    pub fn tieRate(self: DetailedExactResult) f64 {
+        return @as(f64, @floatFromInt(self.ties)) / @as(f64, @floatFromInt(self.total_simulations));
+    }
+
+    pub fn lossRate(self: DetailedExactResult) f64 {
+        const losses = self.total_simulations - self.wins - self.ties;
+        return @as(f64, @floatFromInt(losses)) / @as(f64, @floatFromInt(self.total_simulations));
+    }
+};
+
 /// Precomputed deck for fast sampling
 const PrecomputedDeck = struct {
     cards: [52]u64,
@@ -388,6 +418,65 @@ pub fn exact(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Han
         .wins = wins,
         .ties = ties,
         .total_simulations = @intCast(board_completions.len),
+    };
+}
+
+/// Detailed exact equity calculation with hand category tracking
+/// @param hero_hole_cards Combined bitmask of hero's exactly 2 hole cards
+/// @param villain_hole_cards Combined bitmask of villain's exactly 2 hole cards
+/// @param board Array of community cards (0-5 cards)
+/// @param allocator Memory allocator for board enumeration
+pub fn exactDetailed(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Hand, allocator: std.mem.Allocator) !DetailedExactResult {
+    // Validate hole cards
+    if (card.countCards(hero_hole_cards) != 2) return error.InvalidHeroHoleCards;
+    if (card.countCards(villain_hole_cards) != 2) return error.InvalidVillainHoleCards;
+    if ((hero_hole_cards & villain_hole_cards) != 0) return error.ConflictingHoleCards;
+    const cards_needed = 5 - @as(u8, @intCast(board.len));
+
+    // Combine existing board cards
+    var board_hand: Hand = 0;
+    for (board) |board_card| {
+        board_hand |= board_card;
+    }
+
+    // Enumerate all possible board completions
+    const board_completions = try enumerateEquityBoardCompletions(hero_hole_cards, villain_hole_cards, board, cards_needed, allocator);
+    defer allocator.free(board_completions);
+
+    var wins: u32 = 0;
+    var ties: u32 = 0;
+    var hand1_categories = HandCategories{};
+    var hand2_categories = HandCategories{};
+
+    for (board_completions) |board_completion| {
+        // Create final hands with existing board + completion
+        const complete_board = board_hand | board_completion;
+        const hero_hand = hero_hole_cards | complete_board;
+        const villain_hand = villain_hole_cards | complete_board;
+
+        // Track hand categories
+        const hero_rank = evaluator.evaluateHand(hero_hand);
+        hand1_categories.addHand(evaluator.getHandCategory(hero_rank));
+        const villain_rank = evaluator.evaluateHand(villain_hand);
+        hand2_categories.addHand(evaluator.getHandCategory(villain_rank));
+
+        const result = evaluateEquityShowdown(hero_hand, villain_hand);
+
+        if (result != 0) {
+            if (result > 0) {
+                wins += 1;
+            }
+        } else {
+            ties += 1;
+        }
+    }
+
+    return DetailedExactResult{
+        .wins = wins,
+        .ties = ties,
+        .total_simulations = @intCast(board_completions.len),
+        .hand1_categories = hand1_categories,
+        .hand2_categories = hand2_categories,
     };
 }
 
