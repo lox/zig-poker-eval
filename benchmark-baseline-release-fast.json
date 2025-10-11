@@ -1,0 +1,58 @@
+{
+  "version": "1.0",
+  "commit": "v2.9.0-0-g094a04799452-dirty",
+  "timestamp": "2025-10-11T23:22:18Z",
+  "system": {
+    "hostname": "Alexandra.local",
+    "cpu": "Apple M1",
+    "arch": "aarch64",
+    "os": "macos",
+    "build_mode": "ReleaseFast"
+  },
+  "suites": {
+    "eval": {
+      "batch_evaluation": {
+        "unit": "ns/hand",
+        "value": 3.0184634375,
+        "runs": 100,
+        "cv": 0.0038981758204970542
+      }
+    },
+    "showdown": {
+      "context_path": {
+        "unit": "ns/eval",
+        "value": 28.12125,
+        "runs": 100,
+        "cv": 0.0016322688166498429
+      },
+      "batched": {
+        "unit": "ns/eval",
+        "value": 7.26584,
+        "runs": 100,
+        "cv": 0.0027617070813654382
+      }
+    },
+    "range": {
+      "equity_monte_carlo": {
+        "unit": "ms/calc",
+        "value": 136036.67,
+        "runs": 100,
+        "cv": 0.0005839797726628195
+      }
+    },
+    "equity": {
+      "monte_carlo": {
+        "unit": "µs/calc",
+        "value": 437866.084,
+        "runs": 100,
+        "cv": 0.0006364437776782402
+      },
+      "exact_turn": {
+        "unit": "µs/calc",
+        "value": 4642.292,
+        "runs": 100,
+        "cv": 0.012934631959238255
+      }
+    }
+  }
+}
