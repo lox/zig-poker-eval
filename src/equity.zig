@@ -398,12 +398,42 @@ pub fn exact(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Han
     var wins: u32 = 0;
     var ties: u32 = 0;
 
-    for (board_completions) |board_completion| {
-        // Create final hands with existing board + completion
+    // NEW: SIMD batching for board evaluation (Experiment 17)
+    const BATCH_SIZE = 32;
+    const num_batches = board_completions.len / BATCH_SIZE;
+
+    var batch_idx: usize = 0;
+    while (batch_idx < num_batches) : (batch_idx += 1) {
+        var hero_batch: @Vector(BATCH_SIZE, u64) = undefined;
+        var villain_batch: @Vector(BATCH_SIZE, u64) = undefined;
+
+        // Prepare batch of full 7-card hands
+        inline for (0..BATCH_SIZE) |j| {
+            const complete_board = board_hand | board_completions[batch_idx * BATCH_SIZE + j];
+            hero_batch[j] = hero_hole_cards | complete_board;
+            villain_batch[j] = villain_hole_cards | complete_board;
+        }
+
+        // SIMD batch evaluation (existing optimized code path)
+        const hero_ranks = evaluator.evaluateBatch(BATCH_SIZE, hero_batch);
+        const villain_ranks = evaluator.evaluateBatch(BATCH_SIZE, villain_batch);
+
+        // Compare results
+        inline for (0..BATCH_SIZE) |j| {
+            if (hero_ranks[j] < villain_ranks[j]) {
+                wins += 1;
+            } else if (hero_ranks[j] == villain_ranks[j]) {
+                ties += 1;
+            }
+        }
+    }
+
+    // Handle remainder with board context (Experiment 16 approach)
+    const remainder_start = num_batches * BATCH_SIZE;
+    for (board_completions[remainder_start..]) |board_completion| {
         const complete_board = board_hand | board_completion;
-        const hero_hand = hero_hole_cards | complete_board;
-        const villain_hand = villain_hole_cards | complete_board;
-        const result = evaluateEquityShowdown(hero_hand, villain_hand);
+        const ctx = evaluator.initBoardContext(complete_board);
+        const result = evaluator.evaluateShowdownWithContext(&ctx, hero_hole_cards, villain_hole_cards);
 
         if (result != 0) {
             if (result > 0) {
@@ -448,19 +478,53 @@ pub fn exactDetailed(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []c
     var hand1_categories = HandCategories{};
     var hand2_categories = HandCategories{};
 
-    for (board_completions) |board_completion| {
-        // Create final hands with existing board + completion
+    // NEW: SIMD batching for board evaluation (Experiment 17)
+    const BATCH_SIZE = 32;
+    const num_batches = board_completions.len / BATCH_SIZE;
+
+    var batch_idx: usize = 0;
+    while (batch_idx < num_batches) : (batch_idx += 1) {
+        var hero_batch: @Vector(BATCH_SIZE, u64) = undefined;
+        var villain_batch: @Vector(BATCH_SIZE, u64) = undefined;
+
+        // Prepare batch of full 7-card hands
+        inline for (0..BATCH_SIZE) |j| {
+            const complete_board = board_hand | board_completions[batch_idx * BATCH_SIZE + j];
+            hero_batch[j] = hero_hole_cards | complete_board;
+            villain_batch[j] = villain_hole_cards | complete_board;
+        }
+
+        // SIMD batch evaluation
+        const hero_ranks = evaluator.evaluateBatch(BATCH_SIZE, hero_batch);
+        const villain_ranks = evaluator.evaluateBatch(BATCH_SIZE, villain_batch);
+
+        // Track hand categories and compare results
+        inline for (0..BATCH_SIZE) |j| {
+            hand1_categories.addHand(evaluator.getHandCategory(hero_ranks[j]));
+            hand2_categories.addHand(evaluator.getHandCategory(villain_ranks[j]));
+
+            if (hero_ranks[j] < villain_ranks[j]) {
+                wins += 1;
+            } else if (hero_ranks[j] == villain_ranks[j]) {
+                ties += 1;
+            }
+        }
+    }
+
+    // Handle remainder with board context (Experiment 16 approach)
+    const remainder_start = num_batches * BATCH_SIZE;
+    for (board_completions[remainder_start..]) |board_completion| {
         const complete_board = board_hand | board_completion;
-        const hero_hand = hero_hole_cards | complete_board;
-        const villain_hand = villain_hole_cards | complete_board;
+        const ctx = evaluator.initBoardContext(complete_board);
 
         // Track hand categories
-        const hero_rank = evaluator.evaluateHand(hero_hand);
+        const hero_rank = evaluator.evaluateHoleWithContext(&ctx, hero_hole_cards);
         hand1_categories.addHand(evaluator.getHandCategory(hero_rank));
-        const villain_rank = evaluator.evaluateHand(villain_hand);
+        const villain_rank = evaluator.evaluateHoleWithContext(&ctx, villain_hole_cards);
         hand2_categories.addHand(evaluator.getHandCategory(villain_rank));
 
-        const result = evaluateEquityShowdown(hero_hand, villain_hand);
+        // Evaluate showdown with board context
+        const result = evaluator.evaluateShowdownWithContext(&ctx, hero_hole_cards, villain_hole_cards);
 
         if (result != 0) {
             if (result > 0) {
