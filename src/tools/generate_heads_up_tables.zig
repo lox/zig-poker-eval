@@ -164,7 +164,7 @@ pub fn main() !void {
     print("✓ All validations passed!\n\n", .{});
 
     // Write output
-    print("Writing to src/heads_up_tables.zig...\n", .{});
+    print("Writing to src/internal/heads_up_tables.zig...\n", .{});
     try writeTableFile(equity_table);
     print("✓ Complete!\n", .{});
 }
@@ -229,7 +229,7 @@ fn createHand(hand: poker.StartingHand) u64 {
 }
 
 fn writeTableFile(equity_table: [169][2]u16) !void {
-    const file = try std.fs.cwd().createFile("src/heads_up_tables.zig", .{});
+    const file = try std.fs.cwd().createFile("src/internal/heads_up_tables.zig", .{});
     defer file.close();
 
     var buffer: [32768]u8 = undefined;

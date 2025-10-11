@@ -256,12 +256,12 @@ pub const StartingHand = struct {
 // Pre-computed equity for all 169 starting hands vs random opponent
 // Each entry is (win_rate_x1000, tie_rate_x1000) - stored as u16 to save space
 // For example, (850, 23) means 85.0% win, 2.3% tie, 12.7% loss
-const heads_up_tables = @import("heads_up_tables.zig");
+const heads_up_tables = @import("internal/heads_up_tables.zig");
 pub const PREFLOP_VS_RANDOM = heads_up_tables.PREFLOP_VS_RANDOM;
 
 // Pre-computed 169x169 matrix for exact head-to-head matchups
 // matrix[hero_idx][villain_idx] = (hero_win_rate_x1000, tie_rate_x1000)
-const heads_up_matrix = @import("heads_up_matrix.zig");
+const heads_up_matrix = @import("internal/heads_up_matrix.zig");
 pub const HEADS_UP_MATRIX = heads_up_matrix.HEADS_UP_MATRIX;
 
 // Fast heads-up equity calculation using pre-computed tables

@@ -174,7 +174,7 @@ pub fn main() !void {
     print("✓ All validations passed!\n\n", .{});
 
     // Write output
-    print("Writing to src/heads_up_matrix.zig...\n", .{});
+    print("Writing to src/internal/heads_up_matrix.zig...\n", .{});
     try writeMatrixFile(matrix);
     print("✓ Complete!\n", .{});
 }
@@ -244,7 +244,7 @@ fn workerThread(ctx: *ThreadContext) void {
 }
 
 fn writeMatrixFile(matrix: [169][169][2]u16) !void {
-    const file = try std.fs.cwd().createFile("src/heads_up_matrix.zig", .{});
+    const file = try std.fs.cwd().createFile("src/internal/heads_up_matrix.zig", .{});
     defer file.close();
 
     var buffer: [1024 * 1024]u8 = undefined; // 1MB buffer
