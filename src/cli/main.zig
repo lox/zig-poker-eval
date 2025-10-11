@@ -21,19 +21,22 @@ const EquityCommand = struct {
         hand2: []const u8,
         board: ?[]const u8 = null,
         sims: u32 = 10000,
+        exact: bool = false,
         format: OutputFormat = .table,
         verbose: bool = false,
     };
 
     const meta = cli_lib.CommandMeta{
         .name = "equity",
-        .description = "Calculate hand vs hand or range vs range equity using Monte Carlo simulation",
+        .description = "Calculate hand vs hand or range vs range equity using Monte Carlo or exact calculation",
         .usage = "poker-eval equity <hand1> <hand2> [options]",
         .examples = &.{
-            "poker-eval equity \"AhAs\" \"KdKc\"              # Specific hands",
-            "poker-eval equity \"AA\" \"KK\"                  # Range vs range",
+            "poker-eval equity \"AhAs\" \"KdKc\"              # Specific hands (Monte Carlo)",
+            "poker-eval equity \"AA\" \"KK\"                  # Range vs range (Monte Carlo)",
+            "poker-eval equity \"AA\" \"KK\" --exact          # Exact calculation (enumerates all boards)",
             "poker-eval equity \"AhAs\" \"KdKc\" --board \"AdKh7s\"",
             "poker-eval equity \"AA\" \"KK\" --sims 50000 --verbose",
+            "poker-eval equity \"AA\" \"KK\" --board \"7s8h9d2c\" --exact --verbose",
         },
     };
 
@@ -43,7 +46,8 @@ const EquityCommand = struct {
         if (std.mem.eql(u8, field_name, "hand1")) return "First player's hole cards or range (e.g., \"AhAs\" or \"AA\")";
         if (std.mem.eql(u8, field_name, "hand2")) return "Second player's hole cards or range (e.g., \"KdKc\" or \"KK\")";
         if (std.mem.eql(u8, field_name, "board")) return "Community board cards (e.g., \"AdKh7s\")";
-        if (std.mem.eql(u8, field_name, "sims")) return "Number of Monte Carlo simulations to run";
+        if (std.mem.eql(u8, field_name, "sims")) return "Number of Monte Carlo simulations to run (ignored with --exact)";
+        if (std.mem.eql(u8, field_name, "exact")) return "Calculate exact equity by enumerating all possible boards";
         if (std.mem.eql(u8, field_name, "format")) return "Output format: table or json";
         if (std.mem.eql(u8, field_name, "verbose")) return "Show detailed information and statistics";
         return "No description available";
@@ -99,38 +103,98 @@ const EquityCommand = struct {
         if (opts.board) |board| {
             print("Board:  {s} ({} cards)\n", .{ board, poker.countCards(board_hand) });
         }
-        print("Simulations: {}\n", .{opts.sims});
+        if (opts.exact) {
+            print("Mode:   Exact calculation (enumerating all boards)\n", .{});
+        } else {
+            print("Simulations: {}\n", .{opts.sims});
+        }
 
         // Run equity calculation
-        print("\nRunning simulation...\n", .{});
+        if (opts.exact) {
+            print("\nCalculating exact equity...\n", .{});
+        } else {
+            print("\nRunning simulation...\n", .{});
+        }
 
-        var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
-        const rng = prng.random();
+        if (opts.exact and opts.verbose) {
+            // Use detailed exact calculation for verbose mode
+            const detailed_result = hero_range.equityExactDetailed(&villain_range, board_cards, allocator) catch |err| {
+                print("Error running exact calculation: {}\n", .{err});
+                return;
+            };
 
-        const range_result = hero_range.equityMonteCarlo(&villain_range, board_cards, opts.sims, rng, allocator) catch |err| {
-            print("Error running simulation: {}\n", .{err});
-            return;
-        };
+            // Display results
+            print("\n", .{});
+            ansi.printBold("📊 Results\n", .{});
 
-        // Display results
-        print("\n", .{});
-        ansi.printBold("📊 Results\n", .{});
+            switch (opts.format) {
+                .table => {
+                    ansi.printGreen("Hand 1 equity: {d:.1}%\n", .{detailed_result.hero_equity * 100});
+                    ansi.printYellow("Hand 2 equity: {d:.1}%\n", .{detailed_result.villain_equity * 100});
 
-        switch (opts.format) {
-            .table => {
-                ansi.printGreen("Hand 1 equity: {d:.1}%\n", .{range_result.hero_equity * 100});
-                ansi.printYellow("Hand 2 equity: {d:.1}%\n", .{range_result.villain_equity * 100});
-
-                if (opts.verbose) {
                     print("\nDetailed breakdown:\n", .{});
                     print("  Hand 1: {s} ({} combo{s})\n", .{ opts.hand1, hero_range.handCount(), if (hero_range.handCount() == 1) @as([]const u8, "") else "s" });
                     print("  Hand 2: {s} ({} combo{s})\n", .{ opts.hand2, villain_range.handCount(), if (villain_range.handCount() == 1) @as([]const u8, "") else "s" });
-                    print("  Valid simulations: {}\n", .{range_result.total_simulations});
+                    print("  Total boards: {}\n", .{detailed_result.total_simulations});
+                    print("  Win rate:     {d:.2}%\n", .{detailed_result.winRate() * 100});
+                    print("  Tie rate:     {d:.2}%\n", .{detailed_result.tieRate() * 100});
+                    print("  Loss rate:    {d:.2}%\n", .{detailed_result.lossRate() * 100});
+
+                    // Print hand category breakdowns
+                    print("\nHand 1 categories:\n", .{});
+                    printHandCategoryBreakdown(detailed_result.hero_categories);
+
+                    print("\nHand 2 categories:\n", .{});
+                    printHandCategoryBreakdown(detailed_result.villain_categories);
+                },
+                .json => {
+                    print("{{\"hand1_equity\": {d:.4}, \"hand2_equity\": {d:.4}, \"boards\": {}, \"hand1_combos\": {}, \"hand2_combos\": {}}}\n", .{ detailed_result.hero_equity, detailed_result.villain_equity, detailed_result.total_simulations, hero_range.handCount(), villain_range.handCount() });
+                },
+            }
+        } else {
+            // Use standard calculation (exact or Monte Carlo)
+            var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
+            const rng = prng.random();
+
+            const range_result = if (opts.exact)
+                hero_range.equityExact(&villain_range, board_cards, allocator) catch |err| {
+                    print("Error running exact calculation: {}\n", .{err});
+                    return;
                 }
-            },
-            .json => {
-                print("{{\"hand1_equity\": {d:.4}, \"hand2_equity\": {d:.4}, \"simulations\": {}, \"hand1_combos\": {}, \"hand2_combos\": {}}}\n", .{ range_result.hero_equity, range_result.villain_equity, range_result.total_simulations, hero_range.handCount(), villain_range.handCount() });
-            },
+            else
+                hero_range.equityMonteCarlo(&villain_range, board_cards, opts.sims, rng, allocator) catch |err| {
+                    print("Error running simulation: {}\n", .{err});
+                    return;
+                };
+
+            // Display results
+            print("\n", .{});
+            ansi.printBold("📊 Results\n", .{});
+
+            switch (opts.format) {
+                .table => {
+                    ansi.printGreen("Hand 1 equity: {d:.1}%\n", .{range_result.hero_equity * 100});
+                    ansi.printYellow("Hand 2 equity: {d:.1}%\n", .{range_result.villain_equity * 100});
+
+                    if (opts.verbose) {
+                        print("\nDetailed breakdown:\n", .{});
+                        print("  Hand 1: {s} ({} combo{s})\n", .{ opts.hand1, hero_range.handCount(), if (hero_range.handCount() == 1) @as([]const u8, "") else "s" });
+                        print("  Hand 2: {s} ({} combo{s})\n", .{ opts.hand2, villain_range.handCount(), if (villain_range.handCount() == 1) @as([]const u8, "") else "s" });
+                        if (opts.exact) {
+                            print("  Total boards: {}\n", .{range_result.total_simulations});
+                        } else {
+                            print("  Valid simulations: {}\n", .{range_result.total_simulations});
+                        }
+                        print("  Win rate:     {d:.2}%\n", .{range_result.winRate() * 100});
+                        print("  Tie rate:     {d:.2}%\n", .{range_result.tieRate() * 100});
+                        print("  Loss rate:    {d:.2}%\n", .{range_result.lossRate() * 100});
+                    }
+                },
+                .json => {
+                    const label = if (opts.exact) "boards" else "simulations";
+                    print("{{\"hand1_equity\": {d:.4}, \"hand2_equity\": {d:.4}, \"{s}\": {}, \"hand1_combos\": {}, \"hand2_combos\": {}}}\n", .{ range_result.hero_equity, range_result.villain_equity, label, range_result.total_simulations, hero_range.handCount(), villain_range.handCount() });
+                },
+            }
         }
     }
 };
@@ -626,6 +690,42 @@ fn printHandCategories(categories: anytype) void {
     // Note: HandCategories struct needs to be checked in poker module
     // This is a placeholder - we'll need to adapt based on what's available
     print("  Hand category breakdown not yet available\n", .{});
+}
+
+// Helper function to print hand category breakdown
+fn printHandCategoryBreakdown(categories: poker.equity.HandCategories) void {
+    if (categories.total == 0) {
+        print("  No hands evaluated\n", .{});
+        return;
+    }
+
+    if (categories.straight_flush > 0) {
+        print("  Straight flush: {} ({d:.2}%)\n", .{ categories.straight_flush, categories.percentage(categories.straight_flush) });
+    }
+    if (categories.four_of_a_kind > 0) {
+        print("  Four of a kind: {} ({d:.2}%)\n", .{ categories.four_of_a_kind, categories.percentage(categories.four_of_a_kind) });
+    }
+    if (categories.full_house > 0) {
+        print("  Full house:     {} ({d:.2}%)\n", .{ categories.full_house, categories.percentage(categories.full_house) });
+    }
+    if (categories.flush > 0) {
+        print("  Flush:          {} ({d:.2}%)\n", .{ categories.flush, categories.percentage(categories.flush) });
+    }
+    if (categories.straight > 0) {
+        print("  Straight:       {} ({d:.2}%)\n", .{ categories.straight, categories.percentage(categories.straight) });
+    }
+    if (categories.three_of_a_kind > 0) {
+        print("  Three of a kind: {} ({d:.2}%)\n", .{ categories.three_of_a_kind, categories.percentage(categories.three_of_a_kind) });
+    }
+    if (categories.two_pair > 0) {
+        print("  Two pair:       {} ({d:.2}%)\n", .{ categories.two_pair, categories.percentage(categories.two_pair) });
+    }
+    if (categories.pair > 0) {
+        print("  Pair:           {} ({d:.2}%)\n", .{ categories.pair, categories.percentage(categories.pair) });
+    }
+    if (categories.high_card > 0) {
+        print("  High card:      {} ({d:.2}%)\n", .{ categories.high_card, categories.percentage(categories.high_card) });
+    }
 }
 
 fn formatCard(card: poker.Hand) [2]u8 {

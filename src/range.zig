@@ -301,6 +301,107 @@ pub const Range = struct {
         };
     }
 
+    /// Calculate detailed exact range vs range equity with hand category tracking
+    pub fn equityExactDetailed(self: *const Range, opponent: *const Range, board: []const Hand, allocator: std.mem.Allocator) !DetailedRangeEquityResult {
+        // Handle empty ranges
+        if (self.handCount() == 0 or opponent.handCount() == 0) {
+            return DetailedRangeEquityResult{
+                .hero_equity = 0.0,
+                .villain_equity = 0.0,
+                .total_simulations = 0,
+                .hero_wins = 0,
+                .ties = 0,
+                .hero_losses = 0,
+            };
+        }
+
+        var total_hero_equity: f64 = 0.0;
+        var total_weight: f64 = 0.0;
+        var total_combinations: u32 = 0;
+
+        // Accumulators for win/tie/loss (u64 to prevent overflow with large ranges)
+        var total_hero_wins: u64 = 0;
+        var total_ties: u64 = 0;
+        var total_hero_losses: u64 = 0;
+
+        // Hand category accumulators
+        var hero_categories = equity.HandCategories{};
+        var villain_categories = equity.HandCategories{};
+
+        // Combine board cards once
+        var board_hand: Hand = 0;
+        for (board) |board_card| {
+            board_hand |= board_card;
+        }
+
+        // Use combined iterator for better performance
+        var hero_iter = self.combinedIterator();
+        while (hero_iter.next()) |hero_entry| {
+            var villain_iter = opponent.combinedIterator();
+            while (villain_iter.next()) |villain_entry| {
+                // Check for card conflicts using combined hands
+                if ((hero_entry.hand & villain_entry.hand) != 0 or
+                    (hero_entry.hand & board_hand) != 0 or
+                    (villain_entry.hand & board_hand) != 0)
+                {
+                    continue;
+                }
+
+                // Calculate weight for this combination
+                const weight = hero_entry.probability * villain_entry.probability;
+                total_weight += weight;
+
+                // Calculate detailed equity for this matchup (already combined)
+                const result = try equity.exactDetailed(hero_entry.hand, villain_entry.hand, board, allocator);
+
+                // Accumulate weighted equity
+                total_hero_equity += result.equity() * weight;
+                total_combinations += 1;
+
+                // Accumulate win/tie/loss counts
+                total_hero_wins += result.wins;
+                total_ties += result.ties;
+                total_hero_losses += (result.total_simulations - result.wins - result.ties);
+
+                // Accumulate hand categories
+                hero_categories.high_card += result.hand1_categories.high_card;
+                hero_categories.pair += result.hand1_categories.pair;
+                hero_categories.two_pair += result.hand1_categories.two_pair;
+                hero_categories.three_of_a_kind += result.hand1_categories.three_of_a_kind;
+                hero_categories.straight += result.hand1_categories.straight;
+                hero_categories.flush += result.hand1_categories.flush;
+                hero_categories.full_house += result.hand1_categories.full_house;
+                hero_categories.four_of_a_kind += result.hand1_categories.four_of_a_kind;
+                hero_categories.straight_flush += result.hand1_categories.straight_flush;
+                hero_categories.total += result.hand1_categories.total;
+
+                villain_categories.high_card += result.hand2_categories.high_card;
+                villain_categories.pair += result.hand2_categories.pair;
+                villain_categories.two_pair += result.hand2_categories.two_pair;
+                villain_categories.three_of_a_kind += result.hand2_categories.three_of_a_kind;
+                villain_categories.straight += result.hand2_categories.straight;
+                villain_categories.flush += result.hand2_categories.flush;
+                villain_categories.full_house += result.hand2_categories.full_house;
+                villain_categories.four_of_a_kind += result.hand2_categories.four_of_a_kind;
+                villain_categories.straight_flush += result.hand2_categories.straight_flush;
+                villain_categories.total += result.hand2_categories.total;
+            }
+        }
+
+        const hero_equity = if (total_weight > 0) total_hero_equity / total_weight else 0.0;
+
+        return DetailedRangeEquityResult{
+            .hero_equity = hero_equity,
+            .villain_equity = 1.0 - hero_equity,
+            .total_simulations = total_hero_wins + total_ties + total_hero_losses,
+            .hero_wins = total_hero_wins,
+            .ties = total_ties,
+            .hero_losses = total_hero_losses,
+            .hero_categories = hero_categories,
+            .villain_categories = villain_categories,
+        };
+    }
+
     /// Calculate range vs range equity using Monte Carlo simulation
     pub fn equityMonteCarlo(self: *const Range, opponent: *const Range, board: []const Hand, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) !RangeEquityResult {
         // Handle empty ranges
@@ -430,6 +531,41 @@ pub const RangeEquityResult = struct {
     }
 
     pub fn lossRate(self: RangeEquityResult) f64 {
+        if (self.total_simulations == 0) return 0.0;
+        return @as(f64, @floatFromInt(self.hero_losses)) / @as(f64, @floatFromInt(self.total_simulations));
+    }
+};
+
+/// Detailed range equity result with hand category tracking
+pub const DetailedRangeEquityResult = struct {
+    hero_equity: f64,
+    villain_equity: f64,
+    total_simulations: u64,
+
+    // Win/tie/loss breakdown (u64 to handle large range enumerations)
+    hero_wins: u64,
+    ties: u64,
+    hero_losses: u64,
+
+    // Hand category tracking
+    hero_categories: equity.HandCategories = equity.HandCategories{},
+    villain_categories: equity.HandCategories = equity.HandCategories{},
+
+    pub fn sum(self: DetailedRangeEquityResult) f64 {
+        return self.hero_equity + self.villain_equity;
+    }
+
+    pub fn winRate(self: DetailedRangeEquityResult) f64 {
+        if (self.total_simulations == 0) return 0.0;
+        return @as(f64, @floatFromInt(self.hero_wins)) / @as(f64, @floatFromInt(self.total_simulations));
+    }
+
+    pub fn tieRate(self: DetailedRangeEquityResult) f64 {
+        if (self.total_simulations == 0) return 0.0;
+        return @as(f64, @floatFromInt(self.ties)) / @as(f64, @floatFromInt(self.total_simulations));
+    }
+
+    pub fn lossRate(self: DetailedRangeEquityResult) f64 {
         if (self.total_simulations == 0) return 0.0;
         return @as(f64, @floatFromInt(self.hero_losses)) / @as(f64, @floatFromInt(self.total_simulations));
     }
