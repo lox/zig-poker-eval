@@ -237,12 +237,20 @@ pub const Range = struct {
                 .hero_equity = 0.0,
                 .villain_equity = 0.0,
                 .total_simulations = 0,
+                .hero_wins = 0,
+                .ties = 0,
+                .hero_losses = 0,
             };
         }
 
         var total_hero_equity: f64 = 0.0;
         var total_weight: f64 = 0.0;
         var total_combinations: u32 = 0;
+
+        // Accumulators for win/tie/loss
+        var total_hero_wins: u32 = 0;
+        var total_ties: u32 = 0;
+        var total_hero_losses: u32 = 0;
 
         // Combine board cards once
         var board_hand: Hand = 0;
@@ -273,6 +281,11 @@ pub const Range = struct {
                 // Accumulate weighted equity
                 total_hero_equity += result.equity() * weight;
                 total_combinations += 1;
+
+                // Accumulate win/tie/loss counts
+                total_hero_wins += result.wins;
+                total_ties += result.ties;
+                total_hero_losses += (result.total_simulations - result.wins - result.ties);
             }
         }
 
@@ -281,7 +294,10 @@ pub const Range = struct {
         return RangeEquityResult{
             .hero_equity = hero_equity,
             .villain_equity = 1.0 - hero_equity,
-            .total_simulations = total_combinations,
+            .total_simulations = total_hero_wins + total_ties + total_hero_losses,
+            .hero_wins = total_hero_wins,
+            .ties = total_ties,
+            .hero_losses = total_hero_losses,
         };
     }
 
@@ -293,11 +309,15 @@ pub const Range = struct {
                 .hero_equity = 0.0,
                 .villain_equity = 0.0,
                 .total_simulations = 0,
+                .hero_wins = 0,
+                .ties = 0,
+                .hero_losses = 0,
             };
         }
 
         var hero_wins: u32 = 0;
         var ties: u32 = 0;
+        var hero_losses: u32 = 0;
         var valid_simulations: u32 = 0;
 
         // Combine board cards once
@@ -336,6 +356,8 @@ pub const Range = struct {
                 hero_wins += 1;
             } else if (result.ties > 0) {
                 ties += 1;
+            } else {
+                hero_losses += 1;
             }
         }
 
@@ -345,6 +367,9 @@ pub const Range = struct {
                 .hero_equity = 0.0,
                 .villain_equity = 0.0,
                 .total_simulations = 0,
+                .hero_wins = 0,
+                .ties = 0,
+                .hero_losses = 0,
             };
         }
 
@@ -354,6 +379,9 @@ pub const Range = struct {
             .hero_equity = hero_equity,
             .villain_equity = 1.0 - hero_equity,
             .total_simulations = valid_simulations,
+            .hero_wins = hero_wins,
+            .ties = ties,
+            .hero_losses = hero_losses,
         };
     }
 };
@@ -382,8 +410,28 @@ pub const RangeEquityResult = struct {
     villain_equity: f64,
     total_simulations: u32,
 
+    // Win/tie/loss breakdown
+    hero_wins: u32,
+    ties: u32,
+    hero_losses: u32,
+
     pub fn sum(self: RangeEquityResult) f64 {
         return self.hero_equity + self.villain_equity;
+    }
+
+    pub fn winRate(self: RangeEquityResult) f64 {
+        if (self.total_simulations == 0) return 0.0;
+        return @as(f64, @floatFromInt(self.hero_wins)) / @as(f64, @floatFromInt(self.total_simulations));
+    }
+
+    pub fn tieRate(self: RangeEquityResult) f64 {
+        if (self.total_simulations == 0) return 0.0;
+        return @as(f64, @floatFromInt(self.ties)) / @as(f64, @floatFromInt(self.total_simulations));
+    }
+
+    pub fn lossRate(self: RangeEquityResult) f64 {
+        if (self.total_simulations == 0) return 0.0;
+        return @as(f64, @floatFromInt(self.hero_losses)) / @as(f64, @floatFromInt(self.total_simulations));
     }
 };
 
@@ -610,6 +658,42 @@ test "Range.equityExact AA vs KK on turn" {
     try testing.expect(result.hero_equity > 0.90);
 }
 
+test "Range.equityExact rate methods return valid values" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var hero_range = Range.init(allocator);
+    defer hero_range.deinit();
+    try hero_range.addHandNotation("AA", 1.0);
+
+    var villain_range = Range.init(allocator);
+    defer villain_range.deinit();
+    try villain_range.addHandNotation("KK", 1.0);
+
+    // Turn board for fast test
+    const board = [_]Hand{
+        card.makeCard(.spades, .seven),
+        card.makeCard(.hearts, .eight),
+        card.makeCard(.diamonds, .nine),
+        card.makeCard(.clubs, .two),
+    };
+
+    const result = try hero_range.equityExact(&villain_range, &board, allocator);
+
+    // Verify rate methods return values in [0, 1] range (not > 1)
+    try testing.expect(result.winRate() >= 0.0 and result.winRate() <= 1.0);
+    try testing.expect(result.tieRate() >= 0.0 and result.tieRate() <= 1.0);
+    try testing.expect(result.lossRate() >= 0.0 and result.lossRate() <= 1.0);
+
+    // Verify rates sum to 1.0 (within floating point tolerance)
+    const rate_sum = result.winRate() + result.tieRate() + result.lossRate();
+    try testing.expect(rate_sum >= 0.99 and rate_sum <= 1.01);
+
+    // Verify total_simulations matches sum of win/tie/loss
+    try testing.expect(result.total_simulations == result.hero_wins + result.ties + result.hero_losses);
+}
+
 test "Range.equityMonteCarlo AA vs 22" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -833,9 +917,14 @@ test "RangeEquityResult methods" {
         .hero_equity = 0.6,
         .villain_equity = 0.4,
         .total_simulations = 1000,
+        .hero_wins = 600,
+        .ties = 0,
+        .hero_losses = 400,
     };
 
     try testing.expect(result.sum() == 1.0);
+    try testing.expect(result.winRate() == 0.6);
+    try testing.expect(result.lossRate() == 0.4);
 }
 
 test "invalid range notation" {

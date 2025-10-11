@@ -19,9 +19,10 @@ const card = @import("card");
 const evaluator = @import("evaluator");
 const hand = @import("hand");
 const range_mod = @import("range");
-const equity = @import("equity");
+pub const equity = @import("equity");
 const analysis = @import("analysis");
 const draws = @import("draws");
+const heads_up_mod = @import("heads_up");
 
 // === CORE TYPES ===
 
@@ -168,6 +169,24 @@ pub const multiway = equity.multiway;
 /// Hero vs field equity calculation
 /// Example: heroVsFieldMonteCarlo([As,Ks], [[Qd,Qh], [Jc,Jd]], [], 50000, rng, allocator)
 pub const heroVsFieldMonteCarlo = equity.heroVsFieldMonteCarlo;
+
+// === HEADS-UP EQUITY TABLES ===
+
+/// Represents one of the 169 unique starting hands in Texas Hold'em
+/// Used for preflop hand classification (e.g., "AKs", "72o", "TT")
+pub const StartingHand = heads_up_mod.StartingHand;
+
+/// All 169 unique starting hands in canonical order (index 0-168)
+/// Comptime-generated for zero runtime cost
+pub const ALL_STARTING_HANDS = heads_up_mod.ALL_STARTING_HANDS;
+
+/// Fast heads-up preflop equity using pre-computed tables
+/// 169 unique starting hands indexed for O(1) lookup
+pub const HeadsUpEquity = heads_up_mod.HeadsUpEquity;
+
+/// Pre-computed equity vs random opponent for all 169 hands
+/// Used as baseline for fast approximations
+pub const PREFLOP_VS_RANDOM = heads_up_mod.PREFLOP_VS_RANDOM;
 
 // === BENCHMARKING ===
 

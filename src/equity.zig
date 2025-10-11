@@ -391,6 +391,127 @@ pub fn exact(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Han
     };
 }
 
+/// Exact head-to-head equity calculation between two specific hands (preflop only)
+/// Enumerates all C(48,5) = 1,712,304 possible boards
+/// @param hero_hole_cards Combined bitmask of hero's exactly 2 hole cards
+/// @param villain_hole_cards Combined bitmask of villain's exactly 2 hole cards
+/// @param allocator Memory allocator for board enumeration
+pub fn exactHeadToHead(hero_hole_cards: Hand, villain_hole_cards: Hand, allocator: std.mem.Allocator) !EquityResult {
+    return exact(hero_hole_cards, villain_hole_cards, &.{}, allocator);
+}
+
+/// Exact equity calculation against random opponent (all possible villain hands and boards)
+/// Optimized with board-first enumeration and SIMD batching for performance
+/// @param hero_hole_cards Combined bitmask of hero's exactly 2 hole cards
+/// @param allocator Memory allocator for temporary buffers
+pub fn exactVsRandom(hero_hole_cards: Hand, allocator: std.mem.Allocator) !EquityResult {
+    // Validate hole cards
+    if (card.countCards(hero_hole_cards) != 2) return error.InvalidHeroHoleCards;
+
+    var wins: u64 = 0;
+    var losses: u64 = 0;
+    var ties: u64 = 0;
+
+    // Build available cards (all except hero's 2 cards)
+    var available: [50]u8 = undefined;
+    var available_count: u8 = 0;
+    for (0..52) |card_idx| {
+        const card_bit = @as(u64, 1) << @intCast(card_idx);
+        if ((hero_hole_cards & card_bit) == 0) {
+            available[available_count] = @intCast(card_idx);
+            available_count += 1;
+        }
+    }
+
+    // Pre-allocate villain hands array for batch processing
+    const max_villain_hands = 1225; // C(50,2)
+    var all_villain_holes: [max_villain_hands]Hand = undefined;
+    var villain_holes_buffer: [max_villain_hands]Hand = undefined;
+    var hero_holes_buffer: [max_villain_hands]Hand = undefined;
+    var results_buffer: [max_villain_hands]i8 = undefined;
+
+    // Generate all villain hands once and store in all_villain_holes
+    var villain_count: usize = 0;
+    for (0..available_count - 1) |v1| {
+        for (v1 + 1..available_count) |v2| {
+            const villain_card1 = @as(u64, 1) << @intCast(available[v1]);
+            const villain_card2 = @as(u64, 1) << @intCast(available[v2]);
+            all_villain_holes[villain_count] = villain_card1 | villain_card2;
+            villain_count += 1;
+        }
+    }
+
+    // Enumerate all boards: C(48,5)
+    // For each board, batch-evaluate against all villain hands
+    for (0..available_count - 4) |b1| {
+        const board1 = @as(u64, 1) << @intCast(available[b1]);
+
+        for (b1 + 1..available_count - 3) |b2| {
+            const board2 = @as(u64, 1) << @intCast(available[b2]);
+
+            for (b2 + 1..available_count - 2) |b3| {
+                const board3 = @as(u64, 1) << @intCast(available[b3]);
+
+                for (b3 + 1..available_count - 1) |b4| {
+                    const board4 = @as(u64, 1) << @intCast(available[b4]);
+
+                    for (b4 + 1..available_count) |b5| {
+                        const board5 = @as(u64, 1) << @intCast(available[b5]);
+
+                        const board = board1 | board2 | board3 | board4 | board5;
+
+                        // Create board context once for this board (board only, not hole cards)
+                        const ctx = evaluator.initBoardContext(board);
+
+                        // Filter villain hands that don't conflict with board
+                        // Copy valid hands from all_villain_holes to villain_holes_buffer
+                        var valid_villain_count: usize = 0;
+                        for (0..villain_count) |v| {
+                            const villain_hole = all_villain_holes[v];
+                            if ((villain_hole & board) == 0) {
+                                villain_holes_buffer[valid_villain_count] = villain_hole;
+                                hero_holes_buffer[valid_villain_count] = hero_hole_cards;
+                                valid_villain_count += 1;
+                            }
+                        }
+
+                        // Batch evaluate all valid villain hands
+                        if (valid_villain_count > 0) {
+                            evaluator.evaluateShowdownBatch(
+                                &ctx,
+                                hero_holes_buffer[0..valid_villain_count],
+                                villain_holes_buffer[0..valid_villain_count],
+                                results_buffer[0..valid_villain_count],
+                            );
+
+                            // Accumulate results
+                            for (results_buffer[0..valid_villain_count]) |result| {
+                                if (result > 0) {
+                                    wins += 1;
+                                } else if (result < 0) {
+                                    losses += 1;
+                                } else {
+                                    ties += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Mark allocator as used (even though we don't allocate anything)
+    _ = allocator;
+
+    const total = wins + losses + ties;
+    return EquityResult{
+        .wins = @intCast(wins),
+        .ties = @intCast(ties),
+        .total_simulations = @intCast(total),
+    };
+}
+
 /// Multi-way Monte Carlo equity calculation
 /// @param hands Array of hole card bitmasks (each must contain exactly 2 cards)
 pub fn multiway(hands: []const Hand, board: []const Hand, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) ![]EquityResult {
@@ -991,6 +1112,43 @@ test "exact equity with flop" {
     try testing.expect(result.total_simulations == 990);
     // AA should beat KK most of the time (but not as strongly as with a turn)
     try testing.expect(result.equity() > 0.80);
+}
+
+test "exactVsRandom AA should have ~85% equity" {
+    // Skip: This test takes ~10 seconds (2B evaluations) - run manually if needed
+    return error.SkipZigTest;
+
+    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    // defer _ = gpa.deinit();
+    // const allocator = gpa.allocator();
+
+    // const aa = card.makeCard(.clubs, .ace) | card.makeCard(.diamonds, .ace);
+
+    // const result = try exactVsRandom(aa, allocator);
+
+    // // AA vs random should be close to 85.2%
+    // try testing.expect(result.equity() > 0.84);
+    // try testing.expect(result.equity() < 0.86);
+
+    // // Total simulations should be C(50,2) * C(48,5) = 1,225 * 1,712,304 = 2,097,572,400
+    // try testing.expect(result.total_simulations > 2_000_000_000);
+}
+
+test "exactVsRandom 22 should have ~50% equity" {
+    // Skip: This test takes ~10 seconds (2B evaluations) - run manually if needed
+    return error.SkipZigTest;
+
+    // var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    // defer _ = gpa.deinit();
+    // const allocator = gpa.allocator();
+
+    // const twos = card.makeCard(.clubs, .two) | card.makeCard(.diamonds, .two);
+
+    // const result = try exactVsRandom(twos, allocator);
+
+    // // 22 vs random should be close to 50.3%
+    // try testing.expect(result.equity() > 0.49);
+    // try testing.expect(result.equity() < 0.52);
 }
 
 // Ensure all tests in this module are discovered

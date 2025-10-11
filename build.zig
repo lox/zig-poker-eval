@@ -55,6 +55,14 @@ pub fn build(b: *std.Build) void {
     });
     draws_mod.addImport("card", card_mod);
 
+    // Level 4: Heads-up module (depends on card, evaluator, range)
+    const heads_up_mod = b.addModule("heads_up", .{
+        .root_source_file = b.path("src/heads_up.zig"),
+    });
+    heads_up_mod.addImport("card", card_mod);
+    heads_up_mod.addImport("evaluator", evaluator_mod);
+    heads_up_mod.addImport("range", range_mod);
+
     // Level 5: Main poker module (depends on all others)
     const poker_mod = b.addModule("poker", .{
         .root_source_file = b.path("src/poker.zig"),
@@ -66,6 +74,7 @@ pub fn build(b: *std.Build) void {
     poker_mod.addImport("equity", equity_mod);
     poker_mod.addImport("analysis", analysis_mod);
     poker_mod.addImport("draws", draws_mod);
+    poker_mod.addImport("heads_up", heads_up_mod);
 
     // Tools module (depends on poker for benchmarking)
     const tools_mod = b.addModule("tools", .{
@@ -168,6 +177,40 @@ pub fn build(b: *std.Build) void {
     const verify_all_step = b.step("verify-all", "Verify evaluator against all 133M hands");
     verify_all_step.dependOn(&run_verify_all.step);
 
+    // Generate heads-up tables tool
+    const gen_heads_up_tables = b.addExecutable(.{
+        .name = "generate-heads-up-tables",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/generate_heads_up_tables.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .use_llvm = use_llvm,
+    });
+    gen_heads_up_tables.root_module.addImport("poker", poker_mod);
+    b.installArtifact(gen_heads_up_tables);
+
+    const run_gen_heads_up = b.addRunArtifact(gen_heads_up_tables);
+    const gen_heads_up_step = b.step("gen-heads-up", "Generate heads-up equity tables (~15 min)");
+    gen_heads_up_step.dependOn(&run_gen_heads_up.step);
+
+    // Generate heads-up 169x169 matrix tool
+    const gen_heads_up_matrix = b.addExecutable(.{
+        .name = "generate-heads-up-matrix",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/generate_heads_up_matrix.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .use_llvm = use_llvm,
+    });
+    gen_heads_up_matrix.root_module.addImport("poker", poker_mod);
+    b.installArtifact(gen_heads_up_matrix);
+
+    const run_gen_matrix = b.addRunArtifact(gen_heads_up_matrix);
+    const gen_matrix_step = b.step("gen-heads-up-matrix", "Generate 169x169 heads-up equity matrix (~20 min)");
+    gen_matrix_step.dependOn(&run_gen_matrix.step);
+
     // Test step - run tests from all modules
     const test_step = b.step("test", "Run all unit tests");
 
@@ -262,6 +305,20 @@ pub fn build(b: *std.Build) void {
     const run_draws_tests = b.addRunArtifact(draws_tests);
     test_step.dependOn(&run_draws_tests.step);
 
+    // Heads-up module tests (depends on card, evaluator)
+    const heads_up_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/heads_up.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    heads_up_tests.root_module.addImport("card", card_mod);
+    heads_up_tests.root_module.addImport("evaluator", evaluator_mod);
+    heads_up_tests.root_module.addImport("range", range_mod);
+    const run_heads_up_tests = b.addRunArtifact(heads_up_tests);
+    test_step.dependOn(&run_heads_up_tests.step);
+
     // Main poker module tests (depends on all modules)
     const poker_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -278,6 +335,7 @@ pub fn build(b: *std.Build) void {
     poker_tests.root_module.addImport("equity", equity_mod);
     poker_tests.root_module.addImport("analysis", analysis_mod);
     poker_tests.root_module.addImport("draws", draws_mod);
+    poker_tests.root_module.addImport("heads_up", heads_up_mod);
     const run_poker_tests = b.addRunArtifact(poker_tests);
     test_step.dependOn(&run_poker_tests.step);
 }
