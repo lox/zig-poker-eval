@@ -399,11 +399,14 @@ pub fn exact(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Han
     var ties: u32 = 0;
 
     for (board_completions) |board_completion| {
-        // Create final hands with existing board + completion
+        // Create final board with existing board + completion
         const complete_board = board_hand | board_completion;
-        const hero_hand = hero_hole_cards | complete_board;
-        const villain_hand = villain_hole_cards | complete_board;
-        const result = evaluateEquityShowdown(hero_hand, villain_hand);
+
+        // NEW: Create board context once per board (Experiment 16)
+        const ctx = evaluator.initBoardContext(complete_board);
+
+        // NEW: Evaluate showdown with board context (not full 7-card hands)
+        const result = evaluator.evaluateShowdownWithContext(&ctx, hero_hole_cards, villain_hole_cards);
 
         if (result != 0) {
             if (result > 0) {
@@ -449,18 +452,20 @@ pub fn exactDetailed(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []c
     var hand2_categories = HandCategories{};
 
     for (board_completions) |board_completion| {
-        // Create final hands with existing board + completion
+        // Create final board with existing board + completion
         const complete_board = board_hand | board_completion;
-        const hero_hand = hero_hole_cards | complete_board;
-        const villain_hand = villain_hole_cards | complete_board;
+
+        // NEW: Create board context once per board (Experiment 16)
+        const ctx = evaluator.initBoardContext(complete_board);
 
         // Track hand categories
-        const hero_rank = evaluator.evaluateHand(hero_hand);
+        const hero_rank = evaluator.evaluateHoleWithContext(&ctx, hero_hole_cards);
         hand1_categories.addHand(evaluator.getHandCategory(hero_rank));
-        const villain_rank = evaluator.evaluateHand(villain_hand);
+        const villain_rank = evaluator.evaluateHoleWithContext(&ctx, villain_hole_cards);
         hand2_categories.addHand(evaluator.getHandCategory(villain_rank));
 
-        const result = evaluateEquityShowdown(hero_hand, villain_hand);
+        // NEW: Evaluate showdown with board context
+        const result = evaluator.evaluateShowdownWithContext(&ctx, hero_hole_cards, villain_hole_cards);
 
         if (result != 0) {
             if (result > 0) {
