@@ -1,7 +1,7 @@
 {
   "version": "1.0",
-  "commit": "v2.10.0-12-geb3befaaae7e-dirty",
-  "timestamp": "2025-10-12T02:21:08Z",
+  "commit": "v2.12.0-2-g3b20ef818748-dirty",
+  "timestamp": "2025-10-12T03:55:59Z",
   "system": {
     "hostname": "Alexandra.local",
     "cpu": "Apple M1",
@@ -11,47 +11,67 @@
   },
   "suites": {
     "eval": {
+      "single_evaluation": {
+        "unit": "ns/hand",
+        "value": 10.20775,
+        "runs": 100,
+        "cv": 0.0006914510630512971
+      },
       "batch_evaluation": {
         "unit": "ns/hand",
-        "value": 3.3155665625,
+        "value": 3.25993484375,
         "runs": 100,
-        "cv": 0.0025705012588124673
+        "cv": 0.0027806015639823553
+      }
+    },
+    "context": {
+      "hole_evaluation": {
+        "unit": "ns/eval",
+        "value": 16.940979499999997,
+        "runs": 100,
+        "cv": 0.006381298241298992
+      },
+      "init_board": {
+        "unit": "ns/call",
+        "value": 6.725104,
+        "runs": 100,
+        "cv": 0.0011178325304404579
       }
     },
     "showdown": {
       "context_path": {
         "unit": "ns/eval",
-        "value": 30.36825,
+        "value": 16.464854,
         "runs": 100,
-        "cv": 0.0025773437403823337
+        "cv": 0.0008359257903516033
       },
       "batched": {
         "unit": "ns/eval",
-        "value": 7.2254795000000005,
+        "value": 7.061708,
         "runs": 100,
-        "cv": 0.001953236525858197
+        "cv": 0.0010292126933267862
       }
     },
     "range": {
       "equity_monte_carlo": {
         "unit": "ms/calc",
-        "value": 0.123351875,
+        "value": 0.12399125,
         "runs": 100,
-        "cv": 0.0024929044667107857
+        "cv": 0.0006069246393270876
       }
     },
     "equity": {
       "monte_carlo": {
         "unit": "µs/calc",
-        "value": 442.172,
+        "value": 439.21697900000004,
         "runs": 100,
-        "cv": 0.008535796496828996
+        "cv": 0.004343705676862525
       },
       "exact_turn": {
         "unit": "µs/calc",
-        "value": 4.19788855,
+        "value": 4.245908325,
         "runs": 100,
-        "cv": 0.014579236255555577
+        "cv": 0.01967391117077217
       }
     }
   }
