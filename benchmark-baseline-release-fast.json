@@ -1,7 +1,7 @@
 {
   "version": "1.0",
-  "commit": "v2.9.0-1-gfc2ef3820ce8-dirty",
-  "timestamp": "2025-10-11T23:49:23Z",
+  "commit": "v2.9.0-2-g5d0f482c31b3-dirty",
+  "timestamp": "2025-10-12T00:00:38Z",
   "system": {
     "hostname": "Alexandra.local",
     "cpu": "Apple M1",
@@ -13,45 +13,45 @@
     "eval": {
       "batch_evaluation": {
         "unit": "ns/hand",
-        "value": 3.0337890625,
+        "value": 3.0608984375,
         "runs": 100,
-        "cv": 0.015544662894283197
+        "cv": 0.00554687870616918
       }
     },
     "showdown": {
       "context_path": {
         "unit": "ns/eval",
-        "value": 30.483708,
+        "value": 30.611333,
         "runs": 100,
-        "cv": 0.0046414899350258115
+        "cv": 0.0037592451512151615
       },
       "batched": {
         "unit": "ns/eval",
-        "value": 7.219167,
+        "value": 7.328,
         "runs": 100,
-        "cv": 0.012960644949772738
+        "cv": 0.019432396028389958
       }
     },
     "range": {
       "equity_monte_carlo": {
         "unit": "ms/calc",
-        "value": 141987.5,
+        "value": 125530.83,
         "runs": 100,
-        "cv": 0.008401700583247967
+        "cv": 0.010716240233709859
       }
     },
     "equity": {
       "monte_carlo": {
         "unit": "µs/calc",
-        "value": 444342.666,
+        "value": 444092.917,
         "runs": 100,
-        "cv": 0.0016138383764527594
+        "cv": 0.0012007077720898533
       },
       "exact_turn": {
         "unit": "µs/calc",
-        "value": 4732.834,
+        "value": 4913.6584,
         "runs": 100,
-        "cv": 0.020815276777359906
+        "cv": 0.026261431029271285
       }
     }
   }

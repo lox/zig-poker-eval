@@ -794,7 +794,8 @@ fn benchEquityMonteCarlo(allocator: std.mem.Allocator) !f64 {
 }
 
 fn benchEquityExact(allocator: std.mem.Allocator) !f64 {
-    const iterations = 1000;
+    const iterations = 100;
+    const repeats = 50; // Repeat 50x for stability
 
     // AA vs KK on turn (only 44 rivers to enumerate)
     const aa = poker.makeCard(.clubs, .ace) | poker.makeCard(.diamonds, .ace);
@@ -809,17 +810,20 @@ fn benchEquityExact(allocator: std.mem.Allocator) !f64 {
     var timer = try std.time.Timer.start();
 
     for (0..iterations) |_| {
-        const result = try poker.exact(aa, kk, &board, allocator);
-        std.mem.doNotOptimizeAway(result);
+        for (0..repeats) |_| {
+            const result = try poker.exact(aa, kk, &board, allocator);
+            std.mem.doNotOptimizeAway(result);
+        }
     }
 
     const total_ns: f64 = @floatFromInt(timer.read());
-    const iterations_f64: f64 = @floatFromInt(iterations);
-    return total_ns / iterations_f64;
+    const total_ops: f64 = @floatFromInt(iterations * repeats);
+    return total_ns / total_ops;
 }
 
 fn benchRangeEquityMonteCarlo(allocator: std.mem.Allocator) !f64 {
-    const iterations = 100;
+    const iterations = 10;
+    const repeats = 10; // Repeat 10x for stability
     const simulations = 1000;
 
     var prng = std.Random.DefaultPrng.init(456);
@@ -837,13 +841,15 @@ fn benchRangeEquityMonteCarlo(allocator: std.mem.Allocator) !f64 {
     var timer = try std.time.Timer.start();
 
     for (0..iterations) |_| {
-        const result = try hero_range.equityMonteCarlo(&villain_range, &.{}, simulations, rng, allocator);
-        std.mem.doNotOptimizeAway(result);
+        for (0..repeats) |_| {
+            const result = try hero_range.equityMonteCarlo(&villain_range, &.{}, simulations, rng, allocator);
+            std.mem.doNotOptimizeAway(result);
+        }
     }
 
     const total_ns: f64 = @floatFromInt(timer.read());
-    const iterations_f64: f64 = @floatFromInt(iterations);
-    return total_ns / iterations_f64;
+    const total_ops: f64 = @floatFromInt(iterations * repeats);
+    return total_ns / total_ops;
 }
 
 pub const ALL_SUITES = [_]BenchmarkSuite{
