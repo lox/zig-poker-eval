@@ -191,14 +191,26 @@ pub fn evaluateHoleWithContext(ctx: *const BoardContext, hole: card.Hand) HandRa
 }
 
 /// Evaluate a showdown using shared board context
+///
+/// Experiment 20: SIMD micro-batch optimization
+/// Uses batch-2 SIMD path instead of two serial evaluations to:
+/// - Enable memory-level parallelism for CHD lookups
+/// - Leverage SIMD vectorization for RPC and flush detection
+/// - Eliminate redundant array copies in scalar path
+/// Expected: 2-2.5× faster than scalar path
 pub fn evaluateShowdownWithContext(ctx: *const BoardContext, hero_hole: card.Hand, villain_hole: card.Hand) i8 {
     std.debug.assert((hero_hole & villain_hole) == 0);
     std.debug.assert((hero_hole & ctx.board) == 0);
     std.debug.assert((villain_hole & ctx.board) == 0);
 
-    const hero_rank = evaluateHoleWithContextImpl(ctx, hero_hole);
-    const villain_rank = evaluateHoleWithContextImpl(ctx, villain_hole);
-    return if (hero_rank < villain_rank) 1 else if (hero_rank > villain_rank) -1 else 0;
+    // Pack both hands into batch-2 vector for SIMD evaluation
+    const hands = @Vector(2, u64){
+        ctx.board | hero_hole,
+        ctx.board | villain_hole,
+    };
+
+    const ranks = evaluateBatch(2, hands);
+    return if (ranks[0] < ranks[1]) @as(i8, 1) else if (ranks[0] > ranks[1]) @as(i8, -1) else @as(i8, 0);
 }
 
 fn showdownChunk(comptime batch_size: usize, ctx: *const BoardContext, hero_holes: []const card.Hand, villain_holes: []const card.Hand, results: []i8) void {

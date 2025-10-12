@@ -943,6 +943,128 @@ fn benchRangeEquityMonteCarlo(allocator: std.mem.Allocator) !f64 {
     return ns_per_calc / 1_000_000.0; // Convert to milliseconds
 }
 
+// ============================================================================
+// Microbenchmarks (Hot Path Profiling)
+// ============================================================================
+
+fn benchInitBoardContext(allocator: std.mem.Allocator) !f64 {
+    const iterations = 1_000_000;
+    const num_boards = 10000;
+
+    // Generate test boards (3-5 cards each)
+    var prng = std.Random.DefaultPrng.init(77);
+    var rng = prng.random();
+    const boards = try allocator.alloc(u64, num_boards);
+    defer allocator.free(boards);
+
+    for (boards) |*board_slot| {
+        const num_cards = 3 + (rng.uintLessThan(u8, 3)); // 3, 4, or 5 cards
+        var board_used: u64 = 0;
+        var board: u64 = 0;
+        while (@popCount(board) < num_cards) {
+            board |= drawUniqueCard(rng, &board_used);
+        }
+        board_slot.* = board;
+    }
+
+    // Benchmark
+    var checksum: u64 = 0;
+    var timer = try std.time.Timer.start();
+
+    for (0..iterations) |i| {
+        const board = boards[i % num_boards];
+        const ctx = poker.initBoardContext(board);
+        checksum +%= ctx.suit_counts[0];
+        checksum +%= ctx.rank_counts[0];
+    }
+
+    const total_ns: f64 = @floatFromInt(timer.read());
+    std.mem.doNotOptimizeAway(checksum);
+
+    const iterations_f64: f64 = @floatFromInt(iterations);
+    return total_ns / iterations_f64;
+}
+
+fn benchEvaluateHoleWithContext(allocator: std.mem.Allocator) !f64 {
+    const iterations = 1_000_000;
+    const num_cases = 10000;
+
+    // Generate test cases: board contexts + hole cards
+    var prng = std.Random.DefaultPrng.init(88);
+    const rng = prng.random();
+
+    const HoleCase = struct {
+        ctx: poker.BoardContext,
+        hole: u64,
+    };
+
+    const cases = try allocator.alloc(HoleCase, num_cases);
+    defer allocator.free(cases);
+
+    for (cases) |*case| {
+        var board_used: u64 = 0;
+        var board: u64 = 0;
+        while (@popCount(board) < 5) {
+            board |= drawUniqueCard(rng, &board_used);
+        }
+        const ctx = poker.initBoardContext(board);
+
+        var hole: u64 = 0;
+        while (@popCount(hole) < 2) {
+            hole |= drawUniqueCard(rng, &board_used);
+        }
+
+        case.* = .{ .ctx = ctx, .hole = hole };
+    }
+
+    // Benchmark
+    var checksum: u64 = 0;
+    var timer = try std.time.Timer.start();
+
+    for (0..iterations) |i| {
+        const case = cases[i % num_cases];
+        const rank = poker.evaluateHoleWithContext(&case.ctx, case.hole);
+        checksum +%= rank;
+    }
+
+    const total_ns: f64 = @floatFromInt(timer.read());
+    std.mem.doNotOptimizeAway(checksum);
+
+    const iterations_f64: f64 = @floatFromInt(iterations);
+    return total_ns / iterations_f64;
+}
+
+fn benchEvaluateHandSingle(allocator: std.mem.Allocator) !f64 {
+    const iterations = 1_000_000;
+    const num_test_hands = 10000;
+
+    // Generate test hands
+    var prng = std.Random.DefaultPrng.init(66);
+    var rng = prng.random();
+    const test_hands = try allocator.alloc(u64, num_test_hands);
+    defer allocator.free(test_hands);
+
+    for (test_hands) |*hand| {
+        hand.* = poker.generateRandomHand(&rng);
+    }
+
+    // Benchmark
+    var checksum: u64 = 0;
+    var timer = try std.time.Timer.start();
+
+    for (0..iterations) |i| {
+        const hand = test_hands[i % num_test_hands];
+        const rank = poker.evaluateHand(hand);
+        checksum +%= rank;
+    }
+
+    const total_ns: f64 = @floatFromInt(timer.read());
+    std.mem.doNotOptimizeAway(checksum);
+
+    const iterations_f64: f64 = @floatFromInt(iterations);
+    return total_ns / iterations_f64;
+}
+
 pub const ALL_SUITES = [_]BenchmarkSuite{
     .{
         .name = "eval",
@@ -952,6 +1074,29 @@ pub const ALL_SUITES = [_]BenchmarkSuite{
                 .unit = "ns/hand",
                 .threshold_pct = 0.02, // 2% - tight threshold for core SIMD evaluator
                 .run_fn = benchEvalBatch,
+            },
+            .{
+                .name = "single_evaluation",
+                .unit = "ns/hand",
+                .threshold_pct = 0.03, // 3% - scalar path
+                .run_fn = benchEvaluateHandSingle,
+            },
+        },
+    },
+    .{
+        .name = "context",
+        .benchmarks = &.{
+            .{
+                .name = "init_board",
+                .unit = "ns/call",
+                .threshold_pct = 0.03, // 3% - deterministic operation
+                .run_fn = benchInitBoardContext,
+            },
+            .{
+                .name = "hole_evaluation",
+                .unit = "ns/eval",
+                .threshold_pct = 0.03, // 3% - deterministic
+                .run_fn = benchEvaluateHoleWithContext,
             },
         },
     },

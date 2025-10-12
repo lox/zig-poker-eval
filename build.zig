@@ -82,6 +82,27 @@ pub fn build(b: *std.Build) void {
     });
     tools_mod.addImport("poker", poker_mod);
 
+    // Hot path profiler (for pokerbot workload analysis)
+    const profiler = b.addExecutable(.{
+        .name = "profiler",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/internal/profile_main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .use_llvm = use_llvm,
+    });
+    profiler.root_module.addImport("card", card_mod);
+    profiler.root_module.addImport("evaluator", evaluator_mod);
+
+    const profiler_run = b.addRunArtifact(profiler);
+    if (b.args) |args| {
+        profiler_run.addArgs(args);
+    }
+    const profiler_step = b.step("profile", "Profile hot paths (use -- --scenario=<name>)");
+    profiler_step.dependOn(&profiler_run.step);
+    b.installArtifact(profiler);
+
     // Table builder executable (for manual table regeneration)
     const table_builder = b.addExecutable(.{
         .name = "build_tables",
