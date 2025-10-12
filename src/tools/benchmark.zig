@@ -1091,6 +1091,7 @@ pub fn runAllBenchmarks(allocator: std.mem.Allocator, filter: ?[]const u8, for_b
         std.debug.print("[{d}/{d}] {s}\n", .{ suite_idx + 1, ALL_SUITES.len, suite.name });
 
         var benchmark_map = std.StringHashMap(BenchmarkMetric).init(allocator);
+        var suite_timer = try std.time.Timer.start();
 
         for (suite.benchmarks) |benchmark| {
             const stats = try runner.run(benchmark);
@@ -1116,9 +1117,20 @@ pub fn runAllBenchmarks(allocator: std.mem.Allocator, filter: ?[]const u8, for_b
             });
         }
 
+        // Show suite timing
+        const suite_time_ns = suite_timer.read();
+        const suite_time_s = @as(f64, @floatFromInt(suite_time_ns)) / 1_000_000_000.0;
+        if (suite_time_s < 10.0) {
+            std.debug.print("  ↳ Ran in {d:.1}s\n", .{suite_time_s});
+        } else {
+            std.debug.print("  ↳ Ran in {d:.0}s\n", .{suite_time_s});
+        }
+
         try result.suites.put(suite.name, benchmark_map);
+        std.debug.print("\n", .{}); // Blank line between suites
     }
 
+    std.debug.print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
     std.debug.print("\n", .{});
     return result;
 }
