@@ -104,11 +104,6 @@ pub const HandCategories = struct {
     }
 };
 
-// Backward compatibility type aliases
-// These can be removed in a future major version
-pub const DetailedEquityResult = EquityResult;
-pub const DetailedExactResult = EquityResult;
-
 /// Validate board cards for conflicts and duplicates
 fn validateBoard(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Hand) !Hand {
     if (board.len > 5) return error.InvalidBoardLength;
@@ -264,10 +259,10 @@ pub fn monteCarlo(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []cons
     return monteCarloImpl(false, hero_hole_cards, villain_hole_cards, board, simulations, rng, allocator);
 }
 
-/// Detailed Monte Carlo with hand category tracking
+/// Monte Carlo with hand category tracking
 /// @param hero_hole_cards Combined bitmask of hero's exactly 2 hole cards
 /// @param villain_hole_cards Combined bitmask of villain's exactly 2 hole cards
-pub fn detailedMonteCarlo(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Hand, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) !EquityResult {
+pub fn monteCarloWithCategories(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Hand, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) !EquityResult {
     return monteCarloImpl(true, hero_hole_cards, villain_hole_cards, board, simulations, rng, allocator);
 }
 
@@ -370,12 +365,12 @@ pub fn exact(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Han
     return exactImpl(false, hero_hole_cards, villain_hole_cards, board, allocator);
 }
 
-/// Detailed exact equity calculation with hand category tracking
+/// Exact equity calculation with hand category tracking
 /// @param hero_hole_cards Combined bitmask of hero's exactly 2 hole cards
 /// @param villain_hole_cards Combined bitmask of villain's exactly 2 hole cards
 /// @param board Array of community cards (0-5 cards)
 /// @param allocator Memory allocator for board enumeration
-pub fn exactDetailed(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Hand, allocator: std.mem.Allocator) !EquityResult {
+pub fn exactWithCategories(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Hand, allocator: std.mem.Allocator) !EquityResult {
     return exactImpl(true, hero_hole_cards, villain_hole_cards, board, allocator);
 }
 
