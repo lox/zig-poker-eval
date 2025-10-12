@@ -65,14 +65,12 @@ tasks:
 
   profile:
     desc: Profile hot paths with uniprof (use SCENARIO=<name> ITERATIONS=<n>)
+    deps:
+      - build
     vars:
       SCENARIO: '{{.SCENARIO | default "showdown"}}'
       ITERATIONS: '{{.ITERATIONS | default "50000000"}}'
-    sources:
-      - src/**/*.zig
-      - build.zig
     cmds:
-      - zig build -Doptimize=ReleaseFast
       - rm -rf "/tmp/profile_{{.SCENARIO}}"
       - mkdir -p "/tmp/profile_{{.SCENARIO}}"
       - command -v dsymutil >/dev/null 2>&1 && dsymutil zig-out/bin/profiler || true
