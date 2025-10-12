@@ -109,6 +109,8 @@ pub const BoardContext = struct {
     suit_masks: [4]u16,
     suit_counts: [4]u8,
     rank_counts: [13]u8,
+    rpc_base: u32,
+    suit_flush_mask_ge3: u8,
 };
 
 fn initSuitMasks(board: card.Hand) [4]u16 {
@@ -144,20 +146,48 @@ pub fn initBoardContext(board: card.Hand) BoardContext {
 
     const rank_counts = computeBoardRankCounts(suit_masks);
 
+    var rpc_base: u32 = 0;
+    for (rank_counts) |count| {
+        rpc_base = rpc_base * 5 + count;
+    }
+
+    var suit_flush_mask_ge3: u8 = 0;
+    inline for (0..4) |suit| {
+        if (suit_counts[suit] >= 3) {
+            suit_flush_mask_ge3 |= @as(u8, 1) << @intCast(suit);
+        }
+    }
+
     return .{
         .board = board,
         .suit_masks = suit_masks,
         .suit_counts = suit_counts,
         .rank_counts = rank_counts,
+        .rpc_base = rpc_base,
+        .suit_flush_mask_ge3 = suit_flush_mask_ge3,
     };
 }
+
+const rpc_powers = blk: {
+    @setEvalBranchQuota(2000);
+    var powers: [13]u32 = undefined;
+    for (0..13) |rank| {
+        var pow: u32 = 1;
+        var i: usize = 0;
+        while (i < (12 - rank)) : (i += 1) {
+            pow *= 5;
+        }
+        powers[rank] = pow;
+    }
+    break :blk powers;
+};
 
 fn evaluateHoleWithContextImpl(ctx: *const BoardContext, hole: card.Hand) HandRank {
     std.debug.assert((hole & ctx.board) == 0);
 
     var suit_masks = ctx.suit_masks;
     var suit_counts = ctx.suit_counts;
-    var rank_counts = ctx.rank_counts;
+    var rpc_delta: u32 = 0;
 
     var remaining = hole;
     while (remaining != 0) {
@@ -168,20 +198,20 @@ fn evaluateHoleWithContextImpl(ctx: *const BoardContext, hole: card.Hand) HandRa
 
         suit_masks[suit_index] |= @as(u16, 1) << @intCast(rank_index);
         suit_counts[suit_index] += 1;
-        rank_counts[rank_index] += 1;
+        rpc_delta += rpc_powers[rank_index];
     }
 
+    const flush_candidate_mask = ctx.suit_flush_mask_ge3;
     inline for (0..4) |suit| {
-        if (suit_counts[suit] >= 5) {
-            const pattern = getTop5Ranks(suit_masks[suit]);
-            return tables.flushLookup(pattern);
+        if ((flush_candidate_mask & (@as(u8, 1) << @intCast(suit))) != 0) {
+            if (suit_counts[suit] >= 5) {
+                const pattern = getTop5Ranks(suit_masks[suit]);
+                return tables.flushLookup(pattern);
+            }
         }
     }
 
-    var rpc: u32 = 0;
-    for (rank_counts) |count| {
-        rpc = rpc * 5 + count;
-    }
+    const rpc = ctx.rpc_base + rpc_delta;
     return tables.lookup(rpc);
 }
 
