@@ -118,7 +118,7 @@ const EquityCommand = struct {
 
         if (opts.exact and opts.verbose) {
             // Use detailed exact calculation for verbose mode
-            const detailed_result = hero_range.equityExactDetailed(&villain_range, board_cards, allocator) catch |err| {
+            const detailed_result = hero_range.equityExactWithCategories(&villain_range, board_cards, allocator) catch |err| {
                 print("Error running exact calculation: {}\n", .{err});
                 return;
             };
