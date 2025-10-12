@@ -30,6 +30,7 @@ pub fn main() !void {
         std.debug.print("  init-board   - Profile initBoardContext (board setup)\n", .{});
         std.debug.print("  showdown     - Profile evaluateShowdownWithContext (heads-up comparison)\n", .{});
         std.debug.print("  multiway     - Profile evaluateHand (6-max equity calculation)\n", .{});
+        std.debug.print("  exact-turn   - Profile exact equity calculation on turn\n", .{});
         std.debug.print("\nDefault iterations: 10,000,000\n", .{});
         return;
     }
@@ -40,9 +41,11 @@ pub fn main() !void {
         try profileShowdown(iterations);
     } else if (std.mem.eql(u8, scenario.?, "multiway")) {
         try profileMultiway(iterations);
+    } else if (std.mem.eql(u8, scenario.?, "exact-turn")) {
+        try profileExactTurn(iterations, allocator);
     } else {
         std.debug.print("Unknown scenario: {s}\n", .{scenario.?});
-        std.debug.print("Available: init-board, showdown, multiway\n", .{});
+        std.debug.print("Available: init-board, showdown, multiway, exact-turn\n", .{});
         return error.InvalidScenario;
     }
 }
@@ -212,4 +215,35 @@ fn generate6MaxHands(count: usize, rng: std.Random) ![1000]card.Hand {
     }
 
     return hands;
+}
+
+// Profile exact equity calculation - hot path in exact enumeration
+fn profileExactTurn(iterations: u32, allocator: std.mem.Allocator) !void {
+    // Same scenario as benchmark: AA vs KK on turn (44 rivers to enumerate)
+    const aa = card.makeCard(.clubs, .ace) | card.makeCard(.diamonds, .ace);
+    const kk = card.makeCard(.hearts, .king) | card.makeCard(.spades, .king);
+    const board = [_]card.Hand{
+        card.makeCard(.spades, .seven),
+        card.makeCard(.hearts, .eight),
+        card.makeCard(.diamonds, .nine),
+        card.makeCard(.clubs, .two),
+    };
+
+    std.debug.print("Profiling exact equity on turn ({} iterations)...\n", .{iterations});
+
+    const start = std.time.nanoTimestamp();
+    var checksum: f64 = 0;
+
+    const poker = @import("poker");
+    for (0..iterations) |_| {
+        const result = try poker.exact(aa, kk, &board, allocator);
+        checksum += result.winRate();
+    }
+
+    const elapsed = std.time.nanoTimestamp() - start;
+    const ns_per_calc = @as(f64, @floatFromInt(elapsed)) / @as(f64, @floatFromInt(iterations));
+
+    std.debug.print("Time per exact calculation: {d:.2} µs\n", .{ns_per_calc / 1000.0});
+    std.debug.print("Calculations/sec: {d:.2}K\n", .{1_000_000.0 / ns_per_calc});
+    std.debug.print("Checksum: {d:.4}\n", .{checksum});
 }
