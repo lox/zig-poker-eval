@@ -889,7 +889,8 @@ fn benchEquityMonteCarlo(allocator: std.mem.Allocator) !f64 {
 
     const total_ns: f64 = @floatFromInt(timer.read());
     const iterations_f64: f64 = @floatFromInt(iterations);
-    return total_ns / iterations_f64;
+    const ns_per_calc = total_ns / iterations_f64;
+    return ns_per_calc / 1000.0; // Convert to microseconds
 }
 
 fn benchEquityExact(allocator: std.mem.Allocator) !f64 {
@@ -917,7 +918,8 @@ fn benchEquityExact(allocator: std.mem.Allocator) !f64 {
 
     const total_ns: f64 = @floatFromInt(timer.read());
     const total_ops: f64 = @floatFromInt(iterations * repeats);
-    return total_ns / total_ops;
+    const ns_per_calc = total_ns / total_ops;
+    return ns_per_calc / 1000.0; // Convert to microseconds
 }
 
 fn benchRangeEquityMonteCarlo(allocator: std.mem.Allocator) !f64 {
@@ -949,7 +951,8 @@ fn benchRangeEquityMonteCarlo(allocator: std.mem.Allocator) !f64 {
 
     const total_ns: f64 = @floatFromInt(timer.read());
     const total_ops: f64 = @floatFromInt(iterations * repeats);
-    return total_ns / total_ops;
+    const ns_per_calc = total_ns / total_ops;
+    return ns_per_calc / 1_000_000.0; // Convert to milliseconds
 }
 
 pub const ALL_SUITES = [_]BenchmarkSuite{
