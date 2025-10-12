@@ -30,27 +30,6 @@ tasks:
     cmds:
       - zig-out/bin/poker-eval bench {{.CLI_ARGS}}
 
-  bench:eval:
-    desc: Benchmark hand evaluation performance
-    deps:
-      - build
-    cmds:
-      - zig-out/bin/poker-eval bench {{.CLI_ARGS}}
-
-  bench:equity:
-    desc: Benchmark Monte Carlo equity calculation performance
-    deps:
-      - build
-    cmds:
-      - zig-out/bin/poker-eval bench --equity {{.CLI_ARGS}}
-
-  bench:showdown:
-    desc: Benchmark showdown evaluation (scalar vs batched)
-    deps:
-      - build
-    cmds:
-      - zig-out/bin/poker-eval bench --showdown {{.CLI_ARGS}}
-
   run:
     desc: Run poker-eval CLI with optional arguments
     deps:
