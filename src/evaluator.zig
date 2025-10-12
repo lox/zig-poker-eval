@@ -109,8 +109,8 @@ pub const BoardContext = struct {
     suit_masks: [4]u16,
     suit_counts: [4]u8,
     rank_counts: [13]u8,
-    rpc_base: u32,
-    suit_flush_mask_ge3: u8,
+    rpc_base: u32, // Cached board-only RPC for incremental calculation (Exp 21)
+    suit_flush_mask_ge3: u8, // Bitmask of suits with ≥3 cards (flush candidates)
 };
 
 fn initSuitMasks(board: card.Hand) [4]u16 {
@@ -146,11 +146,13 @@ pub fn initBoardContext(board: card.Hand) BoardContext {
 
     const rank_counts = computeBoardRankCounts(suit_masks);
 
+    // Exp 21: Precompute board-only RPC to enable O(1) incremental updates
     var rpc_base: u32 = 0;
     for (rank_counts) |count| {
         rpc_base = rpc_base * 5 + count;
     }
 
+    // Exp 21: Mark suits that can reach 5 cards (≥3 on board + 2 hole cards)
     var suit_flush_mask_ge3: u8 = 0;
     inline for (0..4) |suit| {
         if (suit_counts[suit] >= 3) {
@@ -168,6 +170,8 @@ pub fn initBoardContext(board: card.Hand) BoardContext {
     };
 }
 
+// Exp 21: Compile-time lookup table for base-5 powers used in incremental RPC
+// Powers are [5^12, 5^11, ..., 5^1, 5^0] indexed by rank [0..12]
 const rpc_powers = blk: {
     @setEvalBranchQuota(2000);
     var powers: [13]u32 = undefined;
@@ -189,6 +193,7 @@ fn evaluateHoleWithContextImpl(ctx: *const BoardContext, hole: card.Hand) HandRa
     var suit_counts = ctx.suit_counts;
     var rpc_delta: u32 = 0;
 
+    // Exp 21: Process hole cards and accumulate RPC delta incrementally
     var remaining = hole;
     while (remaining != 0) {
         const bit_index: u6 = @intCast(@ctz(remaining));
@@ -198,9 +203,10 @@ fn evaluateHoleWithContextImpl(ctx: *const BoardContext, hole: card.Hand) HandRa
 
         suit_masks[suit_index] |= @as(u16, 1) << @intCast(rank_index);
         suit_counts[suit_index] += 1;
-        rpc_delta += rpc_powers[rank_index];
+        rpc_delta += rpc_powers[rank_index]; // O(1) lookup vs O(13) loop
     }
 
+    // Exp 21: Gated flush check - only test suits that can reach 5 cards
     const flush_candidate_mask = ctx.suit_flush_mask_ge3;
     inline for (0..4) |suit| {
         if ((flush_candidate_mask & (@as(u8, 1) << @intCast(suit))) != 0) {
@@ -211,6 +217,7 @@ fn evaluateHoleWithContextImpl(ctx: *const BoardContext, hole: card.Hand) HandRa
         }
     }
 
+    // Exp 21: Incremental RPC - add hole card delta to cached board base
     const rpc = ctx.rpc_base + rpc_delta;
     return tables.lookup(rpc);
 }

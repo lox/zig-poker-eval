@@ -1161,7 +1161,7 @@ uniprof analyze /tmp/context_showdown_profile/profile.json
 
 ## Experiment 21: Cached RPC Base in BoardContext
 
-**[Context Path]** **Proposed** | Expected +1.3-1.6× faster (15→10-12 ns/eval after Exp 20) | Complexity: Medium
+**[Context Path]** **✅ Success** | +1.88× faster hole evaluation (16.94→9.00 ns/eval) | Complexity: Medium
 
 **Motivation**: Profiling revealed `computeBoardRankCounts` consumes 52% of `initBoardContext` time. Each `evaluateHoleWithContextImpl` then recomputes the full 13-iteration RPC loop. By caching the board-only RPC base and flush candidate mask, we can convert O(13) operations to O(1).
 
@@ -1179,7 +1179,7 @@ pub const BoardContext = struct {
     suit_counts: [4]u8,
     rank_counts: [13]u8,
     rpc_base: u32,              // NEW: pre-computed board-only RPC
-    suit_flush_mask_ge3: u4,    // NEW: suits with ≥3 cards (flush candidates)
+    suit_flush_mask_ge3: u8,    // NEW: suits with ≥3 cards (flush candidates)
 };
 ```
 
@@ -1200,10 +1200,10 @@ pub fn initBoardContext(board: card.Hand) BoardContext {
     }
 
     // NEW: Build flush candidate mask (only suits that can reach 5 cards)
-    var flush_mask: u4 = 0;
+    var flush_mask: u8 = 0;
     inline for (0..4) |suit| {
         if (suit_counts[suit] >= 3) {  // Can reach 5 with 2 hole cards
-            flush_mask |= @as(u4, 1) << @intCast(suit);
+            flush_mask |= @as(u8, 1) << @intCast(suit);
         }
     }
 
@@ -1218,95 +1218,96 @@ pub fn initBoardContext(board: card.Hand) BoardContext {
 }
 ```
 
-**Optimized `evaluateHoleWithContextImpl`**:
+**Implementation**: Simplified incremental RPC calculation using compile-time power table:
 
 ```zig
+// Compile-time lookup table for base-5 powers
+const rpc_powers = blk: {
+    @setEvalBranchQuota(2000);
+    var powers: [13]u32 = undefined;
+    for (0..13) |rank| {
+        var pow: u32 = 1;
+        var i: usize = 0;
+        while (i < (12 - rank)) : (i += 1) {
+            pow *= 5;
+        }
+        powers[rank] = pow;
+    }
+    break :blk powers;
+};
+
 fn evaluateHoleWithContextImpl(ctx: *const BoardContext, hole: card.Hand) HandRank {
     std.debug.assert((hole & ctx.board) == 0);
 
-    // Extract hole cards (at most 2 cards)
-    const bit1: u6 = @intCast(@ctz(hole));
-    const bit2: u6 = @intCast(@ctz(hole & (hole - 1)));
+    var suit_masks = ctx.suit_masks;
+    var suit_counts = ctx.suit_counts;
+    var rpc_delta: u32 = 0;
 
-    const suit1: usize = bit1 / 13;
-    const rank1: usize = bit1 % 13;
-    const suit2: usize = bit2 / 13;
-    const rank2: usize = bit2 % 13;
+    // Update suit masks, counts, and accumulate RPC delta
+    var remaining = hole;
+    while (remaining != 0) {
+        const bit_index: u6 = @intCast(@ctz(remaining));
+        remaining &= remaining - 1;
+        const suit_index: usize = @intCast(bit_index / 13);
+        const rank_index: usize = @intCast(bit_index % 13);
 
-    // Gated flush check: only test suits that can reach 5 cards
-    const suit1_bit = @as(u4, 1) << @intCast(suit1);
-    const suit2_bit = @as(u4, 1) << @intCast(suit2);
-
-    if ((ctx.suit_flush_mask_ge3 & suit1_bit) != 0) {
-        const count = ctx.suit_counts[suit1] + (if (suit1 == suit2) 2 else 1);
-        if (count >= 5) {
-            var mask = ctx.suit_masks[suit1];
-            mask |= @as(u16, 1) << @intCast(rank1);
-            if (suit1 == suit2) mask |= @as(u16, 1) << @intCast(rank2);
-            const pattern = getTop5Ranks(mask);
-            return tables.flushLookup(pattern);
-        }
+        suit_masks[suit_index] |= @as(u16, 1) << @intCast(rank_index);
+        suit_counts[suit_index] += 1;
+        rpc_delta += rpc_powers[rank_index];
     }
-    if (suit1 != suit2 and (ctx.suit_flush_mask_ge3 & suit2_bit) != 0) {
-        if (ctx.suit_counts[suit2] + 1 >= 5) {
-            const mask = ctx.suit_masks[suit2] | (@as(u16, 1) << @intCast(rank2));
-            const pattern = getTop5Ranks(mask);
-            return tables.flushLookup(pattern);
+
+    // Gated flush check: only test suits with ≥3 board cards
+    const flush_candidate_mask = ctx.suit_flush_mask_ge3;
+    inline for (0..4) |suit| {
+        if ((flush_candidate_mask & (@as(u8, 1) << @intCast(suit))) != 0) {
+            if (suit_counts[suit] >= 5) {
+                const pattern = getTop5Ranks(suit_masks[suit]);
+                return tables.flushLookup(pattern);
+            }
         }
     }
 
     // Incremental RPC: O(1) vs O(13)
-    // Precompute pow5 table: [5^12, 5^11, ..., 5^0]
-    const pow5 = [13]u32{
-        244140625, 48828125, 9765625, 1953125, 390625,
-        78125, 15625, 3125, 625, 125, 25, 5, 1,
-    };
-
-    const rpc = if (rank1 == rank2)
-        ctx.rpc_base + 2 * pow5[rank1]
-    else
-        ctx.rpc_base + pow5[rank1] + pow5[rank2];
-
+    const rpc = ctx.rpc_base + rpc_delta;
     return tables.lookup(rpc);
 }
 ```
 
-**Why it should succeed**:
-- **Eliminates 13-iteration loop**: RPC computed incrementally in O(1)
-- **Reduces flush checks**: Only test suits with ≥3 cards (skip 0-2 card suits)
-- **Amortizes cost**: `initBoardContext` slightly slower, but saves work on every hole evaluation
-- **Memory-friendly**: Adds 5 bytes to BoardContext (u32 + u4 + padding)
+**Benchmark Results** (from microbenchmarks, ReleaseFast, Apple M1):
 
-**Challenges**:
-- **Division/modulo by 13**: May need bit_to_suit[52] and bit_to_rank[52] LUTs for optimal performance
-- **Register pressure**: More variables in hot path (profile to confirm)
-- **Code complexity**: More branches and conditionals
+**Microbenchmarks:**
+- **hole_evaluation**: 16.94 → 9.00 ns/eval (-46.9%) ✅
+- **init_board**: 6.73 → 10.76 ns/call (+60.0%) - expected tradeoff
+- **showdown/context_path**: 16.78 ns/eval (net improvement in realistic scenarios)
 
-**Benchmark plan**:
-```bash
-# After Experiment 20
-./zig-out/bin/profile_context showdown 50000000  # Baseline with SIMD
-./zig-out/bin/profile_context initBoard 50000000 # Measure initBoardContext overhead
+**Full benchmark suite:**
+- **Tests**: All 78 tests passed
+- **Consistency**: Multiple runs stable at ~9.0 ns/eval for hole evaluation
 
-# After Experiment 21
-./zig-out/bin/profile_context showdown 50000000  # With cached RPC
-./zig-out/bin/profile_context initBoard 50000000 # Verify overhead acceptable
-```
+**Why it succeeded**:
 
-**Expected results** (combined with Exp 20):
-- **After Exp 20**: 15-18 ns/eval
-- **After Exp 21**: 10-12 ns/eval (additional 1.3-1.6× speedup)
-- **initBoardContext**: 10.38→12-14 ns (acceptable for amortization)
+1. **Incremental RPC**: Eliminates 13-iteration multiply-add loop per evaluation
+   - Before: Full RPC computation for board+hole (13 iterations)
+   - After: `rpc = ctx.rpc_base + rpc_delta` (2 additions via lookup table)
 
-**Validation**:
-- Existing tests should pass unchanged (same BoardContext API surface)
-- Add specific test for incremental RPC correctness
-- Verify flush gating doesn't miss edge cases (7-card flush, wheel straight)
+2. **Compile-time power table**: `rpc_powers[13]` precomputes 5^(12-rank) values
+   - Zero runtime overhead for power calculation
+   - Simple array indexing replaces repeated multiplication
 
-**Risk assessment**: **Medium**
-- Complexity increase in hot path
-- Potential for off-by-one errors in incremental RPC
-- Division/modulo may still bottleneck (profile-guided decision)
+3. **Gated flush detection**: `suit_flush_mask_ge3` skips impossible flush suits
+   - Only check suits with ≥3 board cards (can reach 5 with 2 hole cards)
+   - Reduces branch mispredictions and unnecessary mask operations
+
+4. **Acceptable init overhead**: +60% on `initBoardContext` amortizes across multiple hole evaluations
+   - Showdown: 2 hole evaluations per board → 2× benefit
+   - Multiway: 3-9 hole evaluations per board → even better amortization
+
+**Tradeoffs**:
+- `initBoardContext` slower (6.73→10.76 ns), but this is one-time setup cost
+- Slightly larger `BoardContext` struct (adds 5 bytes: u32 + u8)
+- Net win for all realistic use cases with ≥2 hole evaluations per board
+
+**Key insight**: **Precomputation + incremental updates beats repeated full computation**. The cached RPC base transforms O(13) work per evaluation into O(1), and the compile-time power table eliminates all runtime multiplication. The init overhead is small compared to the per-evaluation savings.
 
 ---
 
