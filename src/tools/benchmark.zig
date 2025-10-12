@@ -893,8 +893,8 @@ fn benchEquityMonteCarlo(allocator: std.mem.Allocator) !f64 {
 }
 
 fn benchEquityExact(allocator: std.mem.Allocator) !f64 {
-    const iterations = 100;
-    const repeats = 50; // Repeat 50x for stability
+    const iterations = 200;
+    const repeats = 100; // Repeat 100x for stability (deterministic, needs low variance)
 
     // AA vs KK on turn (only 44 rivers to enumerate)
     const aa = poker.makeCard(.clubs, .ace) | poker.makeCard(.diamonds, .ace);
@@ -993,6 +993,8 @@ pub const ALL_SUITES = [_]BenchmarkSuite{
             .{
                 .name = "exact_turn",
                 .unit = "µs/calc",
+                .warmup_runs = 5,
+                .runs = 20, // More runs for stability
                 .threshold_pct = 0.03, // 3% - deterministic enumeration
                 .run_fn = benchEquityExact,
             },
