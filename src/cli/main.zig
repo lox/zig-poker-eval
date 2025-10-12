@@ -379,7 +379,7 @@ const BenchCommand = struct {
 
         // Run benchmarks (use more runs if saving baseline)
         var result = try benchmark.runAllBenchmarks(allocator, opts.filter, opts.baseline);
-        defer result.deinit();
+        defer result.deinit(allocator);
 
         // Save as baseline if requested
         if (opts.baseline) {
@@ -418,7 +418,7 @@ const BenchCommand = struct {
             }
             return err;
         };
-        defer baseline.deinit();
+        defer baseline.deinit(allocator);
 
         var comparison = try benchmark.compareResults(baseline, result, opts.threshold, allocator);
         defer comparison.deinit();

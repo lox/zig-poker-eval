@@ -51,6 +51,14 @@ pub const SystemInfo = struct {
     arch: []const u8,
     os: []const u8,
     build_mode: []const u8,
+
+    pub fn deinit(self: *SystemInfo, allocator: std.mem.Allocator) void {
+        allocator.free(self.hostname);
+        allocator.free(self.cpu);
+        allocator.free(self.arch);
+        allocator.free(self.os);
+        allocator.free(self.build_mode);
+    }
 };
 
 /// Complete baseline result
@@ -71,7 +79,11 @@ pub const Result = struct {
         };
     }
 
-    pub fn deinit(self: *Result) void {
+    pub fn deinit(self: *Result, allocator: std.mem.Allocator) void {
+        if (self.commit) |c| allocator.free(c);
+        if (self.timestamp.len > 0) allocator.free(self.timestamp);
+        self.system.deinit(allocator);
+
         var suite_iter = self.suites.iterator();
         while (suite_iter.next()) |entry| {
             var benchmark_map = entry.value_ptr.*;
@@ -110,47 +122,50 @@ pub const BenchmarkRunner = struct {
         }
 
         // Calculate statistics
-        return try calculateStatistics(times, self.allocator);
+        return try calculateStatistics(times);
     }
 };
 
-fn calculateStatistics(times: []const f64, allocator: std.mem.Allocator) !Statistics {
-    // Sort times first (needed for median, IQM, and min/max)
-    const sorted = try allocator.alloc(f64, times.len);
-    defer allocator.free(sorted);
-    @memcpy(sorted, times);
-    std.mem.sort(f64, sorted, {}, comptime std.sort.asc(f64));
+fn calculateStatistics(times: []f64) !Statistics {
+    const n = times.len;
+    if (n == 0) return error.EmptySample;
+
+    // Sort in-place (we own the buffer)
+    std.mem.sort(f64, times, {}, comptime std.sort.asc(f64));
 
     // Calculate IQM (Interquartile Mean): mean of middle 50% of samples
     // This eliminates outliers from OS scheduler interrupts and measurement noise
-    const q1_idx = sorted.len / 4;
-    const q3_idx = (3 * sorted.len) / 4;
-    const iqm_samples = sorted[q1_idx..q3_idx];
+    const q1_idx = n / 4;
+    const q3_idx = (3 * n) / 4;
+    const iqm_samples = if (q3_idx > q1_idx) times[q1_idx..q3_idx] else times;
 
     var iqm_sum: f64 = 0;
     for (iqm_samples) |val| iqm_sum += val;
     const mean = iqm_sum / @as(f64, @floatFromInt(iqm_samples.len));
 
-    // Calculate standard deviation from IQM samples only
+    // Calculate standard deviation from IQM samples only using sample variance (n-1)
     var variance: f64 = 0;
     for (iqm_samples) |time| {
         const diff = time - mean;
         variance += diff * diff;
     }
-    variance /= @as(f64, @floatFromInt(iqm_samples.len));
+    const denom = if (iqm_samples.len > 1) iqm_samples.len - 1 else 1;
+    variance /= @as(f64, @floatFromInt(denom));
     const stddev = @sqrt(variance);
 
     // Coefficient of variation from IQM
     const cv = if (mean != 0) stddev / mean else 0;
 
-    // Median from sorted array
-    const median = sorted[sorted.len / 2];
+    // Median from sorted array (average of middle two for even length)
+    const mid = n / 2;
+    const median = if (n % 2 == 0)
+        (times[mid - 1] + times[mid]) / 2.0
+    else
+        times[mid];
 
     // Min/max from sorted array
-    const min_val = sorted[0];
-    const max_val = sorted[sorted.len - 1];
-
-    const runs_u32: u32 = @intCast(times.len);
+    const min_val = times[0];
+    const max_val = times[n - 1];
 
     return .{
         .mean = mean,
@@ -159,7 +174,7 @@ fn calculateStatistics(times: []const f64, allocator: std.mem.Allocator) !Statis
         .cv = cv,
         .min = min_val,
         .max = max_val,
-        .runs = runs_u32,
+        .runs = @intCast(n),
     };
 }
 
@@ -170,9 +185,9 @@ fn calculateStatistics(times: []const f64, allocator: std.mem.Allocator) !Statis
 fn getSystemInfo(allocator: std.mem.Allocator) !SystemInfo {
     const hostname = try getHostname(allocator);
     const cpu = try getCpuModel(allocator);
-    const arch = @tagName(builtin.cpu.arch);
-    const os = @tagName(builtin.os.tag);
-    const build_mode = @tagName(builtin.mode);
+    const arch = try allocator.dupe(u8, @tagName(builtin.cpu.arch));
+    const os = try allocator.dupe(u8, @tagName(builtin.os.tag));
+    const build_mode = try allocator.dupe(u8, @tagName(builtin.mode));
 
     return .{
         .hostname = hostname,
@@ -185,52 +200,61 @@ fn getSystemInfo(allocator: std.mem.Allocator) !SystemInfo {
 
 fn getHostname(allocator: std.mem.Allocator) ![]const u8 {
     if (builtin.os.tag == .windows) {
-        return allocator.dupe(u8, std.posix.getenv("COMPUTERNAME") orelse "unknown");
+        const env_val = std.process.getEnvVarOwned(allocator, "COMPUTERNAME") catch {
+            return allocator.dupe(u8, "unknown");
+        };
+        return env_val;
     }
 
     var buf: [std.posix.HOST_NAME_MAX]u8 = undefined;
-    const hostname = std.posix.gethostname(&buf) catch return allocator.dupe(u8, "unknown");
+    const hostname = std.posix.gethostname(&buf) catch {
+        return allocator.dupe(u8, "unknown");
+    };
     return allocator.dupe(u8, hostname);
 }
 
 fn getCpuModel(allocator: std.mem.Allocator) ![]const u8 {
-    const cpu_model = switch (builtin.os.tag) {
-        .macos => blk: {
+    switch (builtin.os.tag) {
+        .macos => {
             const result = std.process.Child.run(.{
                 .allocator = allocator,
                 .argv = &[_][]const u8{ "sysctl", "-n", "machdep.cpu.brand_string" },
-            }) catch break :blk "unknown";
+            }) catch {
+                return allocator.dupe(u8, "unknown");
+            };
             defer allocator.free(result.stdout);
             defer allocator.free(result.stderr);
 
             if (result.term == .Exited and result.term.Exited == 0) {
                 const trimmed = std.mem.trim(u8, result.stdout, &std.ascii.whitespace);
-                break :blk try allocator.dupe(u8, trimmed);
+                return try allocator.dupe(u8, trimmed);
             }
-            break :blk "unknown";
+            return allocator.dupe(u8, "unknown");
         },
-        .linux => blk: {
-            const file = std.fs.cwd().openFile("/proc/cpuinfo", .{}) catch break :blk "unknown";
+        .linux => {
+            const file = std.fs.cwd().openFile("/proc/cpuinfo", .{}) catch {
+                return allocator.dupe(u8, "unknown");
+            };
             defer file.close();
 
-            var buf: [4096]u8 = undefined;
-            const bytes_read = file.readAll(&buf) catch break :blk "unknown";
+            const content = file.readToEndAlloc(allocator, 1 << 20) catch {
+                return allocator.dupe(u8, "unknown");
+            };
+            defer allocator.free(content);
 
-            var lines = std.mem.splitSequence(u8, buf[0..bytes_read], "\n");
+            var lines = std.mem.splitSequence(u8, content, "\n");
             while (lines.next()) |line| {
                 if (std.mem.startsWith(u8, line, "model name")) {
                     if (std.mem.indexOf(u8, line, ":")) |colon_pos| {
                         const model = std.mem.trim(u8, line[colon_pos + 1 ..], &std.ascii.whitespace);
-                        break :blk try allocator.dupe(u8, model);
+                        return try allocator.dupe(u8, model);
                     }
                 }
             }
-            break :blk "unknown";
+            return allocator.dupe(u8, "unknown");
         },
-        else => "unknown",
-    };
-
-    return cpu_model;
+        else => return allocator.dupe(u8, "unknown"),
+    }
 }
 
 fn getCurrentCommit(allocator: std.mem.Allocator) ?[]const u8 {
@@ -770,7 +794,7 @@ fn benchEvalBatch(allocator: std.mem.Allocator) !f64 {
         for (0..BATCH_SIZE) |j| {
             checksum +%= results[j];
         }
-        hand_idx += BATCH_SIZE;
+        hand_idx = (hand_idx + BATCH_SIZE) % num_test_hands;
     }
 
     const total_ns: f64 = @floatFromInt(timer.read());
@@ -828,6 +852,7 @@ fn benchEquityMonteCarlo(allocator: std.mem.Allocator) !f64 {
     const iterations = 1000;
     const simulations = 10000;
 
+    // Fixed seed for reproducibility (but RNG state advances across iterations)
     var prng = std.Random.DefaultPrng.init(123);
     const rng = prng.random();
 
@@ -880,6 +905,7 @@ fn benchRangeEquityMonteCarlo(allocator: std.mem.Allocator) !f64 {
     const repeats = 10; // Repeat 10x for stability
     const simulations = 1000;
 
+    // Fixed seed for reproducibility (but RNG state advances across iterations)
     var prng = std.Random.DefaultPrng.init(456);
     const rng = prng.random();
 
@@ -965,31 +991,39 @@ pub const ALL_SUITES = [_]BenchmarkSuite{
 
 fn formatThroughput(buffer: *[32]u8, value: f64, unit: []const u8) []const u8 {
     // Convert to operations per second based on unit
-    const ops_per_sec: f64 = blk: {
-        if (std.mem.endsWith(u8, unit, "ns/hand") or std.mem.endsWith(u8, unit, "ns/eval")) {
-            // nanoseconds per operation → ops/sec = 1e9 / ns
-            break :blk 1_000_000_000.0 / value;
-        } else if (std.mem.endsWith(u8, unit, "µs/calc") or std.mem.endsWith(u8, unit, "us/calc")) {
-            // microseconds per operation → ops/sec = 1e6 / µs
-            break :blk 1_000_000.0 / value;
-        } else if (std.mem.endsWith(u8, unit, "ms/calc")) {
-            // milliseconds per operation → ops/sec = 1e3 / ms
-            break :blk 1_000.0 / value;
+    if (std.mem.endsWith(u8, unit, "ns/hand") or std.mem.endsWith(u8, unit, "ns/eval")) {
+        // nanoseconds per operation → ops/sec = 1e9 / ns
+        const ops_per_sec = 1_000_000_000.0 / value;
+        if (ops_per_sec >= 1_000_000_000.0) {
+            return std.fmt.bufPrint(buffer, "{d:.2}G/s", .{ops_per_sec / 1_000_000_000.0}) catch "?";
+        } else if (ops_per_sec >= 1_000_000.0) {
+            return std.fmt.bufPrint(buffer, "{d:.2}M/s", .{ops_per_sec / 1_000_000.0}) catch "?";
+        } else if (ops_per_sec >= 1_000.0) {
+            return std.fmt.bufPrint(buffer, "{d:.2}K/s", .{ops_per_sec / 1_000.0}) catch "?";
         } else {
-            // Unknown unit, just show raw value
-            break :blk value;
+            return std.fmt.bufPrint(buffer, "{d:.2}/s", .{ops_per_sec}) catch "?";
         }
-    };
-
-    // Format with appropriate suffix
-    if (ops_per_sec >= 1_000_000_000.0) {
-        return std.fmt.bufPrint(buffer, "{d:.2}G/s", .{ops_per_sec / 1_000_000_000.0}) catch "?";
-    } else if (ops_per_sec >= 1_000_000.0) {
-        return std.fmt.bufPrint(buffer, "{d:.2}M/s", .{ops_per_sec / 1_000_000.0}) catch "?";
-    } else if (ops_per_sec >= 1_000.0) {
-        return std.fmt.bufPrint(buffer, "{d:.2}K/s", .{ops_per_sec / 1_000.0}) catch "?";
+    } else if (std.mem.endsWith(u8, unit, "µs/calc") or std.mem.endsWith(u8, unit, "us/calc")) {
+        // microseconds per operation → ops/sec = 1e6 / µs
+        const ops_per_sec = 1_000_000.0 / value;
+        if (ops_per_sec >= 1_000_000.0) {
+            return std.fmt.bufPrint(buffer, "{d:.2}M/s", .{ops_per_sec / 1_000_000.0}) catch "?";
+        } else if (ops_per_sec >= 1_000.0) {
+            return std.fmt.bufPrint(buffer, "{d:.2}K/s", .{ops_per_sec / 1_000.0}) catch "?";
+        } else {
+            return std.fmt.bufPrint(buffer, "{d:.2}/s", .{ops_per_sec}) catch "?";
+        }
+    } else if (std.mem.endsWith(u8, unit, "ms/calc")) {
+        // milliseconds per operation → ops/sec = 1e3 / ms
+        const ops_per_sec = 1_000.0 / value;
+        if (ops_per_sec >= 1_000.0) {
+            return std.fmt.bufPrint(buffer, "{d:.2}K/s", .{ops_per_sec / 1_000.0}) catch "?";
+        } else {
+            return std.fmt.bufPrint(buffer, "{d:.2}/s", .{ops_per_sec}) catch "?";
+        }
     } else {
-        return std.fmt.bufPrint(buffer, "{d:.2}/s", .{ops_per_sec}) catch "?";
+        // Unknown unit - show raw value with unit to avoid misleading throughput
+        return std.fmt.bufPrint(buffer, "{d:.2} {s}", .{ value, unit }) catch "?";
     }
 }
 
