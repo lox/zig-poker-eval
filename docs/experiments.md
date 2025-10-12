@@ -1346,6 +1346,269 @@ const rank1: usize = bit_to_rank[bit1];
 
 ---
 
+## Experiment 23: SIMD Equity Calculation
+
+**[Equity]** **🔬 Proposed** | Expected 2-4× speedup for Monte Carlo | Complexity: High | Priority: High
+
+**Motivation**: Current Monte Carlo equity calculations evaluate runouts sequentially. Applying our proven SIMD batching strategy to equity calculations could achieve 2-4× speedup by evaluating multiple runouts simultaneously.
+
+**Hypothesis**: The embarrassingly parallel nature of Monte Carlo simulations is ideal for SIMD optimization. Each runout is independent, allowing vectorization of:
+1. Random deck generation
+2. Board completion dealing
+3. Hand evaluation (already SIMD-optimized)
+4. Win/tie/loss accumulation
+
+**Implementation Plan**:
+
+1. **Vectorize RNG for parallel runout generation**:
+   ```zig
+   // Generate 32 parallel random runouts
+   fn generateRunoutsBatch32(deck: *Deck, board_cards: u8) [32]card.Hand {
+       // SIMD-friendly parallel shuffling or XorShift RNG per lane
+   }
+   ```
+
+2. **Batch evaluate runouts using existing SIMD infrastructure**:
+   ```zig
+   pub fn monteCarloSimdImpl(hand1: card.Hand, hand2: card.Hand, board: card.Hand, iterations: u32) !EquityResult {
+       var wins: u32 = 0;
+       var ties: u32 = 0;
+
+       const batch_size = 32;
+       var i: u32 = 0;
+       while (i < iterations) : (i += batch_size) {
+           // Generate 32 parallel runouts
+           const runouts = generateRunoutsBatch32(&deck, board_card_count);
+
+           // Batch evaluate both hands across all runouts (2 × 32 evaluations)
+           const hand1_boards = @Vector(32, u64){ /* board | runout[i] */ };
+           const hand2_boards = @Vector(32, u64){ /* board | runout[i] */ };
+
+           const hand1_ranks = evaluateBatch(32, hand1_boards);
+           const hand2_ranks = evaluateBatch(32, hand2_boards);
+
+           // Vectorized comparison and accumulation
+           inline for (0..32) |j| {
+               if (hand1_ranks[j] < hand2_ranks[j]) wins += 1
+               else if (hand1_ranks[j] == hand2_ranks[j]) ties += 1;
+           }
+       }
+   }
+   ```
+
+3. **Vectorized win/tie accumulation**:
+   - Use SIMD comparison to generate win/tie masks
+   - Horizontal sum to accumulate counts
+
+4. **Benchmark against current sequential Monte Carlo**
+
+**Expected Results**:
+- **Current**: Sequential evaluation, ~1 runout per 10-20ns
+- **With SIMD**: Batch-32 evaluation, ~2-4× throughput improvement
+- **Memory**: Minimal increase (32 × 8 bytes = 256 bytes for runout batch)
+
+**Why it should succeed**:
+1. **Proven SIMD infrastructure**: Leverages existing `evaluateBatch` (Exp 6)
+2. **Embarrassingly parallel**: No dependencies between runouts
+3. **Amortizes RNG cost**: Generate 32 random boards at once
+4. **Memory-friendly**: Small batch size fits in registers/L1
+
+**Challenges**:
+1. **RNG vectorization**: Need SIMD-friendly random number generation
+2. **Batch alignment**: Handle iterations not divisible by 32
+3. **Complexity**: High implementation effort (vectorize entire pipeline)
+
+**Success Criteria**: >2× speedup on 10K+ iteration Monte Carlo simulations
+
+**Effort**: Large (1-2 days) - requires vectorizing RNG and integration with existing equity module
+
+---
+
+## Experiment 24: Compile-Time Specialization
+
+**[Evaluator/Context]** **🔬 Proposed** | Expected 5-10% for specific scenarios | Complexity: Medium | Priority: High
+
+**Motivation**: Our evaluator handles 5-card, 6-card, and 7-card hands generically. Specialized evaluators for each card count could eliminate shared conditionals and enable aggressive inlining, similar to holdem-hand-evaluator's board-specific functions.
+
+**Hypothesis**: Compile-time specialization removes dead code paths and enables better compiler optimization. Most beneficial for showdown paths where card counts are known at compile time.
+
+**Implementation Plan**:
+
+1. **Create specialized evaluators via `comptime` parameters**:
+   ```zig
+   pub fn evaluateHandSpecialized(comptime card_count: u8, hand: card.Hand) HandRank {
+       comptime {
+           if (card_count != 5 and card_count != 6 and card_count != 7) {
+               @compileError("Invalid card count");
+           }
+       }
+
+       if (comptime card_count == 5) {
+           // 5-card path: no flush detection needed if preflop
+           // Simplified RPC computation
+       } else if (comptime card_count == 6) {
+           // 6-card path: optimized for turn
+       } else {
+           // 7-card path: full evaluation (current code)
+       }
+   }
+   ```
+
+2. **Specialized BoardContext for game stages**:
+   ```zig
+   pub const BoardContextFlop = struct {
+       // 3-card board: simplified tracking
+       board: card.Hand,
+       suit_masks: [4]u16,
+       // No flush candidates possible (need 2+ more cards)
+   };
+
+   pub const BoardContextTurn = struct {
+       // 4-card board: flush candidates emerge
+       board: card.Hand,
+       suit_masks: [4]u16,
+       suit_flush_mask_ge2: u8, // Suits with ≥2 cards
+       rpc_base: u32,
+   };
+   ```
+
+3. **Compile-time dead code elimination**:
+   ```zig
+   fn evaluateHoleWithContextSpecialized(comptime stage: GameStage, ctx: anytype, hole: card.Hand) HandRank {
+       if (comptime stage == .Flop) {
+           // Skip flush detection entirely (3 board + 2 hole = 5 cards)
+           const rpc = computeRpc(ctx, hole);
+           return tables.lookup(rpc);
+       } else {
+           // Full evaluation with flush detection
+       }
+   }
+   ```
+
+4. **Benchmark specialized vs generic paths**
+
+**Expected Results**:
+- **Showdown context path**: 5-10% improvement (fewer branches, better inlining)
+- **Batch evaluator**: Minimal impact (already optimized, memory-bound)
+- **Binary size**: Moderate increase (~10-20KB for code duplication)
+
+**Why it should succeed**:
+1. **Removes runtime branches**: `comptime` eliminates conditionals at compile time
+2. **Enables aggressive inlining**: Smaller specialized functions inline better
+3. **Aligns with hardware**: Simpler code paths reduce instruction cache pressure
+4. **Proven pattern**: holdem-hand-evaluator uses similar specialization
+
+**Trade-offs**:
+- Code duplication vs performance gain
+- Binary size increase vs runtime speed
+- Maintenance complexity vs optimization benefits
+
+**Success Criteria**: >5% improvement on showdown context path (currently 16.78 ns/eval)
+
+**Effort**: Medium (1-3 hours) - leverage Zig's `comptime` features
+
+---
+
+## Experiment 25: Precomputed Heads-Up Equity Tables
+
+**[Equity]** **🔬 Proposed** | Expected 100,000× speedup for preflop HU | Complexity: Small | Priority: High
+
+**Motivation**: Heads-up preflop equity has only 169×169 unique matchups (13 pairs + 78 suited + 78 offsuit). Precomputing these values eliminates Monte Carlo simulation entirely for the most common equity calculation.
+
+**Hypothesis**: A 114KB precomputed table provides perfect accuracy in O(1) time vs 10-100ms Monte Carlo simulation.
+
+**Implementation Plan**:
+
+1. **Hand indexing for 169 unique starting hands**:
+   ```zig
+   const HandIndex = enum(u8) {
+       AA = 0, KK = 1, QQ = 2, /* ... pairs ... */
+       AKs = 13, AQs = 14, /* ... suited ... */
+       AKo = 91, AQo = 92, /* ... offsuit ... */
+   };
+
+   fn getHandIndex(hole: card.Hand) HandIndex {
+       // Map 2-card hand to 0-168 index
+   }
+   ```
+
+2. **Precomputed equity table (169×169 = 28,561 entries)**:
+   ```zig
+   // 4 bytes per entry: u16 wins, u16 ties (out of 1000)
+   const PREFLOP_HU_EQUITY: [169][169]struct { wins: u16, ties: u16 } = /* generated */;
+
+   pub fn preflopHeadsUpEquity(hand1: card.Hand, hand2: card.Hand) EquityResult {
+       const idx1 = getHandIndex(hand1);
+       const idx2 = getHandIndex(hand2);
+       const entry = PREFLOP_HU_EQUITY[@intFromEnum(idx1)][@intFromEnum(idx2)];
+
+       return EquityResult{
+           .wins = entry.wins,
+           .ties = entry.ties,
+           .total_simulations = 1000,
+       };
+   }
+   ```
+
+3. **Table generation** (one-time offline):
+   ```bash
+   zig build generate-hu-tables -Doptimize=ReleaseFast
+   # Runs exact enumeration for all 169×169 matchups
+   # Outputs to src/internal/hu_equity_tables.zig
+   ```
+
+4. **Integration with equity API**:
+   ```zig
+   pub fn monteCarlo(hand1: card.Hand, hand2: card.Hand, board: card.Hand, iterations: u32) !EquityResult {
+       // Fast path for preflop heads-up
+       if (board == 0 and @popCount(hand1) == 2 and @popCount(hand2) == 2) {
+           return preflopHeadsUpEquity(hand1, hand2);
+       }
+
+       // Fall back to Monte Carlo for postflop
+       return monteCarloImpl(false, hand1, hand2, board, iterations);
+   }
+   ```
+
+**Expected Results**:
+- **Table size**: 114KB (28,561 entries × 4 bytes)
+- **Lookup time**: 10-50 ns (2 index calculations + 1 memory load)
+- **Accuracy**: Perfect (exact enumeration)
+- **Speedup vs Monte Carlo**: 100,000-1,000,000× for preflop
+
+**Performance Comparison**:
+```
+Method          | Time      | Accuracy | Memory
+----------------|-----------|----------|--------
+Precomputed     | 10-50 ns  | Perfect  | 114 KB
+Monte Carlo 10K | 10-100 ms | ±3%      | 0 KB
+Monte Carlo 100K| 100ms-1s  | ±1%      | 0 KB
+```
+
+**Why it should succeed**:
+1. **Massive speedup**: Eliminates all computation for preflop HU
+2. **Perfect accuracy**: No probabilistic error
+3. **Negligible memory**: 114KB is tiny vs our 395KB evaluator tables
+4. **Common use case**: Preflop HU equity is heavily used in training tools, solvers
+
+**Production Impact**:
+- Real-time GTO calculations
+- Training tool responsiveness
+- Solver performance
+- Range analysis speed
+
+**Next Steps**:
+1. Generate actual equity values (currently would be placeholders)
+2. Implement full 169×169 table
+3. Add common flop texture tables (optional extension)
+4. Integrate with main equity API as fast path
+
+**Success Criteria**: O(1) lookup replaces 10K+ iteration Monte Carlo for preflop HU
+
+**Effort**: Small (<1 day) - mostly table generation and indexing logic
+
+---
+
 ## Implementation Roadmap (Context Path Optimization)
 
 **Phase 1: Quick Win (Exp 20)** - Target: <1 day
