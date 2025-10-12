@@ -128,40 +128,53 @@ River (5 cards)    |       1000  |      2.11 |        0.474
 ### Setup
 
 ```bash
-cargo install uniprof
+npm install -g uniprof
 ```
 
 ### Running Profiles
 
 ```bash
-# Profile hand evaluation
-task profile:eval
-
-# Profile equity calculations
-task profile:equity
-
-# Profile showdown evaluation
-task profile:showdown
+# Profile hot paths (pokerbot workloads)
+task profile                                    # Default: showdown scenario
+task profile SCENARIO=init-board                # Board context initialization
+task profile SCENARIO=showdown                  # Showdown evaluation
+task profile SCENARIO=multiway                  # Multiway hand evaluation
 
 # Custom iteration count
-task profile:eval ITERATIONS=50000000
+task profile SCENARIO=showdown ITERATIONS=100000000
+```
 
-# Custom output directory
-task profile:eval PROFILE_DIR=/tmp/my_profile
+**Available scenarios:**
+- `init-board` - Board context initialization
+- `showdown` - Showdown evaluation (heads-up comparison)
+- `multiway` - Single hand evaluation (6-max equity calculation)
+
+**Output location:** `/tmp/profile_<scenario>/profile.json`
+
+**Example workflow:**
+```bash
+# Profile showdown hot path
+task profile SCENARIO=showdown
+
+# Analyze results
+uniprof analyze /tmp/profile_showdown/profile.json
+
+# Visualize in browser
+uniprof visualize /tmp/profile_showdown/profile.json
 ```
 
 ### Analyzing Results
 
 **Terminal analysis:**
 ```bash
-uniprof analyze /tmp/eval_profile/profile.json
+uniprof analyze /tmp/profile_showdown/profile.json
 ```
 
 Shows function call tree, time percentages, self vs total time, call counts.
 
 **Browser visualization:**
 ```bash
-uniprof visualize /tmp/eval_profile/profile.json
+uniprof visualize /tmp/profile_showdown/profile.json
 ```
 
 Interactive flamegraph with search, zoom, and export.
@@ -188,8 +201,8 @@ Interactive flamegraph with search, zoom, and export.
 
 2. **Profile to find bottlenecks:**
    ```bash
-   task profile:eval
-   uniprof visualize /tmp/eval_profile/profile.json
+   task profile SCENARIO=showdown
+   uniprof visualize /tmp/profile_showdown/profile.json
    ```
 
 3. **Identify targets:** Functions > 20% of total time
@@ -203,7 +216,7 @@ Interactive flamegraph with search, zoom, and export.
 
 6. **Re-profile to verify:**
    ```bash
-   task profile:eval
+   task profile SCENARIO=showdown
    ```
 
 7. **Repeat until target achieved**
@@ -212,14 +225,14 @@ Interactive flamegraph with search, zoom, and export.
 
 ```bash
 # Before
-task profile:eval PROFILE_DIR=/tmp/before
-cp /tmp/before/profile.json /tmp/before.json
+task profile SCENARIO=showdown
+cp /tmp/profile_showdown/profile.json /tmp/before.json
 
 # Make changes, rebuild
 
 # After
-task profile:eval PROFILE_DIR=/tmp/after
-cp /tmp/after/profile.json /tmp/after.json
+task profile SCENARIO=showdown
+cp /tmp/profile_showdown/profile.json /tmp/after.json
 
 # Compare
 uniprof visualize /tmp/before.json

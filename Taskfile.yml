@@ -63,111 +63,20 @@ tasks:
     cmds:
       - rm -rf zig-out zig-cache
 
-  profile:eval:
-    desc: Profile hand evaluation with uniprof (default 20M iterations, ReleaseFast)
+  profile:
+    desc: Profile hot paths with uniprof (use SCENARIO=<name> ITERATIONS=<n>)
     vars:
-      ITERATIONS: '{{.ITERATIONS | default "20000000"}}'
-      PROFILE_DIR: '{{.PROFILE_DIR | default "/tmp/eval_profile"}}'
-      PROFILE_JSON: '{{.PROFILE_DIR}}/profile.json'
-    sources:
-      - src/**/*.zig
-      - build.zig
-    generates:
-      - '{{.PROFILE_JSON}}'
-    cmds:
-      - zig build -Doptimize=ReleaseFast
-      - rm -rf "{{.PROFILE_DIR}}"
-      - mkdir -p "{{.PROFILE_DIR}}"
-      - command -v dsymutil >/dev/null 2>&1 && dsymutil zig-out/bin/poker-eval || true
-      - uniprof record --platform native -o "{{.PROFILE_JSON}}" -- zig-out/bin/poker-eval bench --iterations={{.ITERATIONS}}
-
-  profile:equity:
-    desc: Profile equity calculations with uniprof (ReleaseFast)
-    vars:
-      PROFILE_DIR: '{{.PROFILE_DIR | default "/tmp/equity_profile"}}'
-      PROFILE_JSON: '{{.PROFILE_DIR}}/profile.json'
-    sources:
-      - src/**/*.zig
-      - build.zig
-    generates:
-      - '{{.PROFILE_JSON}}'
-    cmds:
-      - zig build -Doptimize=ReleaseFast
-      - rm -rf "{{.PROFILE_DIR}}"
-      - mkdir -p "{{.PROFILE_DIR}}"
-      - command -v dsymutil >/dev/null 2>&1 && dsymutil zig-out/bin/poker-eval || true
-      - uniprof record --platform native -o "{{.PROFILE_JSON}}" -- zig-out/bin/poker-eval bench --equity
-
-  profile:showdown:
-    desc: Profile showdown evaluation with uniprof (ReleaseFast)
-    vars:
-      PROFILE_DIR: '{{.PROFILE_DIR | default "/tmp/showdown_profile"}}'
-      PROFILE_JSON: '{{.PROFILE_DIR}}/profile.json'
-    sources:
-      - src/**/*.zig
-      - build.zig
-    generates:
-      - '{{.PROFILE_JSON}}'
-    cmds:
-      - zig build -Doptimize=ReleaseFast
-      - rm -rf "{{.PROFILE_DIR}}"
-      - mkdir -p "{{.PROFILE_DIR}}"
-      - command -v dsymutil >/dev/null 2>&1 && dsymutil zig-out/bin/poker-eval || true
-      - uniprof record --platform native -o "{{.PROFILE_JSON}}" -- zig-out/bin/poker-eval bench --showdown
-
-  profile:aragorn:initBoard:
-    desc: Profile initBoardContext (aragorn hot path)
-    vars:
+      SCENARIO: '{{.SCENARIO | default "showdown"}}'
       ITERATIONS: '{{.ITERATIONS | default "50000000"}}'
-      PROFILE_DIR: '{{.PROFILE_DIR | default "/tmp/aragorn_initboard_profile"}}'
-      PROFILE_JSON: '{{.PROFILE_DIR}}/profile.json'
     sources:
       - src/**/*.zig
       - build.zig
-    generates:
-      - '{{.PROFILE_JSON}}'
     cmds:
       - zig build -Doptimize=ReleaseFast
-      - rm -rf "{{.PROFILE_DIR}}"
-      - mkdir -p "{{.PROFILE_DIR}}"
-      - command -v dsymutil >/dev/null 2>&1 && dsymutil zig-out/bin/profile_aragorn || true
-      - uniprof record --platform native -o "{{.PROFILE_JSON}}" -- zig-out/bin/profile_aragorn initBoard {{.ITERATIONS}}
-
-  profile:aragorn:showdown:
-    desc: Profile evaluateShowdownWithContext (aragorn hot path)
-    vars:
-      ITERATIONS: '{{.ITERATIONS | default "50000000"}}'
-      PROFILE_DIR: '{{.PROFILE_DIR | default "/tmp/aragorn_showdown_profile"}}'
-      PROFILE_JSON: '{{.PROFILE_DIR}}/profile.json'
-    sources:
-      - src/**/*.zig
-      - build.zig
-    generates:
-      - '{{.PROFILE_JSON}}'
-    cmds:
-      - zig build -Doptimize=ReleaseFast
-      - rm -rf "{{.PROFILE_DIR}}"
-      - mkdir -p "{{.PROFILE_DIR}}"
-      - command -v dsymutil >/dev/null 2>&1 && dsymutil zig-out/bin/profile_aragorn || true
-      - uniprof record --platform native -o "{{.PROFILE_JSON}}" -- zig-out/bin/profile_aragorn showdown {{.ITERATIONS}}
-
-  profile:aragorn:multiway:
-    desc: Profile evaluateHand (aragorn multiway equity path)
-    vars:
-      ITERATIONS: '{{.ITERATIONS | default "50000000"}}'
-      PROFILE_DIR: '{{.PROFILE_DIR | default "/tmp/aragorn_multiway_profile"}}'
-      PROFILE_JSON: '{{.PROFILE_DIR}}/profile.json'
-    sources:
-      - src/**/*.zig
-      - build.zig
-    generates:
-      - '{{.PROFILE_JSON}}'
-    cmds:
-      - zig build -Doptimize=ReleaseFast
-      - rm -rf "{{.PROFILE_DIR}}"
-      - mkdir -p "{{.PROFILE_DIR}}"
-      - command -v dsymutil >/dev/null 2>&1 && dsymutil zig-out/bin/profile_aragorn || true
-      - uniprof record --platform native -o "{{.PROFILE_JSON}}" -- zig-out/bin/profile_aragorn multiway {{.ITERATIONS}}
+      - rm -rf "/tmp/profile_{{.SCENARIO}}"
+      - mkdir -p "/tmp/profile_{{.SCENARIO}}"
+      - command -v dsymutil >/dev/null 2>&1 && dsymutil zig-out/bin/profiler || true
+      - uniprof record --platform native -o "/tmp/profile_{{.SCENARIO}}/profile.json" -- zig-out/bin/profiler --scenario={{.SCENARIO}} --iterations={{.ITERATIONS}}
 
   gen:all-hands:
     desc: Generate all 133M hand evaluations to binary file
