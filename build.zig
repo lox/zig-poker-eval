@@ -94,6 +94,7 @@ pub fn build(b: *std.Build) void {
     });
     profiler.root_module.addImport("card", card_mod);
     profiler.root_module.addImport("evaluator", evaluator_mod);
+    profiler.root_module.addImport("poker", poker_mod);
 
     const profiler_run = b.addRunArtifact(profiler);
     if (b.args) |args| {
