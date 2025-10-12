@@ -141,10 +141,12 @@ pub const CommonRanges = range_mod.CommonRanges;
 
 // === EQUITY CALCULATIONS ===
 
-/// Basic equity result with win/tie/loss statistics
+/// Unified equity result with win/tie/loss statistics
+/// Optional hand1_categories and hand2_categories fields populated by detailed variants
 pub const EquityResult = equity.EquityResult;
 
-/// Detailed equity result with hand category breakdown
+/// Backward-compatible alias for EquityResult (deprecated - use EquityResult directly)
+/// All result types are now unified into EquityResult with optional category tracking
 pub const DetailedEquityResult = equity.DetailedEquityResult;
 
 /// Head-to-head Monte Carlo equity calculation

@@ -363,28 +363,31 @@ pub const Range = struct {
                 total_ties += result.ties;
                 total_hero_losses += (result.total_simulations - result.wins - result.ties);
 
-                // Accumulate hand categories
-                hero_categories.high_card += result.hand1_categories.high_card;
-                hero_categories.pair += result.hand1_categories.pair;
-                hero_categories.two_pair += result.hand1_categories.two_pair;
-                hero_categories.three_of_a_kind += result.hand1_categories.three_of_a_kind;
-                hero_categories.straight += result.hand1_categories.straight;
-                hero_categories.flush += result.hand1_categories.flush;
-                hero_categories.full_house += result.hand1_categories.full_house;
-                hero_categories.four_of_a_kind += result.hand1_categories.four_of_a_kind;
-                hero_categories.straight_flush += result.hand1_categories.straight_flush;
-                hero_categories.total += result.hand1_categories.total;
+                // Accumulate hand categories (unwrap optional since exactDetailed always populates them)
+                const h1_cats = result.hand1_categories.?;
+                const h2_cats = result.hand2_categories.?;
 
-                villain_categories.high_card += result.hand2_categories.high_card;
-                villain_categories.pair += result.hand2_categories.pair;
-                villain_categories.two_pair += result.hand2_categories.two_pair;
-                villain_categories.three_of_a_kind += result.hand2_categories.three_of_a_kind;
-                villain_categories.straight += result.hand2_categories.straight;
-                villain_categories.flush += result.hand2_categories.flush;
-                villain_categories.full_house += result.hand2_categories.full_house;
-                villain_categories.four_of_a_kind += result.hand2_categories.four_of_a_kind;
-                villain_categories.straight_flush += result.hand2_categories.straight_flush;
-                villain_categories.total += result.hand2_categories.total;
+                hero_categories.high_card += h1_cats.high_card;
+                hero_categories.pair += h1_cats.pair;
+                hero_categories.two_pair += h1_cats.two_pair;
+                hero_categories.three_of_a_kind += h1_cats.three_of_a_kind;
+                hero_categories.straight += h1_cats.straight;
+                hero_categories.flush += h1_cats.flush;
+                hero_categories.full_house += h1_cats.full_house;
+                hero_categories.four_of_a_kind += h1_cats.four_of_a_kind;
+                hero_categories.straight_flush += h1_cats.straight_flush;
+                hero_categories.total += h1_cats.total;
+
+                villain_categories.high_card += h2_cats.high_card;
+                villain_categories.pair += h2_cats.pair;
+                villain_categories.two_pair += h2_cats.two_pair;
+                villain_categories.three_of_a_kind += h2_cats.three_of_a_kind;
+                villain_categories.straight += h2_cats.straight;
+                villain_categories.flush += h2_cats.flush;
+                villain_categories.full_house += h2_cats.full_house;
+                villain_categories.four_of_a_kind += h2_cats.four_of_a_kind;
+                villain_categories.straight_flush += h2_cats.straight_flush;
+                villain_categories.total += h2_cats.total;
             }
         }
 
