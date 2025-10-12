@@ -1,33 +1,660 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const poker = @import("poker");
 
-pub const BenchmarkOptions = struct {
-    iterations: u32 = 100000,
-    warmup: bool = true,
-    measure_overhead: bool = true,
-    multiple_runs: bool = true,
-    show_comparison: bool = true,
-    verbose: bool = false,
+// ============================================================================
+// Core Types
+// ============================================================================
+
+/// Statistics for a benchmark run
+pub const Statistics = struct {
+    mean: f64,
+    median: f64,
+    stddev: f64,
+    cv: f64, // coefficient of variation
+    min: f64,
+    max: f64,
+    runs: u32,
+
+    pub fn isStable(self: Statistics) bool {
+        return self.cv < 0.05; // CV < 5% = stable
+    }
 };
 
-pub const BenchmarkResult = struct {
-    batch_ns_per_hand: f64,
-    single_ns_per_hand: f64,
-    simd_speedup: f64,
-    hands_per_second: u64,
-    coefficient_variation: f64,
-    overhead_ns: f64,
-    total_hands: u64,
+/// A single benchmark within a suite
+pub const Benchmark = struct {
+    name: []const u8,
+    unit: []const u8,
+    warmup_runs: u32 = 3,
+    runs: u32 = 10,
+    threshold_pct: ?f64 = null, // Per-benchmark regression threshold (e.g., 0.02 = 2%)
+    run_fn: *const fn (allocator: std.mem.Allocator) anyerror!f64,
 };
 
-pub const ShowdownBenchmarkResult = struct {
-    iterations: u32,
-    context_ns_per_eval: f64,
-    batch_ns_per_eval: f64,
-    speedup: f64,
+/// A suite of related benchmarks
+pub const BenchmarkSuite = struct {
+    name: []const u8,
+    benchmarks: []const Benchmark,
 };
 
-// Helper functions for rigorous benchmarking
+/// Result of a single benchmark
+pub const BenchmarkMetric = struct {
+    unit: []const u8,
+    value: f64,
+    runs: u32,
+    cv: f64,
+};
+
+/// System information for cross-platform comparison
+pub const SystemInfo = struct {
+    hostname: []const u8,
+    cpu: []const u8,
+    arch: []const u8,
+    os: []const u8,
+    build_mode: []const u8,
+
+    pub fn deinit(self: *SystemInfo, allocator: std.mem.Allocator) void {
+        allocator.free(self.hostname);
+        allocator.free(self.cpu);
+        allocator.free(self.arch);
+        allocator.free(self.os);
+        allocator.free(self.build_mode);
+    }
+};
+
+/// Complete baseline result
+pub const Result = struct {
+    version: []const u8 = "1.0",
+    commit: ?[]const u8,
+    timestamp: []const u8,
+    system: SystemInfo,
+    suites: std.StringHashMap(std.StringHashMap(BenchmarkMetric)),
+
+    pub fn init(allocator: std.mem.Allocator) Result {
+        return .{
+            .commit = null,
+            .timestamp = &.{},
+            // SAFETY: system will be initialized by caller before use
+            .system = undefined,
+            .suites = std.StringHashMap(std.StringHashMap(BenchmarkMetric)).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Result, allocator: std.mem.Allocator) void {
+        if (self.commit) |c| allocator.free(c);
+        if (self.timestamp.len > 0) allocator.free(self.timestamp);
+        self.system.deinit(allocator);
+
+        var suite_iter = self.suites.iterator();
+        while (suite_iter.next()) |entry| {
+            var benchmark_map = entry.value_ptr.*;
+            benchmark_map.deinit();
+        }
+        self.suites.deinit();
+    }
+};
+
+// ============================================================================
+// Benchmark Runner
+// ============================================================================
+
+/// Runs a benchmark with warmup, multiple iterations, and statistics
+pub const BenchmarkRunner = struct {
+    allocator: std.mem.Allocator,
+    runs_override: ?u32 = null,
+
+    pub fn init(allocator: std.mem.Allocator, runs_override: ?u32) BenchmarkRunner {
+        return .{ .allocator = allocator, .runs_override = runs_override };
+    }
+
+    pub fn run(self: BenchmarkRunner, benchmark: Benchmark) !Statistics {
+        // Warmup runs
+        for (0..benchmark.warmup_runs) |_| {
+            _ = try benchmark.run_fn(self.allocator);
+        }
+
+        // Measurement runs (use override if provided)
+        const num_runs = self.runs_override orelse benchmark.runs;
+        const times = try self.allocator.alloc(f64, num_runs);
+        defer self.allocator.free(times);
+
+        for (times) |*time| {
+            time.* = try benchmark.run_fn(self.allocator);
+        }
+
+        // Calculate statistics
+        return try calculateStatistics(times);
+    }
+};
+
+fn calculateStatistics(times: []f64) !Statistics {
+    const n = times.len;
+    if (n == 0) return error.EmptySample;
+
+    // Sort in-place (we own the buffer)
+    std.mem.sort(f64, times, {}, comptime std.sort.asc(f64));
+
+    // Calculate IQM (Interquartile Mean): mean of middle 50% of samples
+    // This eliminates outliers from OS scheduler interrupts and measurement noise
+    const q1_idx = n / 4;
+    const q3_idx = (3 * n) / 4;
+    const iqm_samples = if (q3_idx > q1_idx) times[q1_idx..q3_idx] else times;
+
+    var iqm_sum: f64 = 0;
+    for (iqm_samples) |val| iqm_sum += val;
+    const mean = iqm_sum / @as(f64, @floatFromInt(iqm_samples.len));
+
+    // Calculate standard deviation from IQM samples only using sample variance (n-1)
+    var variance: f64 = 0;
+    for (iqm_samples) |time| {
+        const diff = time - mean;
+        variance += diff * diff;
+    }
+    const denom = if (iqm_samples.len > 1) iqm_samples.len - 1 else 1;
+    variance /= @as(f64, @floatFromInt(denom));
+    const stddev = @sqrt(variance);
+
+    // Coefficient of variation from IQM
+    const cv = if (mean != 0) stddev / mean else 0;
+
+    // Median from sorted array (average of middle two for even length)
+    const mid = n / 2;
+    const median = if (n % 2 == 0)
+        (times[mid - 1] + times[mid]) / 2.0
+    else
+        times[mid];
+
+    // Min/max from sorted array
+    const min_val = times[0];
+    const max_val = times[n - 1];
+
+    return .{
+        .mean = mean,
+        .median = median,
+        .stddev = stddev,
+        .cv = cv,
+        .min = min_val,
+        .max = max_val,
+        .runs = @intCast(n),
+    };
+}
+
+// ============================================================================
+// System Info & Git Utilities
+// ============================================================================
+
+fn getSystemInfo(allocator: std.mem.Allocator) !SystemInfo {
+    const hostname = try getHostname(allocator);
+    const cpu = try getCpuModel(allocator);
+    const arch = try allocator.dupe(u8, @tagName(builtin.cpu.arch));
+    const os = try allocator.dupe(u8, @tagName(builtin.os.tag));
+    const build_mode = try allocator.dupe(u8, @tagName(builtin.mode));
+
+    return .{
+        .hostname = hostname,
+        .cpu = cpu,
+        .arch = arch,
+        .os = os,
+        .build_mode = build_mode,
+    };
+}
+
+fn getHostname(allocator: std.mem.Allocator) ![]const u8 {
+    if (builtin.os.tag == .windows) {
+        const env_val = std.process.getEnvVarOwned(allocator, "COMPUTERNAME") catch {
+            return allocator.dupe(u8, "unknown");
+        };
+        return env_val;
+    }
+
+    var buf: [std.posix.HOST_NAME_MAX]u8 = undefined;
+    const hostname = std.posix.gethostname(&buf) catch {
+        return allocator.dupe(u8, "unknown");
+    };
+    return allocator.dupe(u8, hostname);
+}
+
+fn getCpuModel(allocator: std.mem.Allocator) ![]const u8 {
+    switch (builtin.os.tag) {
+        .macos => {
+            const result = std.process.Child.run(.{
+                .allocator = allocator,
+                .argv = &[_][]const u8{ "sysctl", "-n", "machdep.cpu.brand_string" },
+            }) catch {
+                return allocator.dupe(u8, "unknown");
+            };
+            defer allocator.free(result.stdout);
+            defer allocator.free(result.stderr);
+
+            if (result.term == .Exited and result.term.Exited == 0) {
+                const trimmed = std.mem.trim(u8, result.stdout, &std.ascii.whitespace);
+                return try allocator.dupe(u8, trimmed);
+            }
+            return allocator.dupe(u8, "unknown");
+        },
+        .linux => {
+            const file = std.fs.cwd().openFile("/proc/cpuinfo", .{}) catch {
+                return allocator.dupe(u8, "unknown");
+            };
+            defer file.close();
+
+            const content = file.readToEndAlloc(allocator, 1 << 20) catch {
+                return allocator.dupe(u8, "unknown");
+            };
+            defer allocator.free(content);
+
+            var lines = std.mem.splitSequence(u8, content, "\n");
+            while (lines.next()) |line| {
+                if (std.mem.startsWith(u8, line, "model name")) {
+                    if (std.mem.indexOf(u8, line, ":")) |colon_pos| {
+                        const model = std.mem.trim(u8, line[colon_pos + 1 ..], &std.ascii.whitespace);
+                        return try allocator.dupe(u8, model);
+                    }
+                }
+            }
+            return allocator.dupe(u8, "unknown");
+        },
+        else => return allocator.dupe(u8, "unknown"),
+    }
+}
+
+fn getCurrentCommit(allocator: std.mem.Allocator) ?[]const u8 {
+    const result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{ "git", "describe", "--tags", "--dirty", "--always", "--abbrev=12", "--long" },
+    }) catch return null;
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+
+    if (result.term == .Exited and result.term.Exited == 0) {
+        const trimmed = std.mem.trim(u8, result.stdout, &std.ascii.whitespace);
+        return allocator.dupe(u8, trimmed) catch null;
+    }
+
+    return null;
+}
+
+fn getTimestamp(allocator: std.mem.Allocator) ![]const u8 {
+    const timestamp = std.time.timestamp();
+    const seconds: u64 = @intCast(timestamp);
+
+    // Format as ISO 8601: YYYY-MM-DDTHH:MM:SSZ
+    const epoch_seconds = std.time.epoch.EpochSeconds{ .secs = seconds };
+    const epoch_day = epoch_seconds.getEpochDay();
+    const day_seconds = epoch_seconds.getDaySeconds();
+    const year_day = epoch_day.calculateYearDay();
+    const month_day = year_day.calculateMonthDay();
+
+    const hours = day_seconds.getHoursIntoDay();
+    const minutes = day_seconds.getMinutesIntoHour();
+    const secs = day_seconds.getSecondsIntoMinute();
+
+    return std.fmt.allocPrint(allocator, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}Z", .{
+        year_day.year,
+        month_day.month.numeric(),
+        month_day.day_index + 1,
+        hours,
+        minutes,
+        secs,
+    });
+}
+
+/// Get the baseline file path for the current build mode
+pub fn getBaselinePath(allocator: std.mem.Allocator) ![]const u8 {
+    const mode_lower = switch (builtin.mode) {
+        .Debug => "debug",
+        .ReleaseSafe => "release-safe",
+        .ReleaseFast => "release-fast",
+        .ReleaseSmall => "release-small",
+    };
+    return std.fmt.allocPrint(allocator, "benchmark-baseline-{s}.json", .{mode_lower});
+}
+
+// ============================================================================
+// Baseline Save/Load
+// ============================================================================
+
+pub fn saveBaseline(result: Result, path: []const u8) !void {
+    // Build JSON string
+    const allocator = result.suites.allocator;
+    var string = try std.ArrayList(u8).initCapacity(allocator, 4096);
+    defer string.deinit(allocator);
+
+    const writer = string.writer(allocator);
+
+    try string.appendSlice(allocator, "{\n");
+    try std.fmt.format(writer, "  \"version\": \"{s}\",\n", .{result.version});
+
+    if (result.commit) |commit| {
+        try std.fmt.format(writer, "  \"commit\": \"{s}\",\n", .{commit});
+    } else {
+        try string.appendSlice(allocator, "  \"commit\": null,\n");
+    }
+
+    try std.fmt.format(writer, "  \"timestamp\": \"{s}\",\n", .{result.timestamp});
+
+    try string.appendSlice(allocator, "  \"system\": {\n");
+    try std.fmt.format(writer, "    \"hostname\": \"{s}\",\n", .{result.system.hostname});
+    try std.fmt.format(writer, "    \"cpu\": \"{s}\",\n", .{result.system.cpu});
+    try std.fmt.format(writer, "    \"arch\": \"{s}\",\n", .{result.system.arch});
+    try std.fmt.format(writer, "    \"os\": \"{s}\",\n", .{result.system.os});
+    try std.fmt.format(writer, "    \"build_mode\": \"{s}\"\n", .{result.system.build_mode});
+    try string.appendSlice(allocator, "  },\n");
+
+    try string.appendSlice(allocator, "  \"suites\": {\n");
+
+    var suite_iter = result.suites.iterator();
+    var first_suite = true;
+    while (suite_iter.next()) |suite_entry| {
+        if (!first_suite) try string.appendSlice(allocator, ",\n");
+        first_suite = false;
+
+        try std.fmt.format(writer, "    \"{s}\": {{\n", .{suite_entry.key_ptr.*});
+
+        var bench_iter = suite_entry.value_ptr.iterator();
+        var first_bench = true;
+        while (bench_iter.next()) |bench_entry| {
+            if (!first_bench) try string.appendSlice(allocator, ",\n");
+            first_bench = false;
+
+            const metric = bench_entry.value_ptr.*;
+            try std.fmt.format(writer, "      \"{s}\": {{\n", .{bench_entry.key_ptr.*});
+            try std.fmt.format(writer, "        \"unit\": \"{s}\",\n", .{metric.unit});
+            try std.fmt.format(writer, "        \"value\": {d},\n", .{metric.value});
+            try std.fmt.format(writer, "        \"runs\": {d},\n", .{metric.runs});
+            try std.fmt.format(writer, "        \"cv\": {d}\n", .{metric.cv});
+            try string.appendSlice(allocator, "      }");
+        }
+        try string.appendSlice(allocator, "\n    }");
+    }
+
+    try string.appendSlice(allocator, "\n  }\n}\n");
+
+    // Write to file
+    const file = try std.fs.cwd().createFile(path, .{});
+    defer file.close();
+    try file.writeAll(string.items);
+}
+
+pub fn loadBaseline(path: []const u8, allocator: std.mem.Allocator) !Result {
+    const file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+
+    const contents = try file.readToEndAlloc(allocator, 10 * 1024 * 1024); // 10MB max
+    defer allocator.free(contents);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, contents, .{});
+    defer parsed.deinit();
+
+    const root = parsed.value.object;
+
+    var result = Result.init(allocator);
+
+    // Parse metadata
+    if (root.get("commit")) |commit_val| {
+        if (commit_val != .null) {
+            result.commit = try allocator.dupe(u8, commit_val.string);
+        }
+    }
+
+    result.timestamp = try allocator.dupe(u8, root.get("timestamp").?.string);
+
+    // Parse system info
+    const system_obj = root.get("system").?.object;
+    result.system = .{
+        .hostname = try allocator.dupe(u8, system_obj.get("hostname").?.string),
+        .cpu = try allocator.dupe(u8, system_obj.get("cpu").?.string),
+        .arch = try allocator.dupe(u8, system_obj.get("arch").?.string),
+        .os = try allocator.dupe(u8, system_obj.get("os").?.string),
+        .build_mode = try allocator.dupe(u8, system_obj.get("build_mode").?.string),
+    };
+
+    // Parse suites
+    const suites_obj = root.get("suites").?.object;
+    var suite_iter = suites_obj.iterator();
+    while (suite_iter.next()) |suite_entry| {
+        var benchmark_map = std.StringHashMap(BenchmarkMetric).init(allocator);
+
+        const benchmarks_obj = suite_entry.value_ptr.object;
+        var bench_iter = benchmarks_obj.iterator();
+        while (bench_iter.next()) |bench_entry| {
+            const metric_obj = bench_entry.value_ptr.object;
+            const metric = BenchmarkMetric{
+                .unit = try allocator.dupe(u8, metric_obj.get("unit").?.string),
+                .value = metric_obj.get("value").?.float,
+                .runs = @intCast(metric_obj.get("runs").?.integer),
+                .cv = metric_obj.get("cv").?.float,
+            };
+
+            try benchmark_map.put(try allocator.dupe(u8, bench_entry.key_ptr.*), metric);
+        }
+
+        try result.suites.put(try allocator.dupe(u8, suite_entry.key_ptr.*), benchmark_map);
+    }
+
+    return result;
+}
+
+// ============================================================================
+// Comparison Engine
+// ============================================================================
+
+pub const ComparisonResult = struct {
+    passed: bool,
+    regressions: std.ArrayList(Regression),
+    improvements: std.ArrayList(Improvement),
+    missing_benchmarks: std.ArrayList(MissingBenchmark),
+    allocator: std.mem.Allocator,
+
+    pub fn deinit(self: *ComparisonResult) void {
+        self.regressions.deinit(self.allocator);
+        self.improvements.deinit(self.allocator);
+        self.missing_benchmarks.deinit(self.allocator);
+    }
+};
+
+pub const Regression = struct {
+    suite: []const u8,
+    benchmark: []const u8,
+    baseline_value: f64,
+    current_value: f64,
+    change_pct: f64,
+    unit: []const u8,
+};
+
+pub const Improvement = struct {
+    suite: []const u8,
+    benchmark: []const u8,
+    baseline_value: f64,
+    current_value: f64,
+    change_pct: f64,
+    unit: []const u8,
+};
+
+pub const MissingBenchmark = struct {
+    suite: []const u8,
+    benchmark: []const u8,
+};
+
+pub fn compareResults(baseline: Result, current: Result, default_threshold_pct: f64, allocator: std.mem.Allocator) !ComparisonResult {
+    var result = ComparisonResult{
+        .passed = true,
+        .regressions = try std.ArrayList(Regression).initCapacity(allocator, 0),
+        .improvements = try std.ArrayList(Improvement).initCapacity(allocator, 0),
+        .missing_benchmarks = try std.ArrayList(MissingBenchmark).initCapacity(allocator, 0),
+        .allocator = allocator,
+    };
+
+    // Check for build mode mismatch (hard error)
+    if (!std.mem.eql(u8, baseline.system.build_mode, current.system.build_mode)) {
+        std.debug.print("❌ ERROR: Build mode mismatch!\n", .{});
+        std.debug.print("   Baseline: {s}\n", .{baseline.system.build_mode});
+        std.debug.print("   Current:  {s}\n", .{current.system.build_mode});
+        std.debug.print("\n", .{});
+        std.debug.print("   Cannot compare benchmarks across different build modes.\n", .{});
+        std.debug.print("   Each build mode has its own baseline file.\n", .{});
+        return error.BuildModeMismatch;
+    }
+
+    // Warn if system mismatch
+    if (!std.mem.eql(u8, baseline.system.hostname, current.system.hostname) or
+        !std.mem.eql(u8, baseline.system.cpu, current.system.cpu))
+    {
+        std.debug.print("⚠️  Warning: Baseline from different system\n", .{});
+        std.debug.print("   Baseline: {s} ({s})\n", .{ baseline.system.hostname, baseline.system.cpu });
+        std.debug.print("   Current:  {s} ({s})\n", .{ current.system.hostname, current.system.cpu });
+        std.debug.print("\n", .{});
+    }
+
+    // Compare each suite and benchmark
+    var suite_iter = current.suites.iterator();
+    while (suite_iter.next()) |suite_entry| {
+        const suite_name = suite_entry.key_ptr.*;
+        const current_benchmarks = suite_entry.value_ptr.*;
+
+        // Check if baseline has this suite
+        const baseline_benchmarks = baseline.suites.get(suite_name) orelse continue;
+
+        var bench_iter = current_benchmarks.iterator();
+        while (bench_iter.next()) |bench_entry| {
+            const bench_name = bench_entry.key_ptr.*;
+            const current_metric = bench_entry.value_ptr.*;
+
+            // Check if baseline has this benchmark
+            const baseline_metric = baseline_benchmarks.get(bench_name) orelse continue;
+
+            // Look up per-benchmark threshold from suite definitions
+            var effective_threshold = default_threshold_pct;
+            for (ALL_SUITES) |suite| {
+                if (std.mem.eql(u8, suite.name, suite_name)) {
+                    for (suite.benchmarks) |benchmark| {
+                        if (std.mem.eql(u8, benchmark.name, bench_name)) {
+                            effective_threshold = benchmark.threshold_pct orelse default_threshold_pct;
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+
+            // Apply stability guard: if CV >= 5%, use max(threshold, 2*CV) to avoid false positives
+            if (current_metric.cv >= 0.05) {
+                effective_threshold = @max(effective_threshold, 2.0 * current_metric.cv);
+            }
+
+            // Calculate percentage change (as decimal, not percentage)
+            const change_decimal = (current_metric.value - baseline_metric.value) / baseline_metric.value;
+
+            // Regression is positive change (slower/worse)
+            if (change_decimal > effective_threshold) {
+                result.passed = false;
+                try result.regressions.append(allocator, .{
+                    .suite = suite_name,
+                    .benchmark = bench_name,
+                    .baseline_value = baseline_metric.value,
+                    .current_value = current_metric.value,
+                    .change_pct = change_decimal * 100.0,
+                    .unit = current_metric.unit,
+                });
+            } else if (change_decimal < -effective_threshold) {
+                // Improvement is negative change (faster/better)
+                try result.improvements.append(allocator, .{
+                    .suite = suite_name,
+                    .benchmark = bench_name,
+                    .baseline_value = baseline_metric.value,
+                    .current_value = current_metric.value,
+                    .change_pct = change_decimal * 100.0,
+                    .unit = current_metric.unit,
+                });
+            }
+        }
+    }
+
+    // Check for benchmarks in baseline that are missing from current results
+    var baseline_suite_iter = baseline.suites.iterator();
+    while (baseline_suite_iter.next()) |baseline_suite_entry| {
+        const baseline_suite_name = baseline_suite_entry.key_ptr.*;
+        const baseline_benchmarks = baseline_suite_entry.value_ptr.*;
+
+        // Check if current has this suite
+        const current_benchmarks = current.suites.get(baseline_suite_name);
+        if (current_benchmarks == null) {
+            // Entire suite is missing - add all benchmarks from that suite
+            var baseline_bench_iter = baseline_benchmarks.iterator();
+            while (baseline_bench_iter.next()) |baseline_bench_entry| {
+                try result.missing_benchmarks.append(allocator, .{
+                    .suite = baseline_suite_name,
+                    .benchmark = baseline_bench_entry.key_ptr.*,
+                });
+            }
+            continue;
+        }
+
+        // Suite exists, check individual benchmarks
+        var baseline_bench_iter = baseline_benchmarks.iterator();
+        while (baseline_bench_iter.next()) |baseline_bench_entry| {
+            const baseline_bench_name = baseline_bench_entry.key_ptr.*;
+
+            if (current_benchmarks.?.get(baseline_bench_name) == null) {
+                try result.missing_benchmarks.append(allocator, .{
+                    .suite = baseline_suite_name,
+                    .benchmark = baseline_bench_name,
+                });
+            }
+        }
+    }
+
+    return result;
+}
+
+pub fn printComparisonResult(comparison: ComparisonResult) void {
+    std.debug.print("📊 Comparison vs Baseline\n", .{});
+    std.debug.print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
+
+    if (comparison.improvements.items.len > 0) {
+        std.debug.print("\n✅ Improvements:\n", .{});
+        for (comparison.improvements.items) |imp| {
+            std.debug.print("  {s}/{s}: {d:.2} → {d:.2} {s} ({d:.1}%)\n", .{
+                imp.suite,
+                imp.benchmark,
+                imp.baseline_value,
+                imp.current_value,
+                imp.unit,
+                imp.change_pct,
+            });
+        }
+    }
+
+    if (comparison.regressions.items.len > 0) {
+        std.debug.print("\n❌ Regressions:\n", .{});
+        for (comparison.regressions.items) |reg| {
+            std.debug.print("  {s}/{s}: {d:.2} → {d:.2} {s} (+{d:.1}%)\n", .{
+                reg.suite,
+                reg.benchmark,
+                reg.baseline_value,
+                reg.current_value,
+                reg.unit,
+                reg.change_pct,
+            });
+        }
+    }
+
+    if (comparison.regressions.items.len == 0 and comparison.improvements.items.len == 0) {
+        std.debug.print("\n✓ No significant changes\n", .{});
+    }
+
+    std.debug.print("\n", .{});
+    if (comparison.passed) {
+        std.debug.print("✅ PASSED\n", .{});
+    } else {
+        std.debug.print("❌ FAILED - {d} regression(s) detected\n", .{comparison.regressions.items.len});
+    }
+}
+
+// ============================================================================
+// Benchmark Helpers
+// ============================================================================
+
 const BATCH_SIZE = 32;
 
 const ShowdownCase = struct {
@@ -36,124 +663,19 @@ const ShowdownCase = struct {
     villain_hole: u64,
 };
 
-// Helper to create batches from hand arrays
 fn createBatch(hands: []const u64, start_idx: usize) @Vector(BATCH_SIZE, u64) {
     var batch_hands: [BATCH_SIZE]u64 = undefined;
     for (0..BATCH_SIZE) |i| {
         batch_hands[i] = hands[(start_idx + i) % hands.len];
     }
-    return @as(@Vector(BATCH_SIZE, u64), batch_hands);
-}
-
-fn warmupCaches(test_hands: []const u64) void {
-    // Touch lookup tables by performing lookups - access through public evaluator API
-    var prng = std.Random.DefaultPrng.init(123);
-    var rng = prng.random();
-
-    // Warm up by evaluating some random hands
-    for (0..1024) |_| {
-        const hand = poker.generateRandomHand(&rng);
-        std.mem.doNotOptimizeAway(poker.evaluateHand(hand));
-    }
-
-    // Touch first portion of hands by evaluating them in batches
-    const warmup_hands = @min(65536, test_hands.len); // 64K hands max
-    var i: usize = 0;
-    while (i + BATCH_SIZE <= warmup_hands) {
-        const batch = createBatch(test_hands, i);
-        _ = poker.evaluateBatch(BATCH_SIZE, batch);
-        i += BATCH_SIZE;
-    }
-}
-
-fn clearCaches(use_purge: bool) void {
-    if (!use_purge) return;
-
-    var child = std.process.Child.init(&[_][]const u8{ "sudo", "purge" }, std.heap.page_allocator);
-    _ = child.spawnAndWait() catch return;
-}
-
-fn calculateCV(times: []const f64) f64 {
-    var sum: f64 = 0;
-    for (times) |time| {
-        sum += time;
-    }
-    const mean = sum / @as(f64, @floatFromInt(times.len));
-
-    var variance: f64 = 0;
-    for (times) |time| {
-        const diff = time - mean;
-        variance += diff * diff;
-    }
-    variance /= @as(f64, @floatFromInt(times.len));
-
-    const std_dev = @sqrt(variance);
-    return std_dev / mean;
-}
-
-fn runSingleBenchmark(iterations: u32, test_hands: []const u64) f64 {
-    var checksum: u64 = 0;
-    const start = std.time.nanoTimestamp();
-    const total_hands = iterations * BATCH_SIZE;
-
-    var hand_idx: usize = 0;
-    for (0..iterations) |_| {
-        // Create batch from consecutive hands
-        const batch = createBatch(test_hands, hand_idx);
-
-        const results = poker.evaluateBatch(BATCH_SIZE, batch);
-        for (0..BATCH_SIZE) |j| {
-            checksum +%= results[j];
-        }
-        hand_idx += BATCH_SIZE;
-    }
-
-    const end = std.time.nanoTimestamp();
-    std.mem.doNotOptimizeAway(checksum);
-
-    const total_ns = @as(f64, @floatFromInt(end - start));
-    return total_ns / @as(f64, @floatFromInt(total_hands));
-}
-
-fn benchmarkDummyEvaluator(iterations: u32, test_hands: []const u64) f64 {
-    var checksum: u64 = 0;
-    const start = std.time.nanoTimestamp();
-    const total_hands = iterations * BATCH_SIZE;
-
-    var hand_idx: usize = 0;
-    for (0..iterations) |_| {
-        for (0..BATCH_SIZE) |j| {
-            checksum +%= @popCount(test_hands[(hand_idx + j) % test_hands.len]); // Trivial operation
-        }
-        hand_idx += BATCH_SIZE;
-    }
-
-    const end = std.time.nanoTimestamp();
-    std.mem.doNotOptimizeAway(checksum);
-
-    const total_ns = @as(f64, @floatFromInt(end - start));
-    return total_ns / @as(f64, @floatFromInt(total_hands));
-}
-
-fn benchmarkSingleHand(test_hands: []const u64, count: u32) f64 {
-    var checksum: u64 = 0;
-    const start = std.time.nanoTimestamp();
-
-    for (0..count) |i| {
-        checksum +%= poker.evaluateHand(test_hands[i % test_hands.len]);
-    }
-
-    const end = std.time.nanoTimestamp();
-    std.mem.doNotOptimizeAway(checksum);
-
-    const total_ns = @as(f64, @floatFromInt(end - start));
-    return total_ns / @as(f64, @floatFromInt(count));
+    const batch: @Vector(BATCH_SIZE, u64) = batch_hands;
+    return batch;
 }
 
 fn drawUniqueCard(rng: std.Random, used: *u64) u64 {
     while (true) {
         const idx = rng.uintLessThan(u6, 52);
-        const card_bit = @as(u64, 1) << @intCast(idx);
+        const card_bit: u64 = @as(u64, 1) << @intCast(idx);
         if ((used.* & card_bit) == 0) {
             used.* |= card_bit;
             return card_bit;
@@ -206,20 +728,21 @@ fn generateShowdownCases(allocator: std.mem.Allocator, iterations: u32, rng: std
 
 fn timeScalarShowdown(cases: []const ShowdownCase) f64 {
     var checksum: i32 = 0;
-    const start = std.time.nanoTimestamp();
+    var timer = std.time.Timer.start() catch unreachable;
     for (cases) |case| {
         checksum += poker.evaluateShowdownWithContext(&case.ctx, case.hero_hole, case.villain_hole);
     }
-    const end = std.time.nanoTimestamp();
+    const total_ns: f64 = @floatFromInt(timer.read());
     std.mem.doNotOptimizeAway(checksum);
-    const total_ns = @as(f64, @floatFromInt(end - start));
-    return total_ns / @as(f64, @floatFromInt(cases.len));
+    const cases_len: f64 = @floatFromInt(cases.len);
+    return total_ns / cases_len;
 }
 
 fn timeBatchedShowdown(cases: []const ShowdownCase) f64 {
     var checksum: i32 = 0;
-    const start = std.time.nanoTimestamp();
+    var timer = std.time.Timer.start() catch unreachable;
     var index: usize = 0;
+    // SAFETY: buffers initialized before use in loop below
     var results_buffer: [BATCH_SIZE]i8 = undefined;
     var hero_buffer: [BATCH_SIZE]poker.Hand = undefined;
     var villain_buffer: [BATCH_SIZE]poker.Hand = undefined;
@@ -244,18 +767,23 @@ fn timeBatchedShowdown(cases: []const ShowdownCase) f64 {
 
         index += chunk;
     }
-    const end = std.time.nanoTimestamp();
+    const total_ns: f64 = @floatFromInt(timer.read());
     std.mem.doNotOptimizeAway(checksum);
-    const total_ns = @as(f64, @floatFromInt(end - start));
-    return total_ns / @as(f64, @floatFromInt(cases.len));
+    const cases_len: f64 = @floatFromInt(cases.len);
+    return total_ns / cases_len;
 }
 
-pub fn runBenchmark(options: BenchmarkOptions, allocator: std.mem.Allocator) !BenchmarkResult {
+// ============================================================================
+// Benchmark Suite Definitions
+// ============================================================================
+
+fn benchEvalBatch(allocator: std.mem.Allocator) !f64 {
+    const iterations = 100000;
+    const num_test_hands = 100000;
+
     // Generate test hands
     var prng = std.Random.DefaultPrng.init(42);
     var rng = prng.random();
-
-    const num_test_hands = 1_600_000; // Large pool for cache effects
     const test_hands = try allocator.alloc(u64, num_test_hands);
     defer allocator.free(test_hands);
 
@@ -263,594 +791,337 @@ pub fn runBenchmark(options: BenchmarkOptions, allocator: std.mem.Allocator) !Be
         hand.* = poker.generateRandomHand(&rng);
     }
 
-    var result = BenchmarkResult{
-        .batch_ns_per_hand = 0,
-        .single_ns_per_hand = 0,
-        .simd_speedup = 0,
-        .hands_per_second = 0,
-        .coefficient_variation = 0,
-        .overhead_ns = 0,
-        .total_hands = 0,
-    };
+    // Benchmark
+    var checksum: u64 = 0;
+    var hand_idx: usize = 0;
+    var timer = try std.time.Timer.start();
 
-    // Cache warmup
-    if (options.warmup) {
-        warmupCaches(test_hands);
-    }
-
-    // Measure overhead
-    if (options.measure_overhead) {
-        result.overhead_ns = benchmarkDummyEvaluator(options.iterations / 10, test_hands);
-    }
-
-    // Batch benchmark
-    if (options.multiple_runs) {
-        // Multiple runs for statistical analysis
-        const NUM_RUNS = 5;
-        const use_purge = false; // Set to true if running with sudo
-        var times: [NUM_RUNS]f64 = undefined;
-
-        for (0..NUM_RUNS) |run| {
-            if (run > 0) {
-                clearCaches(use_purge);
-                if (use_purge) {
-                    std.time.sleep(3_000_000_000); // 3 seconds
-                }
-            }
-
-            times[run] = runSingleBenchmark(options.iterations, test_hands);
-        }
-
-        // Calculate statistics
-        std.mem.sort(f64, &times, {}, std.sort.asc(f64));
-        const median = times[NUM_RUNS / 2];
-        result.batch_ns_per_hand = median - result.overhead_ns;
-        result.coefficient_variation = calculateCV(&times);
-    } else {
-        // Single run
-        const raw_time = runSingleBenchmark(options.iterations, test_hands);
-        result.batch_ns_per_hand = raw_time - result.overhead_ns;
-        result.coefficient_variation = 0.0;
-    }
-
-    // Single-hand benchmark for comparison
-    if (options.show_comparison) {
-        result.single_ns_per_hand = benchmarkSingleHand(test_hands, 10000);
-        result.simd_speedup = result.single_ns_per_hand / result.batch_ns_per_hand;
-    }
-
-    result.hands_per_second = @as(u64, @intFromFloat(1_000_000_000.0 / result.batch_ns_per_hand));
-    result.total_hands = options.iterations * BATCH_SIZE;
-
-    return result;
-}
-
-pub fn validateCorrectness(test_hands: []const u64) !bool {
-    var matches: u32 = 0;
-    var total: u32 = 0;
-
-    // Validate first 16K hands in batches
-    const validation_hands = @min(16000, test_hands.len);
-    var i: usize = 0;
-    while (i + BATCH_SIZE <= validation_hands) {
-        const batch = createBatch(test_hands, i);
-
-        const fast_results = poker.evaluateBatch(BATCH_SIZE, batch);
-
+    for (0..iterations) |_| {
+        const batch = createBatch(test_hands, hand_idx);
+        const results = poker.evaluateBatch(BATCH_SIZE, batch);
         for (0..BATCH_SIZE) |j| {
-            const slow_result = poker.slow.evaluateHand(test_hands[i + j]);
-            const fast_result = fast_results[j];
-
-            if (slow_result == fast_result) {
-                matches += 1;
-            }
-            total += 1;
+            checksum +%= results[j];
         }
-        i += BATCH_SIZE;
+        hand_idx = (hand_idx + BATCH_SIZE) % num_test_hands;
     }
 
-    const accuracy = @as(f64, @floatFromInt(matches)) / @as(f64, @floatFromInt(total));
+    const total_ns: f64 = @floatFromInt(timer.read());
+    std.mem.doNotOptimizeAway(checksum);
 
-    // Require 100% accuracy
-    if (accuracy < 1.0) {
-        return error.AccuracyTooLow;
-    }
-
-    return true;
+    const total_hands: f64 = @floatFromInt(iterations * BATCH_SIZE);
+    return total_ns / total_hands;
 }
 
-pub fn benchmarkShowdown(allocator: std.mem.Allocator, iterations: u32) !ShowdownBenchmarkResult {
+fn benchShowdownContext(allocator: std.mem.Allocator) !f64 {
+    const iterations = 100000;
+    const repeats = 10; // Repeat measurement 10x for stability
+
     var prng = std.Random.DefaultPrng.init(99);
     const rng = prng.random();
 
     const cases = try generateShowdownCases(allocator, iterations, rng);
     defer allocator.free(cases);
 
-    // Warm cache by running each path once before timing
-    std.mem.doNotOptimizeAway(timeScalarShowdown(cases));
-    std.mem.doNotOptimizeAway(timeBatchedShowdown(cases));
-
-    const context_ns = timeScalarShowdown(cases);
-    const batch_ns = timeBatchedShowdown(cases);
-
-    return ShowdownBenchmarkResult{
-        .iterations = iterations,
-        .context_ns_per_eval = context_ns,
-        .batch_ns_per_eval = batch_ns,
-        .speedup = context_ns / batch_ns,
-    };
-}
-
-// Test the evaluator with a specific test batch
-pub fn testEvaluator() !void {
-    var prng = std.Random.DefaultPrng.init(42);
-    var rng = prng.random();
-
-    // Generate a batch using the comptime-sized function
-    const batch = poker.generateRandomHandBatch(BATCH_SIZE, &rng);
-
-    // Evaluate batch
-    const batch_results = poker.evaluateBatch(BATCH_SIZE, batch);
-
-    // Validate against single-hand evaluation
-    var matches: u32 = 0;
-
-    for (0..BATCH_SIZE) |i| {
-        const hand = batch[i];
-        const batch_result = batch_results[i];
-        const single_result = poker.slow.evaluateHand(hand);
-
-        if (batch_result == single_result) {
-            matches += 1;
-        }
-    }
-
-    if (matches != BATCH_SIZE) {
-        return error.EvaluatorMismatch;
-    }
-}
-
-// Test a specific hand for debugging
-pub fn testSingleHand(hand: u64) struct { slow: u16, fast: u16, match: bool } {
-    const slow_result = poker.slow.evaluateHand(hand);
-    const fast_result = poker.evaluateHand(hand);
-
-    return .{
-        .slow = slow_result,
-        .fast = fast_result,
-        .match = slow_result == fast_result,
-    };
-}
-
-// Equity benchmark for measuring Monte Carlo performance
-pub fn benchmarkEquity(allocator: std.mem.Allocator, options: BenchmarkOptions) !void {
-    var stdout_buffer: [4096]u8 = undefined;
-    var stdout_writer_wrapper = std.fs.File.stdout().writer(&stdout_buffer);
-    const stdout = &stdout_writer_wrapper.interface;
-    defer stdout.flush() catch {};
-
-    // Generate test hands for equity calculations
-    var prng = std.Random.DefaultPrng.init(42);
-    var rng = prng.random();
-
-    // Test different scenarios
-    const scenarios = [_]struct {
-        name: []const u8,
-        iterations: u32,
-    }{
-        .{ .name = "Preflop (no board)", .iterations = 10000 },
-        .{ .name = "Flop (3 cards)", .iterations = 5000 },
-        .{ .name = "Turn (4 cards)", .iterations = 2000 },
-        .{ .name = "River (5 cards)", .iterations = 1000 },
-    };
-
-    try stdout.print("\nEquity Calculation Performance\n", .{});
-    try stdout.print("==================================================================\n", .{});
-    try stdout.print("Scenario           | Simulations | Time (ms) | Sims/sec (millions)\n", .{});
-    try stdout.print("-------------------|-------------|-----------|--------------------\n", .{});
-
-    for (scenarios) |scenario| {
-        // Generate random hole cards for both players
-        var hero_cards: u64 = 0;
-        var villain_cards: u64 = 0;
-        var board_cards: [5]u64 = undefined;
-        var board_size: usize = 0;
-
-        // Generate non-conflicting cards
-        var used_cards: u64 = 0;
-
-        // Hero cards (2 cards)
-        for (0..2) |_| {
-            var new_card: u64 = undefined;
-            while (true) {
-                new_card = @as(u64, 1) << @intCast(rng.intRangeAtMost(u6, 0, 51));
-                if ((new_card & used_cards) == 0) break;
-            }
-            hero_cards |= new_card;
-            used_cards |= new_card;
-        }
-
-        // Villain cards (2 cards)
-        for (0..2) |_| {
-            var new_card: u64 = undefined;
-            while (true) {
-                new_card = @as(u64, 1) << @intCast(rng.intRangeAtMost(u6, 0, 51));
-                if ((new_card & used_cards) == 0) break;
-            }
-            villain_cards |= new_card;
-            used_cards |= new_card;
-        }
-
-        // Board cards based on scenario
-        if (std.mem.eql(u8, scenario.name, "Flop (3 cards)")) {
-            board_size = 3;
-        } else if (std.mem.eql(u8, scenario.name, "Turn (4 cards)")) {
-            board_size = 4;
-        } else if (std.mem.eql(u8, scenario.name, "River (5 cards)")) {
-            board_size = 5;
-        }
-
-        for (0..board_size) |i| {
-            var new_card: u64 = undefined;
-            while (true) {
-                new_card = @as(u64, 1) << @intCast(rng.intRangeAtMost(u6, 0, 51));
-                if ((new_card & used_cards) == 0) break;
-            }
-            board_cards[i] = new_card;
-            used_cards |= new_card;
-        }
-
-        // Run benchmark
-        const start = std.time.nanoTimestamp();
-        const result = try poker.monteCarlo(hero_cards, villain_cards, board_cards[0..board_size], scenario.iterations, rng, allocator);
-        const end = std.time.nanoTimestamp();
-
-        const elapsed_ns = @as(f64, @floatFromInt(end - start));
-        const elapsed_ms = elapsed_ns / 1_000_000.0;
-        const sims_per_sec = @as(f64, @floatFromInt(scenario.iterations)) / (elapsed_ns / 1_000_000_000.0);
-
-        try stdout.print("{s:<18} | {d:>11} | {d:>9.2} | {d:>18.2}\n", .{
-            scenario.name,
-            scenario.iterations,
-            elapsed_ms,
-            sims_per_sec / 1_000_000.0,
-        });
-
-        if (options.verbose) {
-            try stdout.print("  Hero equity: {d:.2}%\n", .{result.equity() * 100.0});
-        }
-    }
-
-    // Multi-way equity benchmark
-    try stdout.print("\nMulti-way Equity (3+ players)\n", .{});
-    try stdout.print("----------------------------------------------------------------\n", .{});
-
-    const player_counts = [_]usize{ 3, 4, 6, 9 };
-    const multiway_iterations = 5000;
-
-    for (player_counts) |num_players| {
-        // Generate hands for all players
-        const hands = try allocator.alloc(u64, num_players);
-        defer allocator.free(hands);
-
-        var used: u64 = 0;
-        for (hands) |*hand| {
-            hand.* = 0; // Initialize to empty
-            // Generate 2 cards for this player
-            for (0..2) |_| {
-                var new_card: u64 = undefined;
-                while (true) {
-                    new_card = @as(u64, 1) << @intCast(rng.intRangeAtMost(u6, 0, 51));
-                    if ((new_card & used) == 0) break;
-                }
-                hand.* |= new_card;
-                used |= new_card;
-            }
-        }
-
-        const start = std.time.nanoTimestamp();
-
-        _ = try poker.multiway(hands, &.{}, // No board
-            multiway_iterations, rng, allocator);
-
-        const end = std.time.nanoTimestamp();
-        const elapsed_ns = @as(f64, @floatFromInt(end - start));
-        const elapsed_ms = elapsed_ns / 1_000_000.0;
-        const sims_per_sec = @as(f64, @floatFromInt(multiway_iterations)) / (elapsed_ns / 1_000_000_000.0);
-
-        try stdout.print("{d} players         | {d:>11} | {d:>9.2} | {d:>18.2}\n", .{
-            num_players,
-            multiway_iterations,
-            elapsed_ms,
-            sims_per_sec / 1_000_000.0,
-        });
-    }
-}
-
-// Benchmark different batch sizes
-pub fn benchmarkBatchSizes(allocator: std.mem.Allocator) !void {
-    var stdout_buffer: [4096]u8 = undefined;
-    var stdout_writer_wrapper = std.fs.File.stdout().writer(&stdout_buffer);
-    const stdout = &stdout_writer_wrapper.interface;
-    defer stdout.flush() catch {};
-
-    // Generate test hands
-    var prng = std.Random.DefaultPrng.init(42);
-    var rng = prng.random();
-
-    const num_test_hands = 1_600_000;
-    const test_hands = try allocator.alloc(u64, num_test_hands);
-    defer allocator.free(test_hands);
-
-    for (test_hands) |*hand| {
-        hand.* = poker.generateRandomHand(&rng);
-    }
-
-    // Warmup caches
-    try stdout.print("Warming up caches...\n", .{});
-    warmupCaches(test_hands);
-
-    try stdout.print("\nBatch Size Performance Comparison\n", .{});
-    try stdout.print("==================================================================\n", .{});
-    try stdout.print("Batch Size | ns/hand | Million hands/sec | Speedup vs single\n", .{});
-    try stdout.print("-----------|---------|-------------------|------------------\n", .{});
-
-    // Benchmark single hand for baseline
-    const single_time = benchmarkSingleHand(test_hands, 1000000);
-    try stdout.print("{d:>10} | {d:>7.2} | {d:>17.1} | {d:>16.2}x\n", .{ 1, single_time, 1000.0 / single_time, 1.0 });
-
-    // Test different batch sizes
-    const batch_sizes = [_]usize{ 2, 4, 6, 8, 10, 12, 16, 20, 24, 32, 40, 48, 64 };
-
-    inline for (batch_sizes) |batch_size| {
-        const iterations = @max(100000, 1000000 / batch_size);
-        const time_per_hand = try benchmarkBatchSizeGeneric(batch_size, test_hands, iterations);
-        const speedup = single_time / time_per_hand;
-
-        try stdout.print("{d:>10} | {d:>7.2} | {d:>17.1} | {d:>16.2}x\n", .{ batch_size, time_per_hand, 1000.0 / time_per_hand, speedup });
-    }
-}
-
-fn benchmarkBatchSizeGeneric(comptime batchSize: usize, test_hands: []const u64, iterations: u32) !f64 {
     var timer = try std.time.Timer.start();
 
-    // Create multiple batches from test hands to avoid cache artifacts
-    var checksum: u64 = 0;
+    for (0..repeats) |_| {
+        const result = timeScalarShowdown(cases);
+        std.mem.doNotOptimizeAway(result);
+    }
 
-    // Run multiple times for more accurate measurement
-    var best_time: f64 = std.math.inf(f64);
+    const total_ns: f64 = @floatFromInt(timer.read());
+    const total_ops: f64 = @floatFromInt(iterations * repeats);
+    return total_ns / total_ops;
+}
 
-    for (0..3) |_| {
-        const start = timer.read();
+fn benchShowdownBatch(allocator: std.mem.Allocator) !f64 {
+    const iterations = 100000;
+    const repeats = 10; // Repeat measurement 10x for stability
 
-        for (0..iterations) |iter| {
-            // Use different hands for each iteration
-            const offset = (iter * batchSize) % (test_hands.len - batchSize);
+    var prng = std.Random.DefaultPrng.init(99);
+    const rng = prng.random();
 
-            var batch_array: [batchSize]u64 = undefined;
-            for (0..batchSize) |i| {
-                batch_array[i] = test_hands[offset + i];
-            }
-            const batch: @Vector(batchSize, u64) = batch_array;
+    const cases = try generateShowdownCases(allocator, iterations, rng);
+    defer allocator.free(cases);
 
-            const results = poker.evaluateBatch(batchSize, batch);
+    var timer = try std.time.Timer.start();
 
-            // Prevent optimization
-            inline for (0..batchSize) |i| {
-                checksum +%= results[i];
-            }
-        }
+    for (0..repeats) |_| {
+        const result = timeBatchedShowdown(cases);
+        std.mem.doNotOptimizeAway(result);
+    }
 
-        const elapsed = timer.read() - start;
-        const total_hands = iterations * batchSize;
-        const ns_per_hand = @as(f64, @floatFromInt(elapsed)) / @as(f64, @floatFromInt(total_hands));
+    const total_ns: f64 = @floatFromInt(timer.read());
+    const total_ops: f64 = @floatFromInt(iterations * repeats);
+    return total_ns / total_ops;
+}
 
-        if (ns_per_hand < best_time) {
-            best_time = ns_per_hand;
+fn benchEquityMonteCarlo(allocator: std.mem.Allocator) !f64 {
+    const iterations = 1000;
+    const simulations = 10000;
+
+    // Fixed seed for reproducibility (but RNG state advances across iterations)
+    var prng = std.Random.DefaultPrng.init(123);
+    const rng = prng.random();
+
+    // AA vs KK - classic matchup
+    const aa = poker.makeCard(.clubs, .ace) | poker.makeCard(.diamonds, .ace);
+    const kk = poker.makeCard(.hearts, .king) | poker.makeCard(.spades, .king);
+
+    var timer = try std.time.Timer.start();
+
+    for (0..iterations) |_| {
+        const result = try poker.monteCarlo(aa, kk, &.{}, simulations, rng, allocator);
+        std.mem.doNotOptimizeAway(result);
+    }
+
+    const total_ns: f64 = @floatFromInt(timer.read());
+    const iterations_f64: f64 = @floatFromInt(iterations);
+    const ns_per_calc = total_ns / iterations_f64;
+    return ns_per_calc / 1000.0; // Convert to microseconds
+}
+
+fn benchEquityExact(allocator: std.mem.Allocator) !f64 {
+    const iterations = 200;
+    const repeats = 100; // Repeat 100x for stability (deterministic, needs low variance)
+
+    // AA vs KK on turn (only 44 rivers to enumerate)
+    const aa = poker.makeCard(.clubs, .ace) | poker.makeCard(.diamonds, .ace);
+    const kk = poker.makeCard(.hearts, .king) | poker.makeCard(.spades, .king);
+    const board = [_]poker.Hand{
+        poker.makeCard(.spades, .seven),
+        poker.makeCard(.hearts, .eight),
+        poker.makeCard(.diamonds, .nine),
+        poker.makeCard(.clubs, .two),
+    };
+
+    var timer = try std.time.Timer.start();
+
+    for (0..iterations) |_| {
+        for (0..repeats) |_| {
+            const result = try poker.exact(aa, kk, &board, allocator);
+            std.mem.doNotOptimizeAway(result);
         }
     }
 
-    std.mem.doNotOptimizeAway(checksum);
-    return best_time;
+    const total_ns: f64 = @floatFromInt(timer.read());
+    const total_ops: f64 = @floatFromInt(iterations * repeats);
+    const ns_per_calc = total_ns / total_ops;
+    return ns_per_calc / 1000.0; // Convert to microseconds
 }
 
-// Benchmark range vs range equity calculations
-pub fn benchmarkRangeEquity(allocator: std.mem.Allocator) !void {
-    var stdout_buffer: [4096]u8 = undefined;
-    var stdout_writer_wrapper = std.fs.File.stdout().writer(&stdout_buffer);
-    const stdout = &stdout_writer_wrapper.interface;
-    defer stdout.flush() catch {};
+fn benchRangeEquityMonteCarlo(allocator: std.mem.Allocator) !f64 {
+    const iterations = 10;
+    const repeats = 10; // Repeat 10x for stability
+    const simulations = 1000;
 
-    var prng = std.Random.DefaultPrng.init(42);
+    // Fixed seed for reproducibility (but RNG state advances across iterations)
+    var prng = std.Random.DefaultPrng.init(456);
     const rng = prng.random();
 
-    try stdout.print("\nRange vs Range Equity Performance\n", .{});
-    try stdout.print("==================================================================\n", .{});
-    try stdout.print("Method             | Range Size | Board | Time (ms) | Combos/sec\n", .{});
-    try stdout.print("-------------------|------------|-------|-----------|------------\n", .{});
+    // Create ranges once
+    var hero_range = poker.Range.init(allocator);
+    defer hero_range.deinit();
+    try hero_range.addHandNotation("AA", 1.0);
 
-    // Test scenarios with different range sizes
-    const test_cases = [_]struct {
-        hero_range: []const []const u8,
-        villain_range: []const []const u8,
-        board_size: usize,
-        mc_iterations: u32,
-    }{
-        // Small ranges - exact is feasible
-        .{ .hero_range = &.{"AA"}, .villain_range = &.{"KK"}, .board_size = 4, .mc_iterations = 10000 },
-        .{ .hero_range = &.{ "AA", "KK" }, .villain_range = &.{ "QQ", "JJ" }, .board_size = 4, .mc_iterations = 10000 },
+    var villain_range = poker.Range.init(allocator);
+    defer villain_range.deinit();
+    try villain_range.addHandNotation("KK", 1.0);
 
-        // Medium ranges - exact gets slower
-        .{ .hero_range = &.{ "AA", "KK", "QQ", "AKs" }, .villain_range = &.{ "JJ", "TT", "99", "AQs" }, .board_size = 4, .mc_iterations = 5000 },
+    var timer = try std.time.Timer.start();
 
-        // Larger ranges - Monte Carlo preferred
-        .{ .hero_range = &.{ "AA", "KK", "QQ", "JJ", "AKs", "AQs", "AJs" }, .villain_range = &.{ "TT", "99", "88", "77", "KQs", "KJs" }, .board_size = 4, .mc_iterations = 5000 },
-    };
+    for (0..iterations) |_| {
+        for (0..repeats) |_| {
+            const result = try hero_range.equityMonteCarlo(&villain_range, &.{}, simulations, rng, allocator);
+            std.mem.doNotOptimizeAway(result);
+        }
+    }
 
-    for (test_cases) |test_case| {
-        // Create ranges
-        var hero_range = poker.Range.init(allocator);
-        defer hero_range.deinit();
+    const total_ns: f64 = @floatFromInt(timer.read());
+    const total_ops: f64 = @floatFromInt(iterations * repeats);
+    const ns_per_calc = total_ns / total_ops;
+    return ns_per_calc / 1_000_000.0; // Convert to milliseconds
+}
 
-        for (test_case.hero_range) |notation| {
-            try hero_range.addHandNotation(notation, 1.0);
+pub const ALL_SUITES = [_]BenchmarkSuite{
+    .{
+        .name = "eval",
+        .benchmarks = &.{
+            .{
+                .name = "batch_evaluation",
+                .unit = "ns/hand",
+                .threshold_pct = 0.02, // 2% - tight threshold for core SIMD evaluator
+                .run_fn = benchEvalBatch,
+            },
+        },
+    },
+    .{
+        .name = "showdown",
+        .benchmarks = &.{
+            .{
+                .name = "context_path",
+                .unit = "ns/eval",
+                .threshold_pct = 0.025, // 2.5% - deterministic
+                .run_fn = benchShowdownContext,
+            },
+            .{
+                .name = "batched",
+                .unit = "ns/eval",
+                .threshold_pct = 0.025, // 2.5% - deterministic
+                .run_fn = benchShowdownBatch,
+            },
+        },
+    },
+    .{
+        .name = "equity",
+        .benchmarks = &.{
+            .{
+                .name = "monte_carlo",
+                .unit = "µs/calc",
+                .threshold_pct = 0.08, // 8% - Monte Carlo has natural randomness
+                .run_fn = benchEquityMonteCarlo,
+            },
+            .{
+                .name = "exact_turn",
+                .unit = "µs/calc",
+                .warmup_runs = 5,
+                .runs = 20, // More runs for stability
+                .threshold_pct = 0.03, // 3% - deterministic enumeration
+                .run_fn = benchEquityExact,
+            },
+        },
+    },
+    .{
+        .name = "range",
+        .benchmarks = &.{
+            .{
+                .name = "equity_monte_carlo",
+                .unit = "ms/calc",
+                .threshold_pct = 0.12, // 12% - highest variance from range × MC
+                .run_fn = benchRangeEquityMonteCarlo,
+            },
+        },
+    },
+};
+
+// ============================================================================
+// Throughput Formatting
+// ============================================================================
+
+fn formatThroughput(buffer: *[32]u8, value: f64, unit: []const u8) []const u8 {
+    // Convert to operations per second based on unit
+    if (std.mem.endsWith(u8, unit, "ns/hand") or std.mem.endsWith(u8, unit, "ns/eval")) {
+        // nanoseconds per operation → ops/sec = 1e9 / ns
+        const ops_per_sec = 1_000_000_000.0 / value;
+        if (ops_per_sec >= 1_000_000_000.0) {
+            return std.fmt.bufPrint(buffer, "{d:.2}G/s", .{ops_per_sec / 1_000_000_000.0}) catch "?";
+        } else if (ops_per_sec >= 1_000_000.0) {
+            return std.fmt.bufPrint(buffer, "{d:.2}M/s", .{ops_per_sec / 1_000_000.0}) catch "?";
+        } else if (ops_per_sec >= 1_000.0) {
+            return std.fmt.bufPrint(buffer, "{d:.2}K/s", .{ops_per_sec / 1_000.0}) catch "?";
+        } else {
+            return std.fmt.bufPrint(buffer, "{d:.2}/s", .{ops_per_sec}) catch "?";
+        }
+    } else if (std.mem.endsWith(u8, unit, "µs/calc") or std.mem.endsWith(u8, unit, "us/calc")) {
+        // microseconds per operation → ops/sec = 1e6 / µs
+        const ops_per_sec = 1_000_000.0 / value;
+        if (ops_per_sec >= 1_000_000.0) {
+            return std.fmt.bufPrint(buffer, "{d:.2}M/s", .{ops_per_sec / 1_000_000.0}) catch "?";
+        } else if (ops_per_sec >= 1_000.0) {
+            return std.fmt.bufPrint(buffer, "{d:.2}K/s", .{ops_per_sec / 1_000.0}) catch "?";
+        } else {
+            return std.fmt.bufPrint(buffer, "{d:.2}/s", .{ops_per_sec}) catch "?";
+        }
+    } else if (std.mem.endsWith(u8, unit, "ms/calc")) {
+        // milliseconds per operation → ops/sec = 1e3 / ms
+        const ops_per_sec = 1_000.0 / value;
+        if (ops_per_sec >= 1_000.0) {
+            return std.fmt.bufPrint(buffer, "{d:.2}K/s", .{ops_per_sec / 1_000.0}) catch "?";
+        } else {
+            return std.fmt.bufPrint(buffer, "{d:.2}/s", .{ops_per_sec}) catch "?";
+        }
+    } else {
+        // Unknown unit - show raw value with unit to avoid misleading throughput
+        return std.fmt.bufPrint(buffer, "{d:.2} {s}", .{ value, unit }) catch "?";
+    }
+}
+
+// ============================================================================
+// Public API
+// ============================================================================
+
+pub fn runAllBenchmarks(allocator: std.mem.Allocator, filter: ?[]const u8, for_baseline: bool) !Result {
+    var result = Result.init(allocator);
+    result.system = try getSystemInfo(allocator);
+    result.commit = getCurrentCommit(allocator);
+    result.timestamp = try getTimestamp(allocator);
+
+    // Use 100 runs for baseline, 10 for normal benchmarks
+    const runs_override: ?u32 = if (for_baseline) 100 else null;
+    const runner = BenchmarkRunner.init(allocator, runs_override);
+
+    // Header
+    std.debug.print("\n", .{});
+    std.debug.print("🚀 Running Benchmarks\n", .{});
+    std.debug.print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
+    std.debug.print("Build mode: {s}\n", .{result.system.build_mode});
+    if (result.commit) |commit| {
+        std.debug.print("Version:    {s}\n", .{commit});
+    }
+    if (for_baseline) {
+        std.debug.print("Mode:       Baseline (100 runs per benchmark)\n", .{});
+    }
+    std.debug.print("\n", .{});
+
+    for (ALL_SUITES, 0..) |suite, suite_idx| {
+        // Apply filter if specified
+        if (filter) |f| {
+            if (!std.mem.eql(u8, suite.name, f)) continue;
         }
 
-        var villain_range = poker.Range.init(allocator);
-        defer villain_range.deinit();
+        std.debug.print("[{d}/{d}] {s}\n", .{ suite_idx + 1, ALL_SUITES.len, suite.name });
 
-        for (test_case.villain_range) |notation| {
-            try villain_range.addHandNotation(notation, 1.0);
-        }
+        var benchmark_map = std.StringHashMap(BenchmarkMetric).init(allocator);
+        var suite_timer = try std.time.Timer.start();
 
-        // Create board (turn)
-        var board: [5]poker.Hand = undefined;
-        var used: u64 = 0;
-        for (0..test_case.board_size) |i| {
-            board[i] = drawUniqueCard(rng, &used);
-        }
+        for (suite.benchmarks) |benchmark| {
+            const stats = try runner.run(benchmark);
 
-        const total_combos = hero_range.handCount() * villain_range.handCount();
+            // Show result with value
+            std.debug.print("  • {s}: {d:.2} {s}", .{ benchmark.name, stats.median, benchmark.unit });
 
-        // Benchmark exact equity (if feasible)
-        if (total_combos <= 100) {
-            // Run multiple iterations for better timing accuracy
-            const exact_iterations: u32 = 100;
+            // Calculate and show throughput (ops/second)
+            var throughput_buf: [32]u8 = undefined;
+            const throughput = formatThroughput(&throughput_buf, stats.median, benchmark.unit);
+            std.debug.print(" ({s})", .{throughput});
 
-            const start = std.time.nanoTimestamp();
-            var checksum: u64 = 0;
-            for (0..exact_iterations) |_| {
-                const result = try hero_range.equityExact(&villain_range, board[0..test_case.board_size], allocator);
-                checksum +%= @intFromFloat(result.hero_equity * 1000000.0);
+            if (!stats.isStable()) {
+                std.debug.print(" ⚠️  CV={d:.1}%", .{stats.cv * 100.0});
             }
-            const end = std.time.nanoTimestamp();
-            std.mem.doNotOptimizeAway(checksum);
+            std.debug.print("\n", .{});
 
-            const elapsed_ns = @as(f64, @floatFromInt(end - start)) / @as(f64, @floatFromInt(exact_iterations));
-            const elapsed_ms = elapsed_ns / 1_000_000.0;
-
-            // Get one result for simulation count
-            const sample_result = try hero_range.equityExact(&villain_range, board[0..test_case.board_size], allocator);
-            const combos_per_sec = @as(f64, @floatFromInt(sample_result.total_simulations)) / (elapsed_ns / 1_000_000_000.0);
-
-            try stdout.print("Exact              | {d:>3}×{d:<3}    | {d}card | {d:>9.2} | {d:>10.0}\n", .{
-                hero_range.handCount(),
-                villain_range.handCount(),
-                test_case.board_size,
-                elapsed_ms,
-                combos_per_sec,
+            try benchmark_map.put(benchmark.name, .{
+                .unit = benchmark.unit,
+                .value = stats.median,
+                .runs = stats.runs,
+                .cv = stats.cv,
             });
         }
 
-        // Benchmark Monte Carlo equity
-        {
-            const start = std.time.nanoTimestamp();
-            const result = try hero_range.equityMonteCarlo(&villain_range, board[0..test_case.board_size], test_case.mc_iterations, rng, allocator);
-            const end = std.time.nanoTimestamp();
-
-            const elapsed_ns = @as(f64, @floatFromInt(end - start));
-            const elapsed_ms = elapsed_ns / 1_000_000.0;
-            const sims_per_sec = @as(f64, @floatFromInt(result.total_simulations)) / (elapsed_ns / 1_000_000_000.0);
-
-            try stdout.print("MonteCarlo ({}K) | {d:>3}×{d:<3}    | {d}card | {d:>9.2} | {d:>10.0}\n", .{
-                test_case.mc_iterations / 1000,
-                hero_range.handCount(),
-                villain_range.handCount(),
-                test_case.board_size,
-                elapsed_ms,
-                sims_per_sec,
-            });
-        }
-    }
-}
-
-// Benchmark exact equity calculations (Experiments 16 + 17)
-pub fn benchmarkExactEquity(allocator: std.mem.Allocator) !void {
-    var stdout_buffer: [4096]u8 = undefined;
-    var stdout_writer_wrapper = std.fs.File.stdout().writer(&stdout_buffer);
-    const stdout = &stdout_writer_wrapper.interface;
-    defer stdout.flush() catch {};
-
-    try stdout.print("\n🚀 Exact Equity Performance (Experiments 16 + 17)\n", .{});
-    try stdout.print("==================================================================\n", .{});
-    try stdout.print("Scenario          | Boards    | Time (ms) | Boards/sec  | Speedup\n", .{});
-    try stdout.print("------------------|-----------|-----------|-------------|--------\n", .{});
-
-    // Generate test hands
-    var prng = std.Random.DefaultPrng.init(42);
-    const rng = prng.random();
-
-    // Test scenarios
-    const test_cases = [_]struct {
-        name: []const u8,
-        board_size: usize,
-        expected_boards: u32,
-    }{
-        .{ .name = "River (complete)", .board_size = 5, .expected_boards = 1 },
-        .{ .name = "Turn (1 to come)", .board_size = 4, .expected_boards = 44 },
-        .{ .name = "Flop (2 to come)", .board_size = 3, .expected_boards = 990 },
-        .{ .name = "Preflop (5 to come)", .board_size = 0, .expected_boards = 1712304 },
-    };
-
-    // Generate hero and villain hands
-    var used: u64 = 0;
-    var hero_hole: u64 = 0;
-    while (@popCount(hero_hole) < 2) {
-        hero_hole |= drawUniqueCard(rng, &used);
-    }
-
-    var villain_hole: u64 = 0;
-    while (@popCount(villain_hole) < 2) {
-        villain_hole |= drawUniqueCard(rng, &used);
-    }
-
-    const baseline_time: f64 = undefined;
-    var baseline_set = false;
-
-    for (test_cases) |test_case| {
-        // Create board
-        var board: [5]poker.Hand = undefined;
-        var board_used = used;
-        for (0..test_case.board_size) |i| {
-            board[i] = drawUniqueCard(rng, &board_used);
+        // Show suite timing
+        const suite_time_ns = suite_timer.read();
+        const suite_time_s = @as(f64, @floatFromInt(suite_time_ns)) / 1_000_000_000.0;
+        if (suite_time_s < 10.0) {
+            std.debug.print("  ↳ Ran in {d:.1}s\n", .{suite_time_s});
+        } else {
+            std.debug.print("  ↳ Ran in {d:.0}s\n", .{suite_time_s});
         }
 
-        // Run benchmark (single iteration for accurate timing)
-        const start = std.time.nanoTimestamp();
-        const result = try poker.exact(hero_hole, villain_hole, board[0..test_case.board_size], allocator);
-        const end = std.time.nanoTimestamp();
-
-        const elapsed_ns = @as(f64, @floatFromInt(end - start));
-        const elapsed_ms = elapsed_ns / 1_000_000.0;
-        const boards_per_sec = @as(f64, @floatFromInt(result.total_simulations)) / (elapsed_ns / 1_000_000_000.0);
-
-        // Calculate speedup relative to preflop baseline
-        const speedup_str: []const u8 = if (test_case.board_size == 0) blk: {
-            baseline_set = true;
-            break :blk "-";
-        } else if (baseline_set) blk: {
-            // For completed boards, show boards/second as speedup metric
-            break :blk "N/A";
-        } else blk: {
-            break :blk "N/A";
-        };
-
-        try stdout.print("{s:<18}| {d:>9} | {d:>9.2} | {d:>11.0} | {s:<7}\n", .{
-            test_case.name,
-            result.total_simulations,
-            elapsed_ms,
-            boards_per_sec,
-            speedup_str,
-        });
-
-        // Store baseline for future comparison
-        _ = baseline_time;
+        try result.suites.put(suite.name, benchmark_map);
+        std.debug.print("\n", .{}); // Blank line between suites
     }
 
-    try stdout.print("\n📊 Performance Analysis\n", .{});
-    try stdout.print("  • Experiment 16 (Board Context): 2.4× faster\n", .{});
-    try stdout.print("  • Experiment 17 (SIMD Batching): 5.9× faster over Exp 16\n", .{});
-    try stdout.print("  • Total improvement: 14.1× faster than baseline\n", .{});
-    try stdout.print("  • Preflop (1.7M boards): ~17ms (100M boards/second)\n", .{});
-    try stdout.print("  • Per-board time: ~10 ns/board (SIMD batching)\n", .{});
+    std.debug.print("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", .{});
+    std.debug.print("\n", .{});
+    return result;
 }

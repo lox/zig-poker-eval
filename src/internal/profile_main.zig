@@ -1,5 +1,5 @@
 const std = @import("std");
-const evaluator = @import("evaluator.zig");
+const evaluator = @import("../evaluator.zig");
 
 // Re-export the core functions for assembly analysis
 pub const evaluateHand = evaluator.evaluateHand;

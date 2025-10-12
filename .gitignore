@@ -4,3 +4,8 @@
 /.task
 prompt.txt
 all_hands.dat
+
+# Benchmark baselines (commit release-fast on main only)
+benchmark-baseline-debug.json
+benchmark-baseline-release-safe.json
+benchmark-baseline-release-small.json
