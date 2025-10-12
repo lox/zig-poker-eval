@@ -728,7 +728,8 @@ fn exactTurnStreaming(
     board: Hand,
 ) EquityResult {
     var rivers: [52]u64 = undefined;
-    const total = collectRemainingSingleCards(&rivers, hero, vill, board);
+    const total_u8 = collectRemainingSingleCards(&rivers, hero, vill, board);
+    const total: usize = @intCast(total_u8);
 
     var wins: u32 = 0;
     var ties: u32 = 0;
@@ -772,7 +773,7 @@ fn exactTurnStreaming(
     return .{
         .wins = wins,
         .ties = ties,
-        .total_simulations = total,
+        .total_simulations = @intCast(total),
         .hand1_categories = if (track_categories) hand1_cat_storage else null,
         .hand2_categories = if (track_categories) hand2_cat_storage else null,
         .method = .exact,
