@@ -147,14 +147,12 @@ pub const EquityResult = equity.EquityResult;
 
 /// Backward-compatible alias for EquityResult (deprecated - use EquityResult directly)
 /// All result types are now unified into EquityResult with optional category tracking
-pub const DetailedEquityResult = equity.DetailedEquityResult;
-
 /// Head-to-head Monte Carlo equity calculation
 /// Example: monteCarlo([As,Ks], [Qd,Qh], [], 100000, rng, allocator)
 pub const monteCarlo = equity.monteCarlo;
 
 /// Detailed Monte Carlo with hand category tracking
-pub const detailedMonteCarlo = equity.detailedMonteCarlo;
+pub const monteCarloWithCategories = equity.monteCarloWithCategories;
 
 /// Exact equity calculation (enumerates all possibilities)
 /// Example: exact([As,Ks], [Qd,Qh], [Ah,Kd,Qc,Jh], allocator)

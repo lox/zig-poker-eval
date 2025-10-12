@@ -352,7 +352,7 @@ pub const Range = struct {
                 total_weight += weight;
 
                 // Calculate detailed equity for this matchup (already combined)
-                const result = try equity.exactDetailed(hero_entry.hand, villain_entry.hand, board, allocator);
+                const result = try equity.exactWithCategories(hero_entry.hand, villain_entry.hand, board, allocator);
 
                 // Accumulate weighted equity
                 total_hero_equity += result.equity() * weight;
@@ -363,7 +363,7 @@ pub const Range = struct {
                 total_ties += result.ties;
                 total_hero_losses += (result.total_simulations - result.wins - result.ties);
 
-                // Accumulate hand categories (unwrap optional since exactDetailed always populates them)
+                // Accumulate hand categories (unwrap optional since exactWithCategories always populates them)
                 const h1_cats = result.hand1_categories.?;
                 const h2_cats = result.hand2_categories.?;
 
