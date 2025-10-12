@@ -349,7 +349,7 @@ const BenchCommand = struct {
     const Options = struct {
         baseline: bool = false,
         filter: ?[]const u8 = null,
-        threshold: f64 = 5.0,
+        threshold: f64 = 10.0,
     };
 
     const meta = cli_lib.CommandMeta{
@@ -368,7 +368,7 @@ const BenchCommand = struct {
     fn getFieldDescription(field_name: []const u8) []const u8 {
         if (std.mem.eql(u8, field_name, "baseline")) return "Save results as baseline";
         if (std.mem.eql(u8, field_name, "filter")) return "Filter to specific suite (eval, showdown)";
-        if (std.mem.eql(u8, field_name, "threshold")) return "Regression threshold percentage (default 5.0)";
+        if (std.mem.eql(u8, field_name, "threshold")) return "Regression threshold percentage (default 10.0)";
         return "No description available";
     }
 

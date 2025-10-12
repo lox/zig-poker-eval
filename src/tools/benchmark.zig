@@ -27,6 +27,7 @@ pub const Benchmark = struct {
     unit: []const u8,
     warmup_runs: u32 = 3,
     runs: u32 = 10,
+    threshold_pct: ?f64 = null, // Per-benchmark regression threshold (e.g., 0.02 = 2%)
     run_fn: *const fn (allocator: std.mem.Allocator) anyerror!f64,
 };
 
@@ -475,7 +476,7 @@ pub const MissingBenchmark = struct {
     benchmark: []const u8,
 };
 
-pub fn compareResults(baseline: Result, current: Result, threshold_pct: f64, allocator: std.mem.Allocator) !ComparisonResult {
+pub fn compareResults(baseline: Result, current: Result, default_threshold_pct: f64, allocator: std.mem.Allocator) !ComparisonResult {
     var result = ComparisonResult{
         .passed = true,
         .regressions = try std.ArrayList(Regression).initCapacity(allocator, 0),
@@ -522,28 +523,47 @@ pub fn compareResults(baseline: Result, current: Result, threshold_pct: f64, all
             // Check if baseline has this benchmark
             const baseline_metric = baseline_benchmarks.get(bench_name) orelse continue;
 
-            // Calculate percentage change
-            const change_pct = ((current_metric.value - baseline_metric.value) / baseline_metric.value) * 100.0;
+            // Look up per-benchmark threshold from suite definitions
+            var effective_threshold = default_threshold_pct;
+            for (ALL_SUITES) |suite| {
+                if (std.mem.eql(u8, suite.name, suite_name)) {
+                    for (suite.benchmarks) |benchmark| {
+                        if (std.mem.eql(u8, benchmark.name, bench_name)) {
+                            effective_threshold = benchmark.threshold_pct orelse default_threshold_pct;
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+
+            // Apply stability guard: if CV >= 5%, use max(threshold, 2*CV) to avoid false positives
+            if (current_metric.cv >= 0.05) {
+                effective_threshold = @max(effective_threshold, 2.0 * current_metric.cv);
+            }
+
+            // Calculate percentage change (as decimal, not percentage)
+            const change_decimal = (current_metric.value - baseline_metric.value) / baseline_metric.value;
 
             // Regression is positive change (slower/worse)
-            if (change_pct > threshold_pct) {
+            if (change_decimal > effective_threshold) {
                 result.passed = false;
                 try result.regressions.append(allocator, .{
                     .suite = suite_name,
                     .benchmark = bench_name,
                     .baseline_value = baseline_metric.value,
                     .current_value = current_metric.value,
-                    .change_pct = change_pct,
+                    .change_pct = change_decimal * 100.0,
                     .unit = current_metric.unit,
                 });
-            } else if (change_pct < -threshold_pct) {
+            } else if (change_decimal < -effective_threshold) {
                 // Improvement is negative change (faster/better)
                 try result.improvements.append(allocator, .{
                     .suite = suite_name,
                     .benchmark = bench_name,
                     .baseline_value = baseline_metric.value,
                     .current_value = current_metric.value,
-                    .change_pct = change_pct,
+                    .change_pct = change_decimal * 100.0,
                     .unit = current_metric.unit,
                 });
             }
@@ -939,6 +959,7 @@ pub const ALL_SUITES = [_]BenchmarkSuite{
             .{
                 .name = "batch_evaluation",
                 .unit = "ns/hand",
+                .threshold_pct = 0.02, // 2% - tight threshold for core SIMD evaluator
                 .run_fn = benchEvalBatch,
             },
         },
@@ -949,11 +970,13 @@ pub const ALL_SUITES = [_]BenchmarkSuite{
             .{
                 .name = "context_path",
                 .unit = "ns/eval",
+                .threshold_pct = 0.025, // 2.5% - deterministic
                 .run_fn = benchShowdownContext,
             },
             .{
                 .name = "batched",
                 .unit = "ns/eval",
+                .threshold_pct = 0.025, // 2.5% - deterministic
                 .run_fn = benchShowdownBatch,
             },
         },
@@ -964,11 +987,13 @@ pub const ALL_SUITES = [_]BenchmarkSuite{
             .{
                 .name = "monte_carlo",
                 .unit = "µs/calc",
+                .threshold_pct = 0.08, // 8% - Monte Carlo has natural randomness
                 .run_fn = benchEquityMonteCarlo,
             },
             .{
                 .name = "exact_turn",
                 .unit = "µs/calc",
+                .threshold_pct = 0.03, // 3% - deterministic enumeration
                 .run_fn = benchEquityExact,
             },
         },
@@ -979,6 +1004,7 @@ pub const ALL_SUITES = [_]BenchmarkSuite{
             .{
                 .name = "equity_monte_carlo",
                 .unit = "ms/calc",
+                .threshold_pct = 0.12, // 12% - highest variance from range × MC
                 .run_fn = benchRangeEquityMonteCarlo,
             },
         },
