@@ -216,7 +216,7 @@ fn getCpuModel(allocator: std.mem.Allocator) ![]const u8 {
             var buf: [4096]u8 = undefined;
             const bytes_read = file.readAll(&buf) catch break :blk "unknown";
 
-            var lines = std.mem.split(u8, buf[0..bytes_read], "\n");
+            var lines = std.mem.splitSequence(u8, buf[0..bytes_read], "\n");
             while (lines.next()) |line| {
                 if (std.mem.startsWith(u8, line, "model name")) {
                     if (std.mem.indexOf(u8, line, ":")) |colon_pos| {
