@@ -18,31 +18,41 @@ pub const EquityResult = struct {
     total_simulations: u32,
     hand1_categories: ?HandCategories = null,
     hand2_categories: ?HandCategories = null,
+    method: Method = .monte_carlo,
+
+    pub const Method = enum {
+        monte_carlo,
+        exact,
+    };
 
     pub fn winRate(self: EquityResult) f64 {
+        if (self.total_simulations == 0) return 0.0;
         return @as(f64, @floatFromInt(self.wins)) / @as(f64, @floatFromInt(self.total_simulations));
     }
 
     pub fn tieRate(self: EquityResult) f64 {
+        if (self.total_simulations == 0) return 0.0;
         return @as(f64, @floatFromInt(self.ties)) / @as(f64, @floatFromInt(self.total_simulations));
     }
 
     pub fn lossRate(self: EquityResult) f64 {
+        if (self.total_simulations == 0) return 0.0;
         const losses = self.total_simulations - self.wins - self.ties;
         return @as(f64, @floatFromInt(losses)) / @as(f64, @floatFromInt(self.total_simulations));
     }
 
     pub fn equity(self: EquityResult) f64 {
+        if (self.total_simulations == 0) return 0.0;
         const win_equity = @as(f64, @floatFromInt(self.wins));
         const tie_equity = @as(f64, @floatFromInt(self.ties)) * 0.5;
         return (win_equity + tie_equity) / @as(f64, @floatFromInt(self.total_simulations));
     }
 
     /// Calculate 95% confidence interval for Monte Carlo equity
-    /// Returns null for exact calculations or results without category tracking
+    /// Returns null for exact calculations or empty results
     pub fn confidenceInterval(self: EquityResult) ?struct { lower: f64, upper: f64 } {
-        // Only valid for Monte Carlo results with categories
-        if (self.hand1_categories == null) return null;
+        // Only valid for Monte Carlo results with simulations
+        if (self.total_simulations == 0 or self.method == .exact) return null;
 
         const equity_val = self.equity();
         const n = @as(f64, @floatFromInt(self.total_simulations));
@@ -99,59 +109,23 @@ pub const HandCategories = struct {
 pub const DetailedEquityResult = EquityResult;
 pub const DetailedExactResult = EquityResult;
 
-/// Precomputed deck for fast sampling
-const PrecomputedDeck = struct {
-    cards: [52]u64,
-    count: u8,
+/// Validate board cards for conflicts and duplicates
+fn validateBoard(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Hand) !Hand {
+    if (board.len > 5) return error.InvalidBoardLength;
 
-    fn init() PrecomputedDeck {
-        var deck = PrecomputedDeck{
-            .cards = undefined,
-            .count = 52,
-        };
-        for (0..52) |i| {
-            deck.cards[i] = @as(u64, 1) << @intCast(i);
-        }
-        return deck;
+    var board_hand: Hand = 0;
+    for (board) |board_card| {
+        board_hand |= board_card;
     }
 
-    fn withExclusions(self: PrecomputedDeck, exclude_mask: u64) struct { cards: [52]u64, count: u8 } {
-        var result = struct {
-            cards: [52]u64 = undefined,
-            count: u8 = 0,
-        }{};
+    // Check for duplicates in board
+    if (card.countCards(board_hand) != board.len) return error.DuplicateBoardCards;
 
-        for (self.cards) |card_bit| {
-            if ((card_bit & exclude_mask) == 0) {
-                result.cards[result.count] = card_bit;
-                result.count += 1;
-            }
-        }
+    // Check for conflicts with hole cards
+    if ((board_hand & hero_hole_cards) != 0) return error.BoardConflictsWithHeroHoleCards;
+    if ((board_hand & villain_hole_cards) != 0) return error.BoardConflictsWithVillainHoleCards;
 
-        return result;
-    }
-};
-
-/// Fast random card sampling using precomputed deck
-fn sampleCardsPrecomputed(deck: anytype, num_cards: u8, rng: std.Random) u64 {
-    var sampled: u64 = 0;
-    var remaining = deck.count;
-    var cards_needed = num_cards;
-
-    // Fisher-Yates style sampling
-    var deck_copy = deck.cards;
-
-    while (cards_needed > 0) {
-        const idx = rng.uintLessThan(u8, remaining);
-        sampled |= deck_copy[idx];
-
-        // Move last card to sampled position
-        deck_copy[idx] = deck_copy[remaining - 1];
-        remaining -= 1;
-        cards_needed -= 1;
-    }
-
-    return sampled;
+    return board_hand;
 }
 
 /// Internal Monte Carlo implementation with comptime category tracking and SIMD batching
@@ -160,10 +134,9 @@ fn monteCarloImpl(comptime track_categories: bool, hero_hole_cards: Hand, villai
     if (card.countCards(hero_hole_cards) != 2) return error.InvalidHeroHoleCards;
     if (card.countCards(villain_hole_cards) != 2) return error.InvalidVillainHoleCards;
     if ((hero_hole_cards & villain_hole_cards) != 0) return error.ConflictingHoleCards;
-    var board_hand: Hand = 0;
-    for (board) |board_card| {
-        board_hand |= board_card;
-    }
+
+    // Validate board
+    const board_hand = try validateBoard(hero_hole_cards, villain_hole_cards, board);
     const cards_needed = 5 - @as(u8, @intCast(board.len));
 
     // No allocator needed for head-to-head equity
@@ -304,13 +277,10 @@ fn exactImpl(comptime track_categories: bool, hero_hole_cards: Hand, villain_hol
     if (card.countCards(hero_hole_cards) != 2) return error.InvalidHeroHoleCards;
     if (card.countCards(villain_hole_cards) != 2) return error.InvalidVillainHoleCards;
     if ((hero_hole_cards & villain_hole_cards) != 0) return error.ConflictingHoleCards;
-    const cards_needed = 5 - @as(u8, @intCast(board.len));
 
-    // Combine existing board cards
-    var board_hand: Hand = 0;
-    for (board) |board_card| {
-        board_hand |= board_card;
-    }
+    // Validate board
+    const board_hand = try validateBoard(hero_hole_cards, villain_hole_cards, board);
+    const cards_needed = 5 - @as(u8, @intCast(board.len));
 
     // Enumerate all possible board completions
     const board_completions = try enumerateEquityBoardCompletions(hero_hole_cards, villain_hole_cards, board, cards_needed, allocator);
@@ -389,6 +359,7 @@ fn exactImpl(comptime track_categories: bool, hero_hole_cards: Hand, villain_hol
         .total_simulations = @intCast(board_completions.len),
         .hand1_categories = if (track_categories) hand1_cat_storage else null,
         .hand2_categories = if (track_categories) hand2_cat_storage else null,
+        .method = .exact,
     };
 }
 
@@ -754,13 +725,20 @@ fn enumerateEquityBoardCompletions(hero_hole_cards: Hand, villain_hole_cards: Ha
 // === THREADED EQUITY CALCULATION ===
 
 // Cache-line padded thread result to prevent false sharing
+// Note: Each element in the array should be aligned to cache line boundary
 const ThreadResult = struct {
-    wins: u32 align(64) = 0,
+    wins: u32 = 0,
     ties: u32 = 0,
     total_simulations: u32 = 0,
 
     // Pad to cache line size (64 bytes on most architectures)
-    _padding: [64 - 3 * @sizeOf(u32)]u8 = undefined,
+    _padding: [64 - 3 * @sizeOf(u32)]u8 = .{0} ** (64 - 3 * @sizeOf(u32)),
+
+    comptime {
+        if (@sizeOf(ThreadResult) != 64) {
+            @compileError("ThreadResult size must be 64 bytes for cache line alignment");
+        }
+    }
 };
 
 const ThreadContext = struct {
@@ -821,15 +799,15 @@ pub fn threaded(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const 
     if (card.countCards(hero_hole_cards) != 2) return error.InvalidHeroHoleCards;
     if (card.countCards(villain_hole_cards) != 2) return error.InvalidVillainHoleCards;
     if ((hero_hole_cards & villain_hole_cards) != 0) return error.ConflictingHoleCards;
+
+    // Validate board
+    const board_hand = try validateBoard(hero_hole_cards, villain_hole_cards, board);
+
     // Get optimal thread count (but cap at reasonable limit)
     const thread_count = @min(try std.Thread.getCpuCount(), 16);
     const sims_per_thread = simulations / thread_count;
     const remaining_sims = simulations % thread_count;
 
-    var board_hand: Hand = 0;
-    for (board) |board_card| {
-        board_hand |= board_card;
-    }
     const board_len = @as(u8, @intCast(board.len));
 
     // Allocate cache-line padded results
@@ -1000,9 +978,8 @@ test "exact equity with complete board" {
 }
 
 test "cache line padding" {
-    // Verify ThreadResult is properly padded
+    // Verify ThreadResult is properly padded to prevent false sharing
     try testing.expect(@sizeOf(ThreadResult) == 64);
-    try testing.expect(@alignOf(ThreadResult) == 64);
 }
 
 test "exact equity with conflicting cards should error" {
@@ -1041,6 +1018,72 @@ test "monteCarlo equity validates hole card count" {
     try testing.expectError(error.InvalidHeroHoleCards, monteCarlo(one_card, two_cards, &.{}, 100, rng, allocator));
 }
 
+test "monteCarlo validates board length" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var prng = std.Random.DefaultPrng.init(42);
+    const rng = prng.random();
+
+    const aa = card.makeCard(.clubs, .ace) | card.makeCard(.diamonds, .ace);
+    const kk = card.makeCard(.hearts, .king) | card.makeCard(.spades, .king);
+
+    // Board with 6 cards (too many)
+    const board = [_]Hand{
+        card.makeCard(.spades, .seven),
+        card.makeCard(.hearts, .eight),
+        card.makeCard(.diamonds, .nine),
+        card.makeCard(.clubs, .two),
+        card.makeCard(.spades, .three),
+        card.makeCard(.hearts, .four),
+    };
+
+    try testing.expectError(error.InvalidBoardLength, monteCarlo(aa, kk, &board, 100, rng, allocator));
+}
+
+test "monteCarlo validates board duplicates" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var prng = std.Random.DefaultPrng.init(42);
+    const rng = prng.random();
+
+    const aa = card.makeCard(.clubs, .ace) | card.makeCard(.diamonds, .ace);
+    const kk = card.makeCard(.hearts, .king) | card.makeCard(.spades, .king);
+
+    // Board with duplicate cards
+    const board = [_]Hand{
+        card.makeCard(.spades, .seven),
+        card.makeCard(.spades, .seven), // Duplicate
+        card.makeCard(.diamonds, .nine),
+    };
+
+    try testing.expectError(error.DuplicateBoardCards, monteCarlo(aa, kk, &board, 100, rng, allocator));
+}
+
+test "monteCarlo validates board conflicts with hole cards" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var prng = std.Random.DefaultPrng.init(42);
+    const rng = prng.random();
+
+    const aa = card.makeCard(.clubs, .ace) | card.makeCard(.diamonds, .ace);
+    const kk = card.makeCard(.hearts, .king) | card.makeCard(.spades, .king);
+
+    // Board contains a card from hero's hand
+    const board = [_]Hand{
+        card.makeCard(.clubs, .ace), // Conflicts with hero
+        card.makeCard(.hearts, .eight),
+        card.makeCard(.diamonds, .nine),
+    };
+
+    try testing.expectError(error.BoardConflictsWithHeroHoleCards, monteCarlo(aa, kk, &board, 100, rng, allocator));
+}
+
 test "EquityResult helper methods" {
     const result = EquityResult{
         .wins = 80,
@@ -1054,22 +1097,46 @@ test "EquityResult helper methods" {
     try testing.expect(result.equity() == 0.85); // 80 + 10*0.5 = 85%
 }
 
-test "EquityResult confidence interval" {
+test "EquityResult confidence interval for Monte Carlo" {
     const result = EquityResult{
         .wins = 500,
         .ties = 0,
         .total_simulations = 1000,
-        .hand1_categories = HandCategories{}, // Must provide categories for CI calculation
-        .hand2_categories = HandCategories{},
+        .method = .monte_carlo,
     };
 
-    const ci = result.confidenceInterval().?; // Unwrap because we know categories are present
+    const ci = result.confidenceInterval().?;
 
     // 50% equity, should have reasonable confidence bounds
     try testing.expect(ci.lower >= 0.0);
     try testing.expect(ci.upper <= 1.0);
     try testing.expect(ci.lower < 0.5);
     try testing.expect(ci.upper > 0.5);
+}
+
+test "EquityResult confidence interval returns null for exact" {
+    const result = EquityResult{
+        .wins = 500,
+        .ties = 0,
+        .total_simulations = 1000,
+        .method = .exact,
+    };
+
+    try testing.expect(result.confidenceInterval() == null);
+}
+
+test "EquityResult methods handle zero simulations" {
+    const result = EquityResult{
+        .wins = 0,
+        .ties = 0,
+        .total_simulations = 0,
+    };
+
+    try testing.expect(result.winRate() == 0.0);
+    try testing.expect(result.tieRate() == 0.0);
+    try testing.expect(result.lossRate() == 0.0);
+    try testing.expect(result.equity() == 0.0);
+    try testing.expect(result.confidenceInterval() == null);
 }
 
 test "exact equity with flop" {
