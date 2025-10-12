@@ -15,7 +15,7 @@ High-performance 7-card poker hand evaluator achieving ~3.3ns per hand evaluatio
 Requires Zig 0.15.1 or later.
 
 ```bash
-zig fetch --save "git+https://github.com/lox/zig-poker-eval?ref=v2.0.0"
+zig fetch --save "git+https://github.com/lox/zig-poker-eval?ref=v3.0.0"
 ```
 
 In your `build.zig`:
@@ -94,7 +94,7 @@ const result_flop = try poker.monteCarlo(aa, kk, &flop, 50000, rng, allocator);
 
 ```zig
 // Track how often each hand makes pairs, trips, flushes, etc.
-const detailed = try poker.detailedMonteCarlo(aa, kk, &.{}, 100000, rng, allocator);
+const detailed = try poker.monteCarloWithCategories(aa, kk, &.{}, 100000, rng, allocator);
 
 const hero_cats = detailed.hand1_categories.?;
 std.debug.print("Hero makes:\n", .{});
