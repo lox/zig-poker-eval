@@ -643,18 +643,6 @@ pub fn printComparisonResult(comparison: ComparisonResult) void {
         std.debug.print("\n✓ No significant changes\n", .{});
     }
 
-    if (comparison.missing_benchmarks.items.len > 0) {
-        std.debug.print("\n⚠️  Warning: {d} benchmark(s) in baseline are missing from current results:\n", .{comparison.missing_benchmarks.items.len});
-        for (comparison.missing_benchmarks.items) |missing| {
-            std.debug.print("  {s}/{s}\n", .{ missing.suite, missing.benchmark });
-        }
-        std.debug.print("\nThis could indicate:\n", .{});
-        std.debug.print("  • A filtered run (--filter flag used)\n", .{});
-        std.debug.print("  • A benchmark was removed or renamed\n", .{});
-        std.debug.print("  • A benchmark failed to compile or run\n", .{});
-        std.debug.print("  • An incomplete baseline was saved\n", .{});
-    }
-
     std.debug.print("\n", .{});
     if (comparison.passed) {
         std.debug.print("✅ PASSED\n", .{});
