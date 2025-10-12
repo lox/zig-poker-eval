@@ -33,7 +33,80 @@
 - **Respect the hardware** - Work with CPU strengths (SIMD width, prefetchers, cache hierarchy)
 - **Measurement methodology matters** - Heavy instrumentation caused 3× overhead (Exp 9)
 
-See [detailed learnings](#key-learnings) at the end for full analysis of what works and what doesn't.
+### What Works
+
+1. **Algorithmic parallelism wins** (Exp 6, 10, 12)
+   - SIMD batching delivered 2.66× speedup by processing 4 hands simultaneously
+   - True parallelism beats micro-optimizations every time
+   - Structure-of-arrays layout enables efficient vectorization
+
+2. **Profile-guided optimization delivers** (Exp 12, 13)
+   - Uniprof identified `isFlushHand` consuming 6-7% → vectorization gave 15.2% improvement
+   - `getTop5Ranks` hotspot (5.26%) → lookup table delivered 11.4% improvement
+   - Profiling reveals non-obvious bottlenecks that theory misses
+
+3. **Lookup tables eliminate branching** (Exp 13)
+   - 128KB compile-time table eliminated 3 code paths and iteration
+   - Single memory load beats complex branching logic
+   - Cache-resident tables have minimal overhead
+
+4. **Hardware prefetchers are smart** (Exp 15)
+   - Modern CPUs detect sequential access patterns automatically
+   - Simple code + hardware prefetching > manual prefetch hints
+   - Let the hardware do what it's optimized for
+
+### What Doesn't Work
+
+1. **Memory optimizations when cache-resident** (Exp 1, 2, 15)
+   - 267KB working set fits in L2 cache → no memory pressure
+   - Prefetching and packing add overhead without benefit
+   - Not memory-bound, so memory optimizations fail
+
+2. **Fighting the compiler** (Exp 3, 4, 5, 11)
+   - Zig/LLVM already optimizes nested loops, hashing, inlining
+   - Manual "optimizations" add complexity without gains
+   - Simple code + compiler optimization > manual micro-optimizations
+
+3. **Premature data reuse** (Exp 14)
+   - Struct allocation overhead (256 bytes) > redundant extraction cost (24 ops)
+   - Compiler optimizes small repeated operations efficiently
+   - Cache pressure from larger structures outweighs computational savings
+
+4. **Scaling beyond architecture sweet spot** (Exp 7)
+   - ARM64 NEON optimized for 4-wide operations
+   - 8-wide batching hit register pressure and diminishing returns
+   - Architecture constraints matter more than theoretical benefits
+
+### Core Principles
+
+- **Complexity tax is real**: Implementation overhead often exceeds theoretical gains
+- **Measure everything**: "Obvious" optimizations frequently backfire
+- **Respect the hardware**: Work with CPU strengths (SIMD width, prefetchers, cache hierarchy)
+- **Profile first, optimize second**: Theory-driven experiments (1-5, 11, 14, 15) mostly failed; profile-guided (12, 13) succeeded
+- **Measurement methodology matters**: Heavy instrumentation caused 3× overhead (Exp 9), completely misleading results
+
+### Performance Ceiling
+
+At **3.27 ns/hand (77% of theoretical maximum)**:
+- CHD lookups (~2.0-2.5 ns) are memory-latency bound (L2 cache)
+- Remaining ~0.8 ns is computation
+- Further gains require algorithmic changes (different hash structures, GPU acceleration)
+- Accepting 77% efficiency is often the right engineering tradeoff
+
+---
+
+## Test Environment
+
+**Hardware**: MacBook Air (M1, 2020)
+**CPU**: Apple M1 (8-core, 4 performance + 4 efficiency)
+**Memory**: 16 GB unified memory
+**OS**: macOS 14.2.1 (23C71)
+**Compiler**: Zig 0.14.0
+**Build flags**: `-Doptimize=ReleaseFast -Dcpu=native`
+
+For benchmarking methodology, profiling setup, and optimization workflow, see [performance.md](performance.md).
+
+*All experiments measured with 5 benchmark runs of 100K batches (400K hands) each*
 
 ---
 
@@ -661,95 +734,6 @@ inline for (0..batchSize) |i| {
 - Remaining gap is memory hierarchy physics, not software optimization opportunity
 
 We've definitively reached the **practical performance ceiling** for this algorithmic approach. Further gains require different algorithms (GPU, different hash structures) or accepting 77% of theoretical maximum.
-
----
-
-## Key Learnings
-
-### What Works
-
-1. **Algorithmic parallelism wins** (Exp 6, 10, 12)
-   - SIMD batching delivered 2.66× speedup by processing 4 hands simultaneously
-   - True parallelism beats micro-optimizations every time
-   - Structure-of-arrays layout enables efficient vectorization
-
-2. **Profile-guided optimization delivers** (Exp 12, 13)
-   - Uniprof identified `isFlushHand` consuming 6-7% → vectorization gave 15.2% improvement
-   - `getTop5Ranks` hotspot (5.26%) → lookup table delivered 11.4% improvement
-   - Profiling reveals non-obvious bottlenecks that theory misses
-
-3. **Lookup tables eliminate branching** (Exp 13)
-   - 128KB compile-time table eliminated 3 code paths and iteration
-   - Single memory load beats complex branching logic
-   - Cache-resident tables have minimal overhead
-
-4. **Hardware prefetchers are smart** (Exp 15)
-   - Modern CPUs detect sequential access patterns automatically
-   - Simple code + hardware prefetching > manual prefetch hints
-   - Let the hardware do what it's optimized for
-
-### What Doesn't Work
-
-1. **Memory optimizations when cache-resident** (Exp 1, 2, 15)
-   - 267KB working set fits in L2 cache → no memory pressure
-   - Prefetching and packing add overhead without benefit
-   - Not memory-bound, so memory optimizations fail
-
-2. **Fighting the compiler** (Exp 3, 4, 5, 11)
-   - Zig/LLVM already optimizes nested loops, hashing, inlining
-   - Manual "optimizations" add complexity without gains
-   - Simple code + compiler optimization > manual micro-optimizations
-
-3. **Premature data reuse** (Exp 14)
-   - Struct allocation overhead (256 bytes) > redundant extraction cost (24 ops)
-   - Compiler optimizes small repeated operations efficiently
-   - Cache pressure from larger structures outweighs computational savings
-
-4. **Scaling beyond architecture sweet spot** (Exp 7)
-   - ARM64 NEON optimized for 4-wide operations
-   - 8-wide batching hit register pressure and diminishing returns
-   - Architecture constraints matter more than theoretical benefits
-
-### Core Principles
-
-- **Complexity tax is real**: Implementation overhead often exceeds theoretical gains
-- **Measure everything**: "Obvious" optimizations frequently backfire
-- **Respect the hardware**: Work with CPU strengths (SIMD width, prefetchers, cache hierarchy)
-- **Profile first, optimize second**: Theory-driven experiments (1-5, 11, 14, 15) mostly failed; profile-guided (12, 13) succeeded
-- **Measurement methodology matters**: Heavy instrumentation caused 3× overhead (Exp 9), completely misleading results
-
-### Performance Ceiling
-
-At **3.27 ns/hand (77% of theoretical maximum)**:
-- CHD lookups (~2.0-2.5 ns) are memory-latency bound (L2 cache)
-- Remaining ~0.8 ns is computation
-- Further gains require algorithmic changes (different hash structures, GPU acceleration)
-- Accepting 77% efficiency is often the right engineering tradeoff
-
----
-
-## Test Environment
-
-**Hardware**: MacBook Air (M1, 2020)
-**CPU**: Apple M1 (8-core, 4 performance + 4 efficiency)
-**Memory**: 16 GB unified memory
-**OS**: macOS 14.2.1 (23C71)
-**Compiler**: Zig 0.14.0
-**Build flags**: `-Doptimize=ReleaseFast -Dcpu=native`
-
-For benchmarking methodology, profiling setup, and optimization workflow, see [performance.md](performance.md).
-
-*All experiments measured with 5 benchmark runs of 100K batches (400K hands) each*
-
----
-
-## Proposed Experiments: Exact Equity Optimization
-
-**Current Baseline**: `evaluateEquityShowdown()` bottleneck - 85.6% of runtime
-- **Profiled workload**: AA vs KK preflop = 61,642,944 evaluations (36 matchups × 1.7M boards)
-- **Runtime**: 8.67 seconds total, 994ms in `evaluateEquityShowdown` (85.6%)
-- **Problem**: Called 61M times individually (~16 ns per call)
-- **Proven solution exists**: Experiment 10 pattern (board context + batching = 3.1× faster)
 
 ---
 
@@ -1606,34 +1590,3 @@ Monte Carlo 100K| 100ms-1s  | ±1%      | 0 KB
 **Success Criteria**: O(1) lookup replaces 10K+ iteration Monte Carlo for preflop HU
 
 **Effort**: Small (<1 day) - mostly table generation and indexing logic
-
----
-
-## Implementation Roadmap (Context Path Optimization)
-
-**Phase 1: Quick Win (Exp 20)** - Target: <1 day
-1. Implement SIMD micro-batch for showdown
-2. Benchmark and profile (expect 2-2.5× speedup)
-3. Validate with existing tests
-
-**Phase 2: Deeper Optimization (Exp 21)** - Target: 2-3 days
-1. Extend BoardContext with rpc_base and flush_mask
-2. Refactor evaluateHoleWithContextImpl for incremental RPC
-3. Profile to verify gains and identify remaining bottlenecks
-4. Validate correctness on edge cases
-
-**Phase 3: Optional Polish (Exp 22)** - Target: <1 day
-1. Profile Exp 21 to check division/modulo overhead
-2. Implement bit_to_suit/rank LUTs if beneficial
-3. Final benchmark comparison
-
-**Expected cumulative impact**:
-- **Current**: 37.01 ns/eval
-- **After Exp 20**: 15-18 ns/eval (2.0-2.5× faster)
-- **After Exp 21**: 10-12 ns/eval (3.1-3.7× faster total)
-- **After Exp 22**: 9-11 ns/eval (3.4-4.1× faster total)
-
-**Production benefits**:
-- Faster Monte Carlo equity estimation
-- Improved throughput for simulation-heavy workloads
-- Better latency characteristics for real-time applications
