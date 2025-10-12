@@ -418,11 +418,13 @@ pub const ComparisonResult = struct {
     passed: bool,
     regressions: std.ArrayList(Regression),
     improvements: std.ArrayList(Improvement),
+    missing_benchmarks: std.ArrayList(MissingBenchmark),
     allocator: std.mem.Allocator,
 
     pub fn deinit(self: *ComparisonResult) void {
         self.regressions.deinit(self.allocator);
         self.improvements.deinit(self.allocator);
+        self.missing_benchmarks.deinit(self.allocator);
     }
 };
 
@@ -444,11 +446,17 @@ pub const Improvement = struct {
     unit: []const u8,
 };
 
+pub const MissingBenchmark = struct {
+    suite: []const u8,
+    benchmark: []const u8,
+};
+
 pub fn compareResults(baseline: Result, current: Result, threshold_pct: f64, allocator: std.mem.Allocator) !ComparisonResult {
     var result = ComparisonResult{
         .passed = true,
         .regressions = try std.ArrayList(Regression).initCapacity(allocator, 0),
         .improvements = try std.ArrayList(Improvement).initCapacity(allocator, 0),
+        .missing_benchmarks = try std.ArrayList(MissingBenchmark).initCapacity(allocator, 0),
         .allocator = allocator,
     };
 
@@ -518,6 +526,40 @@ pub fn compareResults(baseline: Result, current: Result, threshold_pct: f64, all
         }
     }
 
+    // Check for benchmarks in baseline that are missing from current results
+    var baseline_suite_iter = baseline.suites.iterator();
+    while (baseline_suite_iter.next()) |baseline_suite_entry| {
+        const baseline_suite_name = baseline_suite_entry.key_ptr.*;
+        const baseline_benchmarks = baseline_suite_entry.value_ptr.*;
+
+        // Check if current has this suite
+        const current_benchmarks = current.suites.get(baseline_suite_name);
+        if (current_benchmarks == null) {
+            // Entire suite is missing - add all benchmarks from that suite
+            var baseline_bench_iter = baseline_benchmarks.iterator();
+            while (baseline_bench_iter.next()) |baseline_bench_entry| {
+                try result.missing_benchmarks.append(allocator, .{
+                    .suite = baseline_suite_name,
+                    .benchmark = baseline_bench_entry.key_ptr.*,
+                });
+            }
+            continue;
+        }
+
+        // Suite exists, check individual benchmarks
+        var baseline_bench_iter = baseline_benchmarks.iterator();
+        while (baseline_bench_iter.next()) |baseline_bench_entry| {
+            const baseline_bench_name = baseline_bench_entry.key_ptr.*;
+
+            if (current_benchmarks.?.get(baseline_bench_name) == null) {
+                try result.missing_benchmarks.append(allocator, .{
+                    .suite = baseline_suite_name,
+                    .benchmark = baseline_bench_name,
+                });
+            }
+        }
+    }
+
     return result;
 }
 
@@ -555,6 +597,18 @@ pub fn printComparisonResult(comparison: ComparisonResult) void {
 
     if (comparison.regressions.items.len == 0 and comparison.improvements.items.len == 0) {
         std.debug.print("\n✓ No significant changes\n", .{});
+    }
+
+    if (comparison.missing_benchmarks.items.len > 0) {
+        std.debug.print("\n⚠️  Warning: {d} benchmark(s) in baseline are missing from current results:\n", .{comparison.missing_benchmarks.items.len});
+        for (comparison.missing_benchmarks.items) |missing| {
+            std.debug.print("  {s}/{s}\n", .{ missing.suite, missing.benchmark });
+        }
+        std.debug.print("\nThis could indicate:\n", .{});
+        std.debug.print("  • A filtered run (--filter flag used)\n", .{});
+        std.debug.print("  • A benchmark was removed or renamed\n", .{});
+        std.debug.print("  • A benchmark failed to compile or run\n", .{});
+        std.debug.print("  • An incomplete baseline was saved\n", .{});
     }
 
     std.debug.print("\n", .{});
