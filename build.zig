@@ -82,6 +82,27 @@ pub fn build(b: *std.Build) void {
     });
     tools_mod.addImport("poker", poker_mod);
 
+    // Aragorn profiler (hot path analysis)
+    const profile_aragorn = b.addExecutable(.{
+        .name = "profile_aragorn",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/profile_aragorn.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .use_llvm = use_llvm,
+    });
+    profile_aragorn.root_module.addImport("card", card_mod);
+    profile_aragorn.root_module.addImport("evaluator", evaluator_mod);
+
+    const profile_aragorn_run = b.addRunArtifact(profile_aragorn);
+    if (b.args) |args| {
+        profile_aragorn_run.addArgs(args);
+    }
+    const profile_aragorn_step = b.step("profile-aragorn", "Profile aragorn hot paths");
+    profile_aragorn_step.dependOn(&profile_aragorn_run.step);
+    b.installArtifact(profile_aragorn);
+
     // Table builder executable (for manual table regeneration)
     const table_builder = b.addExecutable(.{
         .name = "build_tables",
