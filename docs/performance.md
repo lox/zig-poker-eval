@@ -5,20 +5,54 @@
 ### Running Benchmarks
 
 ```bash
-# Hand evaluation
-task bench:eval
+# Run all benchmarks and compare with baseline
+poker-eval bench
 
-# Equity calculations
-task bench:equity
+# Run specific benchmark suite
+poker-eval bench --filter eval      # Hand evaluation only
+poker-eval bench --filter showdown  # Showdown benchmarks only
+poker-eval bench --filter equity    # Equity calculations only
 
-# Showdown evaluation
-task bench:showdown
+# Save new baseline (requires CV < 5%)
+poker-eval bench --baseline
 
-# Custom iterations
-task bench:eval -- --iterations 1000000
+# Use custom regression threshold (default 5%)
+poker-eval bench --threshold 10.0
 
-# Quick validation
-task bench:eval -- --quick --validate
+# Build with optimizations first
+zig build -Doptimize=ReleaseFast
+```
+
+**Available Suites:**
+- `eval` - Hand evaluation (batch processing)
+- `showdown` - Showdown comparison (context vs batched)
+- `equity` - Equity calculations (Monte Carlo & exact)
+- `range` - Range vs range equity
+
+**Output Example:**
+```
+🚀 Running Benchmarks
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Build mode: ReleaseFast
+Version:    v2.9.0-3-g6a1e5ae69524
+
+[1/4] eval
+  • batch_evaluation: 3.04 ns/hand (329.62M/s)
+[2/4] showdown
+  • context_path: 30.13 ns/eval (33.19M/s)
+  • batched: 7.22 ns/eval (138.52M/s)
+[3/4] equity
+  • monte_carlo: 439.69 µs/calc (2.27/s)
+  • exact_turn: 4.30 µs/calc (231.85/s)
+[4/4] range
+  • equity_monte_carlo: 123.30 ms/calc (0.01/s)
+
+📊 Comparison vs Baseline
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✓ No significant changes
+
+✅ PASSED
 ```
 
 ### Results (Apple M1)
@@ -61,34 +95,33 @@ Turn (4 cards)     |       2000  |      3.89 |        0.514
 River (5 cards)    |       1000  |      2.11 |        0.474
 ```
 
-### Benchmark Options
+### Benchmark Methodology
 
-```zig
-pub const BenchmarkOptions = struct {
-    iterations: u32 = 100000,
-    warmup: bool = true,
-    measure_overhead: bool = true,
-    multiple_runs: bool = true,
-    show_comparison: bool = true,
-    verbose: bool = false,
-};
-```
+**Stability Features:**
+- **IQM Statistics**: Drops top/bottom 25% of samples to eliminate outliers
+- **Repeated Measurements**: Same dataset measured multiple times for longer timing windows
+- **Median as Primary Metric**: More robust to skew than mean
+- **Coefficient of Variation (CV)**: Warns if CV ≥ 5% (unstable measurement)
 
-**Methodology:**
-- Default: 100K iterations × 32 hands = 3.2M hands
-- Test corpus: 1.6M random hands
-- Fixed seed: 42 (reproducible results)
-- Cache warmup: 1024 hands + 64K batch processing
-- Multiple runs: 5 runs with median selection
-- Overhead measurement: Dummy evaluator baseline
+**Configuration:**
+- Warmup: 3 runs to stabilize CPU frequency and cache state
+- Normal mode: 10 runs with IQM statistics
+- Baseline mode: 100 runs for maximum confidence
+- Build mode isolation: Separate baselines per optimization level
 
-### Correctness Validation
+**Per-Suite Parameters:**
+- `eval/batch_evaluation`: 100K iterations × 32 hands = 3.2M evaluations per run
+- `showdown/context_path`: 100K cases × 10 repeats = 1M evaluations
+- `showdown/batched`: 100K cases × 10 repeats = 1M evaluations
+- `equity/monte_carlo`: 1K iterations × 10K simulations
+- `equity/exact_turn`: 100 iterations × 50 repeats × 44 rivers
+- `range/equity_monte_carlo`: 10 iterations × 10 repeats × 1K simulations
 
-```bash
-task bench:eval -- --validate
-```
-
-Validates first 16K hands against reference implementation. Requires 100% accuracy.
+**Baseline Management:**
+- Baselines stored in `benchmark-baseline-{mode}.json`
+- Automatically selects correct baseline for build mode
+- Refuses to save if any benchmark has CV ≥ 5%
+- Includes system info for cross-platform comparison warnings
 
 ## Profiling
 
@@ -150,7 +183,7 @@ Interactive flamegraph with search, zoom, and export.
 
 1. **Establish baseline:**
    ```bash
-   task bench:eval -- --quick
+   poker-eval bench --baseline
    ```
 
 2. **Profile to find bottlenecks:**
@@ -165,7 +198,7 @@ Interactive flamegraph with search, zoom, and export.
 
 5. **Benchmark improvement:**
    ```bash
-   task bench:eval
+   poker-eval bench
    ```
 
 6. **Re-profile to verify:**
