@@ -3,7 +3,8 @@
 **Current Baseline (HEAD)**: 3.27 ns/hand (306M hands/s)
 - Single evaluation: ~3.3 ns/hand
 - Batch evaluation (32 hands): 306M hands/second
-- Showdown evaluation: 13.4 ns/eval (batched, board context + SIMD)
+- Showdown evaluation (batched): 13.4 ns/eval (board context + SIMD batch-32)
+- Showdown evaluation (context): 15.4 ns/eval (board context + SIMD batch-2, Exp 20)
 
 **Historical Progress**:
 - Original baseline (pre-SIMD): 11.95 ns/hand
@@ -13,9 +14,10 @@
 - **Total improvement**: 3.65× from original baseline
 
 **Showdown Progress**:
-- Original (context-only path): 41.9 ns/eval
-- After batching (Exp 10): 13.4 ns/eval ← **current**
-- **Total improvement**: 3.1× faster
+- Original (context-only path, scalar): 41.9 ns/eval (Exp 10 baseline)
+- After batch-32 optimization (Exp 10): 13.4 ns/eval
+- Context path optimized (Exp 20): 15.4 ns/eval ← **current single-pair**
+- **Total improvement**: 2.7× faster (context path), 3.1× faster (batched)
 
 ---
 
@@ -1057,3 +1059,317 @@ pub fn exactThreaded(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []c
 3. **Exp 19** (threading) adds final 6-8× multiplier for production performance
 
 **Expected final performance**: AA vs KK exact equity in **110-220ms** (vs current 8.67s), making exact equity **faster than 10,000-iteration Monte Carlo** while maintaining perfect accuracy.
+
+---
+
+## Experiment 20: SIMD Micro-Batch for Showdown Context
+
+**[Context Path]** **✅ Success** | +2.34× faster (37.01→15.4 ns/eval) | Complexity: Low
+
+**Motivation**: Profiling of real-world usage patterns revealed that `evaluateShowdownWithContext` is a critical bottleneck in production workloads. Current implementation performs two serial hand evaluations (hero and villain), missing SIMD and memory-level parallelism benefits. Profile data shows 96.5% of time spent in the two `evaluateHoleWithContextImpl` calls.
+
+**Current Performance** (from profiling):
+- `evaluateShowdownWithContext`: 37.01 ns/eval
+- Batched showdown (Exp 10): 13.4 ns/eval
+- **Gap**: 2.76× slower despite same underlying evaluation work
+
+**Why it's slow**:
+1. **Serial execution**: Two separate CHD lookups with no memory-level parallelism
+2. **Array copies**: Each `evaluateHoleWithContextImpl` copies `suit_masks`, `suit_counts`, `rank_counts`
+3. **Redundant RPC computation**: 13-iteration multiply-add loop runs twice
+4. **No SIMD**: Scalar path misses vectorization benefits of batch path
+
+**Approach**: Reuse existing `evaluateBatch` infrastructure with batch-2 SIMD path:
+
+```zig
+pub fn evaluateShowdownWithContext(ctx: *const BoardContext, hero_hole: card.Hand, villain_hole: card.Hand) i8 {
+    std.debug.assert((hero_hole & villain_hole) == 0);
+    std.debug.assert((hero_hole & ctx.board) == 0);
+    std.debug.assert((villain_hole & ctx.board) == 0);
+
+    // Pack both hands into batch-2 vector for SIMD evaluation
+    const hands = @Vector(2, u64){
+        ctx.board | hero_hole,
+        ctx.board | villain_hole,
+    };
+
+    const ranks = evaluateBatch(2, hands);
+    return if (ranks[0] < ranks[1]) @as(i8, 1)
+           else if (ranks[0] > ranks[1]) @as(i8, -1)
+           else @as(i8, 0);
+}
+```
+
+**Implementation note**: Initial attempt with batch-4 and zero-filled unused lanes (`0, 0`) **failed** - resulted in 47 ns (slower than 37 ns baseline). The zeros cause issues in RPC computation and waste SIMD work. Batch-2 is the correct approach.
+
+**Why it succeeded**:
+- **Zero new code**: Reuses existing `evaluateBatch(2, ...)` implementation (Exp 6)
+- **SIMD benefits**: Vectorized RPC and flush detection process both hands in parallel
+- **Memory-level parallelism**: Overlaps CHD memory latency across lanes
+- **Eliminates overhead**: No array copies, no redundant RPC loops
+- **Optimal batch size**: Batch-2 perfectly fits the two-hand showdown use case
+
+**Benchmark plan**:
+```bash
+# Build profiling tool
+zig build -Doptimize=ReleaseFast
+
+# Baseline measurement (50M showdowns)
+./zig-out/bin/profile_context showdown 50000000
+
+# After optimization
+./zig-out/bin/profile_context showdown 50000000
+
+# Full profile comparison
+task profile:context:showdown
+uniprof analyze /tmp/context_showdown_profile/profile.json
+```
+
+**Benchmark Results** (50M iterations, ReleaseFast, Apple M1):
+- **Baseline (scalar)**: 37.01 ns/eval (27.0M evals/sec)
+- **With batch-2 SIMD**: 15.4 ns/eval (64.9M evals/sec)
+- **Improvement**: **2.34× faster** (21.6 ns reduction)
+- **Consistency**: 3 runs: 15.10, 15.19, 15.41 ns (CV: 1.0%)
+- **Tests**: All 121 tests passed
+
+**Profile Analysis** (uniprof, 50M iterations):
+- `detectFlushSimd`: 5.0% samples (SIMD flush detection)
+- `computeRpcSimd`: 3.2% samples (vectorized RPC computation)
+- `mphf.lookup`: 3.2% samples (CHD table lookups)
+- Balanced distribution - no single bottleneck dominates
+
+**Why it succeeded**:
+1. **Memory-level parallelism**: Two CHD lookups can overlap L2 latency
+2. **SIMD vectorization**: RPC computation vectorized across 2 hands
+3. **Eliminates scalar overhead**: No array copies or redundant 13-iteration loops
+4. **Compiler optimization**: Batch-2 inlines efficiently without register pressure
+
+**Comparison to batched showdown** (Exp 10):
+- Batched showdown (32-pair chunks): 13.4 ns/eval
+- This optimization (single pair): 15.4 ns/eval
+- **Gap**: Only 2 ns (15% overhead for single-pair vs bulk processing)
+- Excellent result - near-optimal for the use case
+
+**Production impact**:
+- Showdown-heavy workloads: **2.34× throughput increase**
+- Monte Carlo equity: Faster per-sample evaluation
+- Simulation pipelines: Improved latency characteristics
+
+**Key insight**: **Batch size matters**. Batch-4 with zeros failed because RPC computation treats zero as a valid hand (zero bits set = zero rank counts). Batch-2 perfectly matches the problem structure without waste.
+
+---
+
+## Experiment 21: Cached RPC Base in BoardContext
+
+**[Context Path]** **Proposed** | Expected +1.3-1.6× faster (15→10-12 ns/eval after Exp 20) | Complexity: Medium
+
+**Motivation**: Profiling revealed `computeBoardRankCounts` consumes 52% of `initBoardContext` time. Each `evaluateHoleWithContextImpl` then recomputes the full 13-iteration RPC loop. By caching the board-only RPC base and flush candidate mask, we can convert O(13) operations to O(1).
+
+**Current bottleneck** (from profiling):
+- `initBoardContext`: 10.38 ns/call
+  - `computeBoardRankCounts`: ~52% of time (13×4=52 bit operations)
+  - Used in RPC computation: 13-iteration multiply-add loop
+
+**Approach**: Extend `BoardContext` with pre-computed data:
+
+```zig
+pub const BoardContext = struct {
+    board: card.Hand,
+    suit_masks: [4]u16,
+    suit_counts: [4]u8,
+    rank_counts: [13]u8,
+    rpc_base: u32,              // NEW: pre-computed board-only RPC
+    suit_flush_mask_ge3: u4,    // NEW: suits with ≥3 cards (flush candidates)
+};
+```
+
+**Computation in `initBoardContext`**:
+```zig
+pub fn initBoardContext(board: card.Hand) BoardContext {
+    const suit_masks = initSuitMasks(board);
+    var suit_counts: [4]u8 = undefined;
+    inline for (0..4) |suit| {
+        suit_counts[suit] = @intCast(@popCount(suit_masks[suit]));
+    }
+    const rank_counts = computeBoardRankCounts(suit_masks);
+
+    // NEW: Compute RPC base once (avoid 13-iteration loop per hole)
+    var rpc_base: u32 = 0;
+    for (rank_counts) |count| {
+        rpc_base = rpc_base * 5 + count;
+    }
+
+    // NEW: Build flush candidate mask (only suits that can reach 5 cards)
+    var flush_mask: u4 = 0;
+    inline for (0..4) |suit| {
+        if (suit_counts[suit] >= 3) {  // Can reach 5 with 2 hole cards
+            flush_mask |= @as(u4, 1) << @intCast(suit);
+        }
+    }
+
+    return .{
+        .board = board,
+        .suit_masks = suit_masks,
+        .suit_counts = suit_counts,
+        .rank_counts = rank_counts,
+        .rpc_base = rpc_base,
+        .suit_flush_mask_ge3 = flush_mask,
+    };
+}
+```
+
+**Optimized `evaluateHoleWithContextImpl`**:
+
+```zig
+fn evaluateHoleWithContextImpl(ctx: *const BoardContext, hole: card.Hand) HandRank {
+    std.debug.assert((hole & ctx.board) == 0);
+
+    // Extract hole cards (at most 2 cards)
+    const bit1: u6 = @intCast(@ctz(hole));
+    const bit2: u6 = @intCast(@ctz(hole & (hole - 1)));
+
+    const suit1: usize = bit1 / 13;
+    const rank1: usize = bit1 % 13;
+    const suit2: usize = bit2 / 13;
+    const rank2: usize = bit2 % 13;
+
+    // Gated flush check: only test suits that can reach 5 cards
+    const suit1_bit = @as(u4, 1) << @intCast(suit1);
+    const suit2_bit = @as(u4, 1) << @intCast(suit2);
+
+    if ((ctx.suit_flush_mask_ge3 & suit1_bit) != 0) {
+        const count = ctx.suit_counts[suit1] + (if (suit1 == suit2) 2 else 1);
+        if (count >= 5) {
+            var mask = ctx.suit_masks[suit1];
+            mask |= @as(u16, 1) << @intCast(rank1);
+            if (suit1 == suit2) mask |= @as(u16, 1) << @intCast(rank2);
+            const pattern = getTop5Ranks(mask);
+            return tables.flushLookup(pattern);
+        }
+    }
+    if (suit1 != suit2 and (ctx.suit_flush_mask_ge3 & suit2_bit) != 0) {
+        if (ctx.suit_counts[suit2] + 1 >= 5) {
+            const mask = ctx.suit_masks[suit2] | (@as(u16, 1) << @intCast(rank2));
+            const pattern = getTop5Ranks(mask);
+            return tables.flushLookup(pattern);
+        }
+    }
+
+    // Incremental RPC: O(1) vs O(13)
+    // Precompute pow5 table: [5^12, 5^11, ..., 5^0]
+    const pow5 = [13]u32{
+        244140625, 48828125, 9765625, 1953125, 390625,
+        78125, 15625, 3125, 625, 125, 25, 5, 1,
+    };
+
+    const rpc = if (rank1 == rank2)
+        ctx.rpc_base + 2 * pow5[rank1]
+    else
+        ctx.rpc_base + pow5[rank1] + pow5[rank2];
+
+    return tables.lookup(rpc);
+}
+```
+
+**Why it should succeed**:
+- **Eliminates 13-iteration loop**: RPC computed incrementally in O(1)
+- **Reduces flush checks**: Only test suits with ≥3 cards (skip 0-2 card suits)
+- **Amortizes cost**: `initBoardContext` slightly slower, but saves work on every hole evaluation
+- **Memory-friendly**: Adds 5 bytes to BoardContext (u32 + u4 + padding)
+
+**Challenges**:
+- **Division/modulo by 13**: May need bit_to_suit[52] and bit_to_rank[52] LUTs for optimal performance
+- **Register pressure**: More variables in hot path (profile to confirm)
+- **Code complexity**: More branches and conditionals
+
+**Benchmark plan**:
+```bash
+# After Experiment 20
+./zig-out/bin/profile_context showdown 50000000  # Baseline with SIMD
+./zig-out/bin/profile_context initBoard 50000000 # Measure initBoardContext overhead
+
+# After Experiment 21
+./zig-out/bin/profile_context showdown 50000000  # With cached RPC
+./zig-out/bin/profile_context initBoard 50000000 # Verify overhead acceptable
+```
+
+**Expected results** (combined with Exp 20):
+- **After Exp 20**: 15-18 ns/eval
+- **After Exp 21**: 10-12 ns/eval (additional 1.3-1.6× speedup)
+- **initBoardContext**: 10.38→12-14 ns (acceptable for amortization)
+
+**Validation**:
+- Existing tests should pass unchanged (same BoardContext API surface)
+- Add specific test for incremental RPC correctness
+- Verify flush gating doesn't miss edge cases (7-card flush, wheel straight)
+
+**Risk assessment**: **Medium**
+- Complexity increase in hot path
+- Potential for off-by-one errors in incremental RPC
+- Division/modulo may still bottleneck (profile-guided decision)
+
+---
+
+## Experiment 22: Bit-to-Suit/Rank Lookup Tables
+
+**[Context Path]** **Proposed** | Expected +1.2× faster (optional polish after Exp 21) | Complexity: Low
+
+**Motivation**: If profiling Experiment 21 reveals division/modulo by 13 as a bottleneck, replace with direct lookup tables.
+
+**Approach**: Replace arithmetic with table lookup:
+
+```zig
+// Compile-time lookup tables (104 bytes total)
+const bit_to_suit = [52]u8{
+    0,0,0,0,0,0,0,0,0,0,0,0,0,  // bits 0-12: clubs
+    1,1,1,1,1,1,1,1,1,1,1,1,1,  // bits 13-25: diamonds
+    2,2,2,2,2,2,2,2,2,2,2,2,2,  // bits 26-38: hearts
+    3,3,3,3,3,3,3,3,3,3,3,3,3,  // bits 39-51: spades
+};
+
+const bit_to_rank = [52]u8{
+    0,1,2,3,4,5,6,7,8,9,10,11,12,  // clubs
+    0,1,2,3,4,5,6,7,8,9,10,11,12,  // diamonds
+    0,1,2,3,4,5,6,7,8,9,10,11,12,  // hearts
+    0,1,2,3,4,5,6,7,8,9,10,11,12,  // spades
+};
+
+// Replace division/modulo:
+const suit1: usize = bit_to_suit[bit1];
+const rank1: usize = bit_to_rank[bit1];
+```
+
+**When to implement**: Only if profiling shows division as bottleneck (>5% samples)
+
+**Expected impact**: 1.1-1.2× if division is bottleneck, negligible if compiler already optimizes
+
+---
+
+## Implementation Roadmap (Context Path Optimization)
+
+**Phase 1: Quick Win (Exp 20)** - Target: <1 day
+1. Implement SIMD micro-batch for showdown
+2. Benchmark and profile (expect 2-2.5× speedup)
+3. Validate with existing tests
+
+**Phase 2: Deeper Optimization (Exp 21)** - Target: 2-3 days
+1. Extend BoardContext with rpc_base and flush_mask
+2. Refactor evaluateHoleWithContextImpl for incremental RPC
+3. Profile to verify gains and identify remaining bottlenecks
+4. Validate correctness on edge cases
+
+**Phase 3: Optional Polish (Exp 22)** - Target: <1 day
+1. Profile Exp 21 to check division/modulo overhead
+2. Implement bit_to_suit/rank LUTs if beneficial
+3. Final benchmark comparison
+
+**Expected cumulative impact**:
+- **Current**: 37.01 ns/eval
+- **After Exp 20**: 15-18 ns/eval (2.0-2.5× faster)
+- **After Exp 21**: 10-12 ns/eval (3.1-3.7× faster total)
+- **After Exp 22**: 9-11 ns/eval (3.4-4.1× faster total)
+
+**Production benefits**:
+- Faster Monte Carlo equity estimation
+- Improved throughput for simulation-heavy workloads
+- Better latency characteristics for real-time applications
