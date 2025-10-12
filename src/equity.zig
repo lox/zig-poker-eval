@@ -277,6 +277,11 @@ fn exactImpl(comptime track_categories: bool, hero_hole_cards: Hand, villain_hol
     const board_hand = try validateBoard(hero_hole_cards, villain_hole_cards, board);
     const cards_needed = 5 - @as(u8, @intCast(board.len));
 
+    // Experiment 26: Use greedy batch cascade for turn→river case (1 card needed)
+    if (cards_needed == 1) {
+        return exactTurnStreaming(track_categories, hero_hole_cards, villain_hole_cards, board_hand);
+    }
+
     // Enumerate all possible board completions
     const board_completions = try enumerateEquityBoardCompletions(hero_hole_cards, villain_hole_cards, board, cards_needed, allocator);
     defer allocator.free(board_completions);
@@ -648,6 +653,131 @@ inline fn binomial(n: u32, k: u32) u32 {
         result = result * (n - i) / (i + 1);
     }
     return result;
+}
+
+// === EXPERIMENT 26: GREEDY BATCH CASCADE FOR EXACT EQUITY ===
+
+/// Find largest power of 2 less than or equal to n
+inline fn floorPow2(n: usize) usize {
+    var p: usize = 1;
+    while ((p << 1) <= n) p <<= 1;
+    return p;
+}
+
+/// Collect remaining single cards (rivers) into stack buffer
+/// Returns count of remaining cards
+fn collectRemainingSingleCards(out: *[52]u64, hero: Hand, vill: Hand, board: Hand) u8 {
+    const used: u64 = hero | vill | board;
+    var count: u8 = 0;
+    inline for (0..52) |i| {
+        const bit = @as(u64, 1) << @intCast(i);
+        if ((used & bit) == 0) {
+            out[count] = bit;
+            count += 1;
+        }
+    }
+    return count;
+}
+
+/// Evaluate a compile-time sized chunk of river cards using SIMD batching
+inline fn evalChunk(
+    comptime N: usize,
+    comptime track_categories: bool,
+    rivers: []const u64,
+    offset: usize,
+    hero: Hand,
+    vill: Hand,
+    board: Hand,
+    wins: *u32,
+    ties: *u32,
+    hand1_categories: *HandCategories,
+    hand2_categories: *HandCategories,
+) void {
+    var hero_batch: @Vector(N, u64) = undefined;
+    var vill_batch: @Vector(N, u64) = undefined;
+
+    inline for (0..N) |i| {
+        const complete_board = board | rivers[offset + i];
+        hero_batch[i] = hero | complete_board;
+        vill_batch[i] = vill | complete_board;
+    }
+
+    const hero_ranks = evaluator.evaluateBatch(N, hero_batch);
+    const vill_ranks = evaluator.evaluateBatch(N, vill_batch);
+
+    inline for (0..N) |i| {
+        if (track_categories) {
+            hand1_categories.addHand(evaluator.getHandCategory(hero_ranks[i]));
+            hand2_categories.addHand(evaluator.getHandCategory(vill_ranks[i]));
+        }
+
+        if (hero_ranks[i] < vill_ranks[i]) {
+            wins.* += 1;
+        } else if (hero_ranks[i] == vill_ranks[i]) {
+            ties.* += 1;
+        }
+    }
+}
+
+/// Exact equity for turn→river using greedy batch cascade (zero SIMD waste)
+/// Processes 44 rivers with optimal batch sizes: 32+8+4 = 44 lanes
+fn exactTurnStreaming(
+    comptime track_categories: bool,
+    hero: Hand,
+    vill: Hand,
+    board: Hand,
+) EquityResult {
+    var rivers: [52]u64 = undefined;
+    const total_u8 = collectRemainingSingleCards(&rivers, hero, vill, board);
+    const total: usize = @intCast(total_u8);
+
+    var wins: u32 = 0;
+    var ties: u32 = 0;
+    var hand1_cat_storage = HandCategories{};
+    var hand2_cat_storage = HandCategories{};
+
+    var offset: usize = 0;
+    var remaining: usize = total;
+
+    // Greedy cascade: process in decreasing power-of-2 chunks
+    while (remaining > 0) {
+        const chunk = floorPow2(remaining);
+        switch (chunk) {
+            32 => evalChunk(32, track_categories, rivers[0..total], offset, hero, vill, board, &wins, &ties, &hand1_cat_storage, &hand2_cat_storage),
+            16 => evalChunk(16, track_categories, rivers[0..total], offset, hero, vill, board, &wins, &ties, &hand1_cat_storage, &hand2_cat_storage),
+            8 => evalChunk(8, track_categories, rivers[0..total], offset, hero, vill, board, &wins, &ties, &hand1_cat_storage, &hand2_cat_storage),
+            4 => evalChunk(4, track_categories, rivers[0..total], offset, hero, vill, board, &wins, &ties, &hand1_cat_storage, &hand2_cat_storage),
+            2 => evalChunk(2, track_categories, rivers[0..total], offset, hero, vill, board, &wins, &ties, &hand1_cat_storage, &hand2_cat_storage),
+            1 => {
+                const complete_board = board | rivers[offset];
+                const hr = evaluator.evaluateHand(hero | complete_board);
+                const vr = evaluator.evaluateHand(vill | complete_board);
+
+                if (track_categories) {
+                    hand1_cat_storage.addHand(evaluator.getHandCategory(hr));
+                    hand2_cat_storage.addHand(evaluator.getHandCategory(vr));
+                }
+
+                if (hr < vr) {
+                    wins += 1;
+                } else if (hr == vr) {
+                    ties += 1;
+                }
+            },
+            else => unreachable,
+        }
+        offset += chunk;
+        remaining -= chunk;
+    }
+
+    return .{
+        .wins = wins,
+        .ties = ties,
+        .total_simulations = @intCast(total),
+        .hand1_categories = if (track_categories) hand1_cat_storage else null,
+        .hand2_categories = if (track_categories) hand2_cat_storage else null,
+        .method = .exact,
+    };
 }
 
 /// Enumerate all possible board completions for exact equity

@@ -1590,3 +1590,131 @@ Monte Carlo 100K| 100ms-1s  | ±1%      | 0 KB
 **Success Criteria**: O(1) lookup replaces 10K+ iteration Monte Carlo for preflop HU
 
 **Effort**: Small (<1 day) - mostly table generation and indexing logic
+
+---
+
+## Experiment 26: Greedy Batch Cascade for Exact Equity
+
+**[Equity]** **✅ Success** | +1350% faster on M1, +3740% faster on x64 | Complexity: Low
+
+**Approach**: Eliminate SIMD lane waste in exact turn→river enumeration (44 rivers) by using a greedy batch cascade (32+8+4 lanes) instead of fixed batch-32 (which requires 64 lanes). Stream river cards directly into SIMD buffers from a stack array to eliminate per-call heap allocation.
+
+**Motivation**: Cross-platform benchmarking revealed a +114% regression on x64 vs M1 baseline (4.49 µs → 9.60 µs) for the `exact_turn` benchmark. Root cause analysis identified:
+1. **SIMD lane waste** (45% overhead): 44 rivers with BATCH_SIZE=32 requires 64 lanes (32+32), wasting 20 lanes (1.45× overhead)
+2. **Allocation overhead**: `enumerateEquityBoardCompletions()` allocates heap memory per call for trivial 1-card enumeration
+3. **Platform differences**: M1's architecture tolerates waste better than x64's more granular SIMD execution
+
+This follows Experiment 7's lesson about "scaling beyond architecture sweet spot" - we're using more SIMD lanes than needed.
+
+**Implementation**: Add specialized path for turn→river (num_cards == 1) with zero-waste batch cascade.
+
+```zig
+// Stack-based river collection (no allocation)
+fn collectRemainingSingleCards(out: *[52]u64, hero: Hand, vill: Hand, board: Hand) u8 {
+    var used: u64 = hero | vill | board;
+    var count: u8 = 0;
+    inline for (0..52) |i| {
+        const bit = @as(u64, 1) << @intCast(i);
+        if ((used & bit) == 0) {
+            out[count] = bit;
+            count += 1;
+        }
+    }
+    return count;
+}
+
+// Compile-time specialized chunk evaluator
+inline fn evalChunk(comptime N: usize, rivers: []const u64, offset: usize,
+                    hero: Hand, vill: Hand, board: Hand,
+                    wins: *u32, ties: *u32) void {
+    var hero_batch: @Vector(N, u64) = undefined;
+    var vill_batch: @Vector(N, u64) = undefined;
+
+    inline for (0..N) |i| {
+        const complete_board = board | rivers[offset + i];
+        hero_batch[i] = hero | complete_board;
+        vill_batch[i] = vill | complete_board;
+    }
+
+    const hero_ranks = evaluator.evaluateBatch(N, hero_batch);
+    const vill_ranks = evaluator.evaluateBatch(N, vill_batch);
+
+    inline for (0..N) |i| {
+        if (hero_ranks[i] < vill_ranks[i]) wins.* += 1
+        else if (hero_ranks[i] == vill_ranks[i]) ties.* += 1;
+    }
+}
+
+// Greedy cascade - zero waste for any N
+fn exactTurnStreaming(hero: Hand, vill: Hand, board: Hand) EquityResult {
+    var rivers: [52]u64 = undefined;
+    const total = collectRemainingSingleCards(&rivers, hero, vill, board);
+
+    var wins: u32 = 0;
+    var ties: u32 = 0;
+    var offset: usize = 0;
+    var remaining: usize = total;
+
+    // Process in decreasing power-of-2 chunks
+    while (remaining > 0) {
+        const chunk = floorPow2(remaining); // Largest power-of-2 <= remaining
+        switch (chunk) {
+            32 => evalChunk(32, rivers[0..total], offset, hero, vill, board, &wins, &ties),
+            16 => evalChunk(16, rivers[0..total], offset, hero, vill, board, &wins, &ties),
+             8 => evalChunk(8,  rivers[0..total], offset, hero, vill, board, &wins, &ties),
+             4 => evalChunk(4,  rivers[0..total], offset, hero, vill, board, &wins, &ties),
+             2 => evalChunk(2,  rivers[0..total], offset, hero, vill, board, &wins, &ties),
+             1 => {
+                 const hr = evaluator.evaluateHand(hero | board | rivers[offset]);
+                 const vr = evaluator.evaluateHand(vill | board | rivers[offset]);
+                 if (hr < vr) wins += 1
+                 else if (hr == vr) ties += 1;
+             },
+            else => unreachable,
+        }
+        offset += chunk;
+        remaining -= chunk;
+    }
+
+    return .{ .wins = wins, .ties = ties, .total = total, .method = .exact };
+}
+```
+
+**Benchmark Results**: 100 runs per benchmark, ReleaseFast
+
+**M1 (MacBook Air, 2020):**
+- **Baseline**: 4.49 µs/calc (223K calcs/sec)
+- **After**: 0.31 µs/calc (3.18M calcs/sec)
+- **Improvement**: 14.5× faster (-93.1%)
+
+**x64 (AMD EPYC 4344P 8-Core):**
+- **Baseline**: 9.60 µs/calc (104K calcs/sec) - was +114% regression vs M1
+- **After**: 0.25 µs/calc (3.99M calcs/sec)
+- **Improvement**: 38.4× faster (-97.4%)
+- **vs M1**: x64 now 24% faster than M1 (reversed regression!)
+
+**Core evaluator performance (no regression):**
+- batch_evaluation: 3.33 ns/hand (unchanged)
+- All 119 tests passing
+
+**Why it succeeded**:
+1. **Zero SIMD waste**: 32+8+4 = 44 lanes (exact match) vs 32+32 = 64 lanes (31% waste)
+2. **No allocation overhead**: Stack buffer (208 bytes) vs heap allocation per call
+3. **x64 benefits more**: Architecture was penalized harder by waste, gains more from optimization
+4. **Profile-guided optimization**: Based on actual cross-platform regression analysis
+5. **Minimal complexity**: ~130 LOC, reuses existing `evaluateBatch` infrastructure
+
+**Key insight**: The optimization that fixed M1's waste **unlocked even more performance on x64**. This validates Experiment 7's lesson about architecture sweet spots - but in reverse! x64's vector units benefit more from perfectly-sized batches than M1's unified architecture.
+
+**Technical details**:
+- **Scope**: Only turn→river (num_cards == 1); other exact paths unchanged
+- **Generality**: Greedy cascade works for any N ≤ 52 (not hardcoded to 44)
+- **Code size**: Switch instantiates 6 batch sizes ({32,16,8,4,2,1}) - already exist in evaluator
+- **Category tracking**: Supported via comptime parameter in `evalChunk`
+- **Type safety**: Explicit `@intCast` for u8→usize conversion per code review
+
+**Lessons learned**:
+- **Profile cross-platform**: Regressions reveal optimization opportunities
+- **Respect SIMD granularity**: Use exactly the lanes needed, no more
+- **Stack > heap**: For small buffers, stack allocation eliminates overhead
+- **Architecture differences matter**: Same optimization, different benefits (14× vs 38×)
