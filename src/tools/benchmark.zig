@@ -656,11 +656,17 @@ pub fn printComparisonResult(comparison: ComparisonResult) void {
 // ============================================================================
 
 const BATCH_SIZE = 32;
+const MULTIWAY_SEATS = 6;
 
 const ShowdownCase = struct {
     ctx: poker.BoardContext,
     hero_hole: u64,
     villain_hole: u64,
+};
+
+const MultiwayCase = struct {
+    ctx: poker.BoardContext,
+    seats: [MULTIWAY_SEATS]poker.Hand,
 };
 
 fn createBatch(hands: []const u64, start_idx: usize) @Vector(BATCH_SIZE, u64) {
@@ -736,6 +742,93 @@ fn timeScalarShowdown(cases: []const ShowdownCase) f64 {
     std.mem.doNotOptimizeAway(checksum);
     const cases_len: f64 = @floatFromInt(cases.len);
     return total_ns / cases_len;
+}
+
+fn generateMultiwayCases(allocator: std.mem.Allocator, iterations: u32, rng: std.Random) ![]MultiwayCase {
+    const cases = try allocator.alloc(MultiwayCase, iterations);
+    errdefer allocator.free(cases);
+
+    for (cases) |*case| {
+        var used: u64 = 0;
+
+        var board: u64 = 0;
+        while (@popCount(board) < 5) {
+            board |= drawUniqueCard(rng, &used);
+        }
+
+        var seats: [MULTIWAY_SEATS]poker.Hand = undefined;
+        inline for (0..MULTIWAY_SEATS) |seat_idx| {
+            var hole: u64 = 0;
+            while (@popCount(hole) < 2) {
+                hole |= drawUniqueCard(rng, &used);
+            }
+            seats[seat_idx] = hole;
+        }
+
+        case.* = .{
+            .ctx = poker.initBoardContext(board),
+            .seats = seats,
+        };
+    }
+
+    return cases;
+}
+
+fn benchMultiwayShowdown(allocator: std.mem.Allocator) !f64 {
+    const iterations = 100000;
+    const repeats = 10;
+
+    var prng = std.Random.DefaultPrng.init(314);
+    const rng = prng.random();
+
+    const cases = try generateMultiwayCases(allocator, iterations, rng);
+    defer allocator.free(cases);
+
+    var timer = try std.time.Timer.start();
+    var checksum: u64 = 0;
+
+    for (0..repeats) |_| {
+        for (cases) |case| {
+            const result = poker.evaluateShowdownMultiway(&case.ctx, &case.seats);
+            checksum +%= result.best_rank;
+            checksum ^= result.winner_mask;
+        }
+    }
+
+    const total_ns: f64 = @floatFromInt(timer.read());
+    std.mem.doNotOptimizeAway(checksum);
+
+    const total_ops: f64 = @floatFromInt(@as(u64, iterations) * repeats);
+    return total_ns / total_ops;
+}
+
+fn benchMultiwayEquityWeights(allocator: std.mem.Allocator) !f64 {
+    const iterations = 100000;
+    const repeats = 10;
+
+    var prng = std.Random.DefaultPrng.init(2718);
+    const rng = prng.random();
+
+    const cases = try generateMultiwayCases(allocator, iterations, rng);
+    defer allocator.free(cases);
+
+    var timer = try std.time.Timer.start();
+    var checksum: f64 = 0.0;
+    var equities: [MULTIWAY_SEATS]f64 = undefined;
+
+    for (0..repeats) |_| {
+        for (cases) |case| {
+            const result = poker.evaluateEquityWeights(&case.ctx, &case.seats, equities[0..]);
+            checksum += @as(f64, @floatFromInt(result.tie_count));
+            for (equities) |eq| checksum += eq;
+        }
+    }
+
+    const total_ns: f64 = @floatFromInt(timer.read());
+    std.mem.doNotOptimizeAway(checksum);
+
+    const total_ops: f64 = @floatFromInt(@as(u64, iterations) * repeats);
+    return total_ns / total_ops;
 }
 
 fn timeBatchedShowdown(cases: []const ShowdownCase) f64 {
@@ -1114,6 +1207,23 @@ pub const ALL_SUITES = [_]BenchmarkSuite{
                 .unit = "ns/eval",
                 .threshold_pct = 0.025, // 2.5% - deterministic
                 .run_fn = benchShowdownBatch,
+            },
+        },
+    },
+    .{
+        .name = "multiway",
+        .benchmarks = &.{
+            .{
+                .name = "showdown_multiway",
+                .unit = "ns/eval",
+                .threshold_pct = 0.03,
+                .run_fn = benchMultiwayShowdown,
+            },
+            .{
+                .name = "equity_weights",
+                .unit = "ns/eval",
+                .threshold_pct = 0.03,
+                .run_fn = benchMultiwayEquityWeights,
             },
         },
     },

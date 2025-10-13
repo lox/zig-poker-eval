@@ -1,6 +1,7 @@
 const std = @import("std");
 const card = @import("card");
 const evaluator = @import("evaluator");
+const deck = @import("deck");
 
 /// Equity calculation and Monte Carlo simulation for poker hands
 /// This module provides head-to-head and multi-way equity calculations
@@ -518,67 +519,30 @@ pub fn multiway(hands: []const Hand, board: []const Hand, simulations: u32, rng:
         result.* = EquityResult{ .wins = 0, .ties = 0, .total_simulations = simulations };
     }
 
-    // Allocate buffers once outside the loop to avoid allocation overhead
-    var final_hands = try allocator.alloc(Hand, num_players);
-    defer allocator.free(final_hands);
+    // Precompute exclusion mask (board + all hole cards)
+    var excluded_mask: Hand = board_hand;
+    for (hands) |hole_cards| {
+        excluded_mask |= hole_cards;
+    }
 
-    var winners: std.ArrayList(usize) = .empty;
-    defer winners.deinit(allocator);
+    var sampler = deck.DeckSampler.init();
 
     for (0..simulations) |_| {
-        // Sample remaining board cards
-        const board_completion = sampleRemainingCards(hands, board_hand, cards_needed, rng);
+        sampler.resetWithMask(excluded_mask);
+        const board_completion = sampler.drawMask(rng, cards_needed);
+        const complete_board = board_hand | board_completion;
+        const ctx = evaluator.initBoardContext(complete_board);
+        const showdown = evaluator.evaluateShowdownMultiway(&ctx, hands);
 
-        // Reuse final_hands buffer
-        for (hands, 0..) |hole_cards, i| {
-            final_hands[i] = hole_cards | board_completion;
-        }
-
-        // Reuse winners ArrayList
-        winners.clearRetainingCapacity();
-        var best_rank: u16 = 65535; // Worst possible rank
-
-        // SIMD batch evaluation for common player counts (2-8)
-        // Falls back to scalar for edge cases (9+ players)
-        if (num_players <= 8) {
-            // Pad to batch size 8 for consistent SIMD evaluation
-            var hands_batch: [8]u64 = [_]u64{0} ** 8;
-            @memcpy(hands_batch[0..num_players], final_hands);
-
-            const hands_vec: @Vector(8, u64) = hands_batch;
-            const ranks_vec = evaluator.evaluateBatch(8, hands_vec);
-            const ranks: [8]u16 = ranks_vec;
-
-            // Find best rank and winners (only process actual players)
-            for (ranks[0..num_players], 0..) |rank, i| {
-                if (rank < best_rank) {
-                    best_rank = rank;
-                    winners.clearRetainingCapacity();
-                    try winners.append(allocator, i);
-                } else if (rank == best_rank) {
-                    try winners.append(allocator, i);
-                }
-            }
+        if (showdown.tie_count == 1) {
+            const winner_index: usize = @intCast(@ctz(showdown.winner_mask));
+            results[winner_index].wins += 1;
         } else {
-            // Scalar fallback for 9+ players
-            for (final_hands, 0..) |hand, i| {
-                const rank = evaluator.evaluateHand(hand);
-                if (rank < best_rank) {
-                    best_rank = rank;
-                    winners.clearRetainingCapacity();
-                    try winners.append(allocator, i);
-                } else if (rank == best_rank) {
-                    try winners.append(allocator, i);
-                }
-            }
-        }
-
-        if (winners.items.len == 1) {
-            results[winners.items[0]].wins += 1;
-        } else {
-            // Split pot
-            for (winners.items) |winner| {
-                results[winner].ties += 1;
+            var mask = showdown.winner_mask;
+            while (mask != 0) {
+                const bit_index: usize = @intCast(@ctz(mask));
+                results[bit_index].ties += 1;
+                mask &= mask - 1;
             }
         }
     }
@@ -608,26 +572,16 @@ pub fn heroVsFieldMonteCarlo(hero_hole_cards: Hand, villain_holes: []const Hand,
 /// Sample remaining cards for equity calculations (unified implementation)
 /// Supports both head-to-head and multiway scenarios
 fn sampleRemainingCards(hands: []const Hand, board: Hand, num_cards: u8, rng: std.Random) Hand {
-    // Calculate used cards bitmask
-    var used_bits: u64 = board;
+    if (num_cards == 0) return 0;
+
+    var exclude_mask: Hand = board;
     for (hands) |hole_cards| {
-        used_bits |= hole_cards;
+        exclude_mask |= hole_cards;
     }
 
-    var sampled_bits: u64 = 0;
-    var cards_sampled: u8 = 0;
-
-    while (cards_sampled < num_cards) {
-        const card_idx = rng.uintLessThan(u8, 52);
-        const card_bit = @as(u64, 1) << @intCast(card_idx);
-
-        if ((used_bits & card_bit) == 0 and (sampled_bits & card_bit) == 0) {
-            sampled_bits |= card_bit;
-            cards_sampled += 1;
-        }
-    }
-
-    return sampled_bits;
+    var sampler = deck.DeckSampler.init();
+    sampler.removeMask(exclude_mask);
+    return sampler.drawMask(rng, num_cards);
 }
 
 /// Evaluate equity showdown between two hands

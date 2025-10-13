@@ -29,7 +29,7 @@ pub fn main() !void {
         std.debug.print("\nAvailable scenarios:\n", .{});
         std.debug.print("  init-board   - Profile initBoardContext (board setup)\n", .{});
         std.debug.print("  showdown     - Profile evaluateShowdownWithContext (heads-up comparison)\n", .{});
-        std.debug.print("  multiway     - Profile evaluateHand (6-max equity calculation)\n", .{});
+        std.debug.print("  multiway     - Profile evaluateShowdownMultiway / evaluateEquityWeights\n", .{});
         std.debug.print("  exact-turn   - Profile exact equity calculation on turn\n", .{});
         std.debug.print("\nDefault iterations: 10,000,000\n", .{});
         return;
@@ -115,26 +115,31 @@ fn profileMultiway(iterations: u32) !void {
     var prng = std.Random.DefaultPrng.init(42);
     const rng = prng.random();
 
-    // Generate 6-max scenario: board + 6 hole card pairs
-    const hands = try generate6MaxHands(1000, rng);
+    // Generate cached 6-max scenarios sharing the same board context
+    const scenarios = try generateMultiwayScenarios(1000, rng);
 
-    std.debug.print("Profiling evaluateHand for 6-max ({} iterations)...\n", .{iterations});
+    std.debug.print("Profiling multiway showdown helpers ({} iterations)...\n", .{iterations});
 
     const start = std.time.nanoTimestamp();
-    var checksum: u64 = 0;
+    var checksum: f64 = 0;
+    var equity_buffer: [MULTIWAY_SEATS]f64 = undefined;
 
     for (0..iterations) |i| {
-        const hand = hands[i % hands.len];
-        const rank = evaluator.evaluateHand(hand);
-        checksum +%= rank;
+        const scenario = scenarios[i % scenarios.len];
+        const result = evaluator.evaluateEquityWeights(&scenario.ctx, &scenario.seats, equity_buffer[0..]);
+        checksum += @as(f64, @floatFromInt(result.best_rank));
+        checksum += @as(f64, @floatFromInt(result.tie_count));
+        inline for (equity_buffer) |eq| {
+            checksum += eq;
+        }
     }
 
     const elapsed = std.time.nanoTimestamp() - start;
-    const ns_per_hand = @as(f64, @floatFromInt(elapsed)) / @as(f64, @floatFromInt(iterations));
+    const ns_per_eval = @as(f64, @floatFromInt(elapsed)) / @as(f64, @floatFromInt(iterations));
 
-    std.debug.print("Time per evaluateHand: {d:.2} ns\n", .{ns_per_hand});
-    std.debug.print("Hands/sec: {d:.2}M\n", .{1000.0 / ns_per_hand});
-    std.debug.print("Checksum: {}\n", .{checksum});
+    std.debug.print("Time per 6-max evaluation: {d:.2} ns\n", .{ns_per_eval});
+    std.debug.print("Evaluations/sec: {d:.2}M\n", .{1000.0 / ns_per_eval});
+    std.debug.print("Checksum: {d:.4}\n", .{checksum});
 }
 
 // Helper: Generate random boards
@@ -206,15 +211,33 @@ fn generateHole(used: *card.Hand, rng: std.Random) card.Hand {
 }
 
 // Helper: Generate 6-max full hands (board + hole)
-fn generate6MaxHands(count: usize, rng: std.Random) ![1000]card.Hand {
-    var hands: [1000]card.Hand = undefined;
-    var rand = rng;
+const MULTIWAY_SEATS = 6;
+
+const MultiwayScenario = struct {
+    ctx: evaluator.BoardContext,
+    seats: [MULTIWAY_SEATS]card.Hand,
+};
+
+fn generateMultiwayScenarios(count: usize, rng: std.Random) ![1000]MultiwayScenario {
+    var scenarios: [1000]MultiwayScenario = undefined;
 
     for (0..count) |i| {
-        hands[i] = evaluator.generateRandomHand(&rand);
+        var used: card.Hand = 0;
+        const board = generateBoard(5, rng);
+        used |= board;
+
+        var seats: [MULTIWAY_SEATS]card.Hand = undefined;
+        inline for (0..MULTIWAY_SEATS) |seat_idx| {
+            seats[seat_idx] = generateHole(&used, rng);
+        }
+
+        scenarios[i] = .{
+            .ctx = evaluator.initBoardContext(board),
+            .seats = seats,
+        };
     }
 
-    return hands;
+    return scenarios;
 }
 
 // Profile exact equity calculation - hot path in exact enumeration

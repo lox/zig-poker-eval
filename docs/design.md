@@ -259,6 +259,25 @@ This design provides:
 - Zero runtime cost (comptime branches eliminated)
 - Backward compatibility (type aliases for old names)
 
+### Multiway Showdown Helpers
+
+- `evaluateShowdownMultiway(board_ctx, seats[])` processes every seat in a single SIMD-driven pass.
+  - Returns `MultiwayResult{ best_rank, winner_mask, tie_count }` so callers can branch-free update win/tie counters.
+  - Winner mask uses one bit per seat (supports up to 64 players; production max is 6) which maps cleanly to table indices.
+  - Internally reuses the existing batch pipeline (`evaluateBatch`) to keep the hot loop identical to the optimized showdown path.
+- `evaluateEquityWeights(board_ctx, seats[], equities[])` builds on the same pass to emit normalized shares (`1 / winner_count`) per seat.
+  - Callers can sum the returned weights for Monte Carlo equity without doing per-seat comparisons or managing temporary rank buffers.
+  - The function returns the underlying `MultiwayResult`, so consumers can still access the best rank or bitmask when they need discrete outcomes.
+
+### Deck Sampling Utilities
+
+- `FULL_DECK` exposes the canonical 52-card bitfield array for anyone who needs direct indexed access.
+- `DeckSampler` provides O(1) swap-remove draws:
+  - `resetWithMask(exclude)` removes known cards (board + holes) once per sample.
+  - `draw()` and `drawMask(count)` deliver single cards or aggregated bitmasks without rebuilding temporary 52-entry arrays.
+  - `removeMask`/`removeCard` allow incremental deck edits for scenarios like card burning or custom dealing rules.
+  - Designed to pair with any RNG that implements `uintLessThan` (e.g. `std.rand`), so external callers can plug in their preferred generator.
+
 ## Component Diagram
 
 ```
