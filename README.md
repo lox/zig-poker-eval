@@ -193,6 +193,40 @@ for (multiway_results, 0..) |result, i| {
 // Player 3: 22.6%  (QQ)
 ```
 
+### Multi-way Showdown Helper
+
+```zig
+// Compute the winning seats in one pass
+const board = poker.parseHand("AsKsQsJs2h");
+const ctx = poker.initBoardContext(board);
+const seats = [_]u64{
+    poker.parseHand("Th3c"), // Royal flush
+    poker.parseHand("AhAd"), // Trips
+    poker.parseHand("KcQc"), // Two pair
+};
+
+const showdown = poker.evaluateShowdownMultiway(&ctx, &seats);
+std.debug.print("Best rank: {}\n", .{showdown.best_rank});
+std.debug.print("Winner mask: 0b{b:0>3}\n", .{showdown.winner_mask});
+std.debug.print("Tie count: {}\n", .{showdown.tie_count});
+// Winner mask 0b001 → seat 0 wins outright
+```
+
+### Per-sample Equity Weights
+
+```zig
+// Normalized equity shares (1/tie_count for winners)
+var equities = [_]f64{ 0, 0, 0 };
+const weights = poker.evaluateEquityWeights(&ctx, &seats, &equities);
+std.debug.print("Winner mask: 0b{b:0>3}\n", .{weights.winner_mask});
+std.debug.print("Equities: {d:.2} {d:.2} {d:.2}\n", .{
+    equities[0], equities[1], equities[2],
+});
+// Output:
+// Winner mask: 0b111
+// Equities: 0.33 0.33 0.33
+```
+
 ### Hero vs Field
 
 ```zig
@@ -229,6 +263,18 @@ const result = try poker.threaded(
 );
 std.debug.print("Equity (10M sims): {d:.4}\n", .{result.equity()});
 // Automatically uses optimal thread count
+```
+
+### Deck Sampling Utilities
+
+```zig
+// Swap-remove deck sampler (no rebuilding 52-card arrays)
+var sampler = poker.DeckSampler.init();
+sampler.removeMask(poker.parseHand("AhAs")); // Exclude known cards
+
+const card1 = sampler.draw(rng);
+const flop = sampler.drawMask(rng, 3); // Draw three cards as a bitmask
+std.debug.print("Remaining cards: {}\n", .{sampler.remainingCards()});
 ```
 
 ## Development

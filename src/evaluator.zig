@@ -323,6 +323,127 @@ pub fn evaluateShowdownBatch(
     }
 }
 
+/// Aggregate result for evaluating multiple seats in a single pass.
+pub const MultiwayResult = struct {
+    best_rank: HandRank,
+    winner_mask: u64,
+    tie_count: u8,
+};
+
+fn multiwayChunk(comptime batch_size: usize, ctx: *const BoardContext, holes: []const card.Hand, base_index: usize, acc: *MultiwayResult) void {
+    std.debug.assert(holes.len == batch_size);
+
+    var hands_array: [batch_size]u64 = undefined;
+    inline for (0..batch_size) |i| {
+        const hole = holes[i];
+        std.debug.assert((hole & ctx.board) == 0);
+        hands_array[i] = ctx.board | hole;
+    }
+
+    const hands_vec: @Vector(batch_size, u64) = hands_array;
+    const ranks = evaluateBatch(batch_size, hands_vec);
+
+    var best_rank = acc.*.best_rank;
+    var winner_mask = acc.*.winner_mask;
+    var tie_count = acc.*.tie_count;
+
+    inline for (0..batch_size) |i| {
+        const global_index = base_index + i;
+        std.debug.assert(global_index < 64);
+        const rank = ranks[i];
+
+        if (rank < best_rank) {
+            best_rank = rank;
+            winner_mask = @as(u64, 1) << @intCast(global_index);
+            tie_count = 1;
+        } else if (rank == best_rank) {
+            winner_mask |= @as(u64, 1) << @intCast(global_index);
+            tie_count += 1;
+        }
+    }
+
+    acc.* = .{
+        .best_rank = best_rank,
+        .winner_mask = winner_mask,
+        .tie_count = tie_count,
+    };
+}
+
+/// Evaluate all seats in `holes` simultaneously, returning the best rank,
+/// a bitmask of winning seats, and the number of winners.
+pub fn evaluateShowdownMultiway(ctx: *const BoardContext, holes: []const card.Hand) MultiwayResult {
+    std.debug.assert(holes.len > 0);
+    std.debug.assert(holes.len <= 64);
+
+    var used_cards: card.Hand = ctx.board;
+    for (holes) |hole| {
+        std.debug.assert(card.countCards(hole) == 2);
+        std.debug.assert((hole & ctx.board) == 0);
+        std.debug.assert((hole & used_cards) == 0);
+        used_cards |= hole;
+    }
+
+    var acc = MultiwayResult{
+        .best_rank = std.math.maxInt(HandRank),
+        .winner_mask = 0,
+        .tie_count = 0,
+    };
+
+    var index: usize = 0;
+    const total = holes.len;
+
+    while (index + 32 <= total) {
+        multiwayChunk(32, ctx, holes[index .. index + 32], index, &acc);
+        index += 32;
+    }
+    if (index + 16 <= total) {
+        multiwayChunk(16, ctx, holes[index .. index + 16], index, &acc);
+        index += 16;
+    }
+    if (index + 8 <= total) {
+        multiwayChunk(8, ctx, holes[index .. index + 8], index, &acc);
+        index += 8;
+    }
+    if (index + 4 <= total) {
+        multiwayChunk(4, ctx, holes[index .. index + 4], index, &acc);
+        index += 4;
+    }
+    if (index + 2 <= total) {
+        multiwayChunk(2, ctx, holes[index .. index + 2], index, &acc);
+        index += 2;
+    }
+    if (index < total) {
+        multiwayChunk(1, ctx, holes[index .. index + 1], index, &acc);
+    }
+
+    std.debug.assert(acc.tie_count > 0);
+    return acc;
+}
+
+/// Evaluate seats and produce per-player normalized equities (1/tie_count for winners).
+/// Returns the same `MultiwayResult` that powers the weight calculation.
+pub fn evaluateEquityWeights(ctx: *const BoardContext, holes: []const card.Hand, equities: []f64) MultiwayResult {
+    std.debug.assert(equities.len >= holes.len);
+
+    const result = evaluateShowdownMultiway(ctx, holes);
+
+    const slice = equities[0..holes.len];
+    @memset(slice, 0.0);
+
+    if (result.tie_count != 0) {
+        const share = 1.0 / @as(f64, @floatFromInt(result.tie_count));
+        var mask = result.winner_mask;
+        while (mask != 0) {
+            const bit_index: usize = @intCast(@ctz(mask));
+            std.debug.assert(bit_index < holes.len);
+            slice[bit_index] = share;
+            mask &= mask - 1;
+        }
+    }
+
+    return result;
+}
+
 // === Scalar RPC Computation ===
 
 fn computeRpcFromHand(hand: u64) u32 {
@@ -934,6 +1055,54 @@ test "board context showdown matches evaluate" {
     try testing.expectEqual(hero_rank, hero_rank_ctx);
     try testing.expectEqual(villain_rank, villain_rank_ctx);
     try testing.expectEqual(showdown, showdown_ctx);
+}
+
+test "evaluateShowdownMultiway identifies unique winner" {
+    const board = card.makeCard(.spades, .ace) |
+        card.makeCard(.spades, .king) |
+        card.makeCard(.spades, .queen) |
+        card.makeCard(.spades, .jack) |
+        card.makeCard(.hearts, .two);
+
+    const ctx = initBoardContext(board);
+    const holes = [_]card.Hand{
+        card.makeCard(.spades, .ten) | card.makeCard(.clubs, .three),
+        card.makeCard(.hearts, .ace) | card.makeCard(.diamonds, .ace),
+        card.makeCard(.clubs, .king) | card.makeCard(.clubs, .queen),
+    };
+
+    const result = evaluateShowdownMultiway(&ctx, &holes);
+    try testing.expectEqual(@as(u8, 1), result.tie_count);
+    try testing.expectEqual(@as(u64, 1), result.winner_mask);
+
+    const best_rank = evaluateHand(board | holes[0]);
+    try testing.expectEqual(best_rank, result.best_rank);
+}
+
+test "evaluateEquityWeights splits pot evenly" {
+    const board = card.makeCard(.spades, .ace) |
+        card.makeCard(.spades, .king) |
+        card.makeCard(.spades, .queen) |
+        card.makeCard(.spades, .jack) |
+        card.makeCard(.spades, .ten);
+
+    const ctx = initBoardContext(board);
+    const holes = [_]card.Hand{
+        card.makeCard(.hearts, .two) | card.makeCard(.diamonds, .three),
+        card.makeCard(.clubs, .four) | card.makeCard(.diamonds, .five),
+        card.makeCard(.hearts, .six) | card.makeCard(.diamonds, .seven),
+    };
+
+    var equities = [_]f64{ 0.0, 0.0, 0.0 };
+    const result = evaluateEquityWeights(&ctx, &holes, &equities);
+
+    try testing.expectEqual(@as(u8, 3), result.tie_count);
+    try testing.expectEqual(@as(u64, 0b111), result.winner_mask);
+
+    const share = 1.0 / 3.0;
+    try testing.expectApproxEqAbs(share, equities[0], 1e-9);
+    try testing.expectApproxEqAbs(share, equities[1], 1e-9);
+    try testing.expectApproxEqAbs(share, equities[2], 1e-9);
 }
 
 test "board context batch showdown matches single" {

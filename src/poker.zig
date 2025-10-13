@@ -23,6 +23,7 @@ pub const equity = @import("equity");
 const analysis = @import("analysis");
 const draws = @import("draws");
 const heads_up_mod = @import("heads_up");
+const deck = @import("deck");
 
 // === CORE TYPES ===
 
@@ -113,6 +114,15 @@ pub const evaluateShowdownWithContext = evaluator.evaluateShowdownWithContext;
 /// Evaluate many showdowns sharing the same board context
 pub const evaluateShowdownBatch = evaluator.evaluateShowdownBatch;
 
+/// Result of evaluating multiple seats simultaneously
+pub const MultiwayResult = evaluator.MultiwayResult;
+
+/// Evaluate all seats at once, returning best rank, winner mask, and tie count
+pub const evaluateShowdownMultiway = evaluator.evaluateShowdownMultiway;
+
+/// Produce per-seat normalized equities for a shared board context
+pub const evaluateEquityWeights = evaluator.evaluateEquityWeights;
+
 // === HAND COMBINATIONS ===
 
 /// Generate all suited combinations for two ranks
@@ -187,6 +197,14 @@ pub const HeadsUpEquity = heads_up_mod.HeadsUpEquity;
 /// Pre-computed equity vs random opponent for all 169 hands
 /// Used as baseline for fast approximations
 pub const PREFLOP_VS_RANDOM = heads_up_mod.PREFLOP_VS_RANDOM;
+
+// === DECK UTILITIES ===
+
+/// Ordered 52-card deck encoded as single-bit masks
+pub const FULL_DECK = deck.FULL_DECK;
+
+/// Swap-remove sampler for fast card draws without replacement
+pub const DeckSampler = deck.DeckSampler;
 
 // === BENCHMARKING ===
 

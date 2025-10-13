@@ -16,6 +16,12 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/card.zig"),
     });
 
+    // Level 1.5: Deck utilities (depends on card)
+    const deck_mod = b.addModule("deck", .{
+        .root_source_file = b.path("src/deck.zig"),
+    });
+    deck_mod.addImport("card", card_mod);
+
     // Level 2: Evaluator module (depends on card)
     const evaluator_mod = b.addModule("evaluator", .{
         .root_source_file = b.path("src/evaluator.zig"),
@@ -34,6 +40,7 @@ pub fn build(b: *std.Build) void {
     });
     equity_mod.addImport("card", card_mod);
     equity_mod.addImport("evaluator", evaluator_mod);
+    equity_mod.addImport("deck", deck_mod);
 
     // Level 4: Range module (depends on card, hand, equity)
     const range_mod = b.addModule("range", .{
@@ -75,6 +82,7 @@ pub fn build(b: *std.Build) void {
     poker_mod.addImport("analysis", analysis_mod);
     poker_mod.addImport("draws", draws_mod);
     poker_mod.addImport("heads_up", heads_up_mod);
+    poker_mod.addImport("deck", deck_mod);
 
     // Tools module (depends on poker for benchmarking)
     const tools_mod = b.addModule("tools", .{
@@ -249,6 +257,18 @@ pub fn build(b: *std.Build) void {
     const run_card_tests = b.addRunArtifact(card_tests);
     test_step.dependOn(&run_card_tests.step);
 
+    // Deck module tests (depends on card)
+    const deck_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/deck.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    deck_tests.root_module.addImport("card", card_mod);
+    const run_deck_tests = b.addRunArtifact(deck_tests);
+    test_step.dependOn(&run_deck_tests.step);
+
     // Evaluator module tests (depends on card)
     const evaluator_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -300,6 +320,7 @@ pub fn build(b: *std.Build) void {
     });
     equity_tests.root_module.addImport("card", card_mod);
     equity_tests.root_module.addImport("evaluator", evaluator_mod);
+    equity_tests.root_module.addImport("deck", deck_mod);
     const run_equity_tests = b.addRunArtifact(equity_tests);
     test_step.dependOn(&run_equity_tests.step);
 
@@ -358,6 +379,7 @@ pub fn build(b: *std.Build) void {
     poker_tests.root_module.addImport("analysis", analysis_mod);
     poker_tests.root_module.addImport("draws", draws_mod);
     poker_tests.root_module.addImport("heads_up", heads_up_mod);
+    poker_tests.root_module.addImport("deck", deck_mod);
     const run_poker_tests = b.addRunArtifact(poker_tests);
     test_step.dependOn(&run_poker_tests.step);
 }
