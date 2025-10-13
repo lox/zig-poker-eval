@@ -15,7 +15,7 @@ High-performance 7-card poker hand evaluator achieving ~3.3ns per hand evaluatio
 Requires Zig 0.15.1 or later.
 
 ```bash
-zig fetch --save "git+https://github.com/lox/zig-poker-eval?ref=v3.0.0"
+zig fetch --save "git+https://github.com/lox/zig-poker-eval?ref=v3.6.1"
 ```
 
 In your `build.zig`:
