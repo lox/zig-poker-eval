@@ -65,5 +65,4 @@ jobs:
           gh release create "${{ steps.version.outputs.tag }}" \
             --title "${{ steps.version.outputs.tag }}" \
             --target "${GITHUB_SHA}" \
-            --verify-tag \
             --generate-notes

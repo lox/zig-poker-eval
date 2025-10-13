@@ -12,9 +12,9 @@ Leading 'v' is tolerated in the version argument.
 EOF
 }
 
-VERSION=""
-README_PATH="README.md"
-ZON_PATH="build.zig.zon"
+version=""
+readme_path="README.md"
+zon_path="build.zig.zon"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -23,16 +23,16 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
     --readme)
-      README_PATH="$2"
+      readme_path="$2"
       shift 2
       ;;
     --zon)
-      ZON_PATH="$2"
+      zon_path="$2"
       shift 2
       ;;
     *)
-      if [[ -z "$VERSION" ]]; then
-        VERSION="$1"
+      if [[ -z "$version" ]]; then
+        version="$1"
         shift
       else
         echo "Unexpected argument: $1" >&2
@@ -42,25 +42,25 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$VERSION" ]]; then
+if [[ -z "$version" ]]; then
   echo "Missing required version argument." >&2
   usage
   exit 1
 fi
 
-VERSION="${VERSION#v}"
-if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "Invalid semantic version: $VERSION" >&2
+version="${version#v}"
+if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "Invalid semantic version: $version" >&2
   exit 1
 fi
 
-if [[ ! -f "$README_PATH" ]]; then
-  echo "README file not found: $README_PATH" >&2
+if [[ ! -f "$readme_path" ]]; then
+  echo "README file not found: $readme_path" >&2
   exit 1
 fi
 
-if [[ ! -f "$ZON_PATH" ]]; then
-  echo "Zig manifest not found: $ZON_PATH" >&2
+if [[ ! -f "$zon_path" ]]; then
+  echo "Zig manifest not found: $zon_path" >&2
   exit 1
 fi
 
@@ -69,7 +69,7 @@ tmp_zon="$(mktemp)"
 
 trap 'rm -f "$tmp_readme" "$tmp_zon"' EXIT
 
-if ! awk -v ver="$VERSION" '
+if ! awk -v ver="$version" '
   BEGIN { count = 0 }
   {
     if ($0 ~ /(ref=v)([0-9]+\.[0-9]+\.[0-9]+)/) {
@@ -89,11 +89,11 @@ if ! awk -v ver="$VERSION" '
       exit 1
     }
   }
-' "$README_PATH" > "$tmp_readme"; then
+' "$readme_path" > "$tmp_readme"; then
   exit 1
 fi
 
-if ! awk -v ver="$VERSION" '
+if ! awk -v ver="$version" '
   BEGIN { count = 0 }
   {
     if ($0 ~ /(\.version[[:space:]]*=[[:space:]]*")[0-9]+\.[0-9]+\.[0-9]+(")/) {
@@ -113,9 +113,9 @@ if ! awk -v ver="$VERSION" '
       exit 1
     }
   }
-' "$ZON_PATH" > "$tmp_zon"; then
+' "$zon_path" > "$tmp_zon"; then
   exit 1
 fi
 
-mv "$tmp_readme" "$README_PATH"
-mv "$tmp_zon" "$ZON_PATH"
+mv "$tmp_readme" "$readme_path"
+mv "$tmp_zon" "$zon_path"
