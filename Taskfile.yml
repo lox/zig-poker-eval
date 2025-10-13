@@ -95,3 +95,8 @@ tasks:
       - src/heads_up_matrix.zig
     cmds:
       - zig build gen-heads-up-matrix -Doptimize={{.ZIG_OPTIMIZE}}
+
+  release:
+    desc: Bump version using svu next --always and trigger release workflow
+    cmds:
+      - ./scripts/release.sh

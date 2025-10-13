@@ -29,66 +29,41 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Full history for svu
+          fetch-depth: 0  # Full history for changelog generation
 
       - uses: cashapp/activate-hermit@v1
 
-      - name: Calculate next version
+      - name: Determine release version
         id: version
         run: |
-          # Get next version using svu
-          NEXT_VERSION=$(svu next)
-          CURRENT_VERSION=$(svu current)
-
-          echo "current=$CURRENT_VERSION" >> $GITHUB_OUTPUT
-          echo "next=$NEXT_VERSION" >> $GITHUB_OUTPUT
-
-          # Check if version needs bumping
-          if [ "$CURRENT_VERSION" = "$NEXT_VERSION" ]; then
-            echo "should_release=false" >> $GITHUB_OUTPUT
-            echo "No version bump needed"
-          else
-            echo "should_release=true" >> $GITHUB_OUTPUT
-            echo "Version bump: $CURRENT_VERSION -> $NEXT_VERSION"
+          set -euo pipefail
+          VERSION=$(sed -n 's/.*\.version\s*=\s*"\([0-9]\+\.[0-9]\+\.[0-9]\+\)".*/\1/p' build.zig.zon | head -n 1)
+          if [ -z "$VERSION" ]; then
+            echo "Failed to read version from build.zig.zon" >&2
+            exit 1
           fi
 
-      - name: Generate release notes
-        if: steps.version.outputs.should_release == 'true'
-        id: release_notes
-        run: |
-          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
-          NEW_VERSION="${{ steps.version.outputs.next }}"
+          TAG="v${VERSION}"
 
-          {
-            echo "## What's Changed"
-            echo ""
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
 
-            if [ -n "$LAST_TAG" ]; then
-              git log $LAST_TAG..HEAD --pretty=format:"- %s (%h)" --reverse
-            else
-              git log --pretty=format:"- %s (%h)" --reverse | head -20
-            fi
-
-            echo ""
-            echo ""
-
-            if [ -n "$LAST_TAG" ]; then
-              echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${LAST_TAG}...$NEW_VERSION"
-            else
-              echo "**Full Changelog**: https://github.com/${{ github.repository }}/commits/$NEW_VERSION"
-            fi
-          } > release_notes.md
-
-          echo "RELEASE_NOTES<<EOF" >> $GITHUB_OUTPUT
-          cat release_notes.md >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          if git rev-parse --verify "$TAG" >/dev/null 2>&1; then
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            echo "Release $TAG already exists"
+          else
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "Preparing release for $TAG"
+          fi
 
       - name: Create GitHub Release
         if: steps.version.outputs.should_release == 'true'
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ steps.version.outputs.next }}
-          name: ${{ steps.version.outputs.next }}
-          body: ${{ steps.release_notes.outputs.RELEASE_NOTES }}
-          draft: false
-          prerelease: false
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "${{ steps.version.outputs.tag }}" \
+            --target "${GITHUB_SHA}" \
+            --verify-tag \
+            --generate-notes
