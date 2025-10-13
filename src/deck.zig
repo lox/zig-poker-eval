@@ -10,24 +10,44 @@ pub const FULL_DECK = blk: {
     break :blk deck;
 };
 
+const INITIAL_POSITIONS = blk: {
+    var pos: [52]u8 = undefined;
+    for (0..52) |i| {
+        pos[i] = @intCast(i);
+    }
+    break :blk pos;
+};
+
+const INVALID_POSITION: u8 = 0xFF;
+
 /// Swap-remove sampler for drawing cards without replacement.
 /// Copies the static FULL_DECK into an internal buffer so we can perform
 /// O(1) draw operations that keep the remaining portion contiguous.
 pub const DeckSampler = struct {
     cards: [52]card.Hand = FULL_DECK,
+    positions: [52]u8 = INITIAL_POSITIONS,
     remaining: u8 = 52,
 
     /// Create a sampler seeded with the full deck.
     pub fn init() DeckSampler {
         return DeckSampler{
             .cards = FULL_DECK,
+            .positions = INITIAL_POSITIONS,
             .remaining = 52,
         };
+    }
+
+    /// Create a sampler and immediately exclude `exclude_mask`.
+    pub fn initWithMask(exclude_mask: card.Hand) DeckSampler {
+        var sampler = DeckSampler.init();
+        if (exclude_mask != 0) sampler.removeMask(exclude_mask);
+        return sampler;
     }
 
     /// Reset to a full deck (no exclusions).
     pub fn reset(self: *DeckSampler) void {
         self.cards = FULL_DECK;
+        self.positions = INITIAL_POSITIONS;
         self.remaining = 52;
     }
 
@@ -52,21 +72,33 @@ pub const DeckSampler = struct {
     /// Remove a single specific card from the deck.
     pub fn removeCard(self: *DeckSampler, card_mask: card.Hand) void {
         std.debug.assert(card.countCards(card_mask) == 1);
-        const maybe_index = findIndex(self, card_mask);
-        std.debug.assert(maybe_index != null);
-        const index = maybe_index.?;
+        const card_index = cardIndex(card_mask);
+        std.debug.assert(self.remaining > 0);
+        const index = self.positions[card_index];
+        std.debug.assert(index != INVALID_POSITION);
 
-        self.remaining -= 1;
-        std.mem.swap(card.Hand, &self.cards[index], &self.cards[self.remaining]);
+        const last_index = self.remaining - 1;
+        if (index != last_index) {
+            swapIndices(self, index, last_index);
+        }
+
+        self.remaining = last_index;
+        self.positions[card_index] = INVALID_POSITION;
     }
 
     /// Draw a single card using swap-remove. `rng` must expose `uintLessThan`.
     pub fn draw(self: *DeckSampler, rng: anytype) card.Hand {
         std.debug.assert(self.remaining > 0);
         const idx = rng.uintLessThan(u8, self.remaining);
-        self.remaining -= 1;
-        std.mem.swap(card.Hand, &self.cards[idx], &self.cards[self.remaining]);
-        return self.cards[self.remaining];
+        const last_index = self.remaining - 1;
+        if (idx != last_index) {
+            swapIndices(self, idx, last_index);
+        }
+
+        const drawn = self.cards[last_index];
+        self.positions[cardIndex(drawn)] = INVALID_POSITION;
+        self.remaining = last_index;
+        return drawn;
     }
 
     /// Draw multiple cards into `out` without replacement.
@@ -96,12 +128,21 @@ pub const DeckSampler = struct {
     }
 };
 
-fn findIndex(sampler: *DeckSampler, target: card.Hand) ?usize {
-    const active = sampler.cards[0..sampler.remaining];
-    for (active, 0..) |card_mask, idx| {
-        if (card_mask == target) return idx;
-    }
-    return null;
+inline fn cardIndex(card_mask: card.Hand) usize {
+    std.debug.assert(card.countCards(card_mask) == 1);
+    return @intCast(@ctz(card_mask));
+}
+
+fn swapIndices(self: *DeckSampler, idx_a: usize, idx_b: usize) void {
+    if (idx_a == idx_b) return;
+
+    const card_a = self.cards[idx_a];
+    const card_b = self.cards[idx_b];
+    self.cards[idx_a] = card_b;
+    self.cards[idx_b] = card_a;
+
+    self.positions[cardIndex(card_a)] = @intCast(idx_b);
+    self.positions[cardIndex(card_b)] = @intCast(idx_a);
 }
 
 const testing = std.testing;
@@ -120,4 +161,24 @@ test "DeckSampler supports exclusions and unique draws" {
     const second = sampler.draw(rng);
     try testing.expect((first & second) == 0);
     try testing.expectEqual(@as(u8, 48), sampler.remainingCards());
+}
+
+test "DeckSampler initWithMask excludes provided cards" {
+    const exclude = card.makeCard(.spades, .ace) |
+        card.makeCard(.hearts, .ace) |
+        card.makeCard(.clubs, .king);
+
+    var prng = std.Random.DefaultPrng.init(1);
+    const rng = prng.random();
+
+    var sampler = DeckSampler.initWithMask(exclude);
+    try testing.expectEqual(@as(u8, 49), sampler.remainingCards());
+
+    // Draw remaining cards and ensure excluded ones never appear.
+    while (sampler.remainingCards() > 0) {
+        const card_bit = sampler.draw(rng);
+        try testing.expect((card_bit & exclude) == 0);
+    }
+
+    try testing.expectEqual(@as(u8, 0), sampler.remainingCards());
 }

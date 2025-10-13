@@ -269,8 +269,7 @@ std.debug.print("Equity (10M sims): {d:.4}\n", .{result.equity()});
 
 ```zig
 // Swap-remove deck sampler (no rebuilding 52-card arrays)
-var sampler = poker.DeckSampler.init();
-sampler.removeMask(poker.parseHand("AhAs")); // Exclude known cards
+var sampler = poker.DeckSampler.initWithMask(poker.parseHand("AhAs"));
 
 const card1 = sampler.draw(rng);
 const flop = sampler.drawMask(rng, 3); // Draw three cards as a bitmask
