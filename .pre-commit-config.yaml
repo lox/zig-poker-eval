@@ -7,6 +7,7 @@ repos:
         stages: [commit-msg]
         args:
           - --types=feat,fix,chore
+          - --subject-min-length=10
           - --body-max-line-length=250
 
   # General file checks
