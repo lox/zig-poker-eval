@@ -272,10 +272,10 @@ This design provides:
 ### Deck Sampling Utilities
 
 - `FULL_DECK` exposes the canonical 52-card bitfield array for anyone who needs direct indexed access.
-- `DeckSampler` provides O(1) swap-remove draws:
-  - `resetWithMask(exclude)` removes known cards (board + holes) once per sample.
+- `DeckSampler` provides O(1) swap-remove draws driven by an internal index map:
+  - `resetWithMask(exclude)` and `initWithMask(exclude)` exclude known cards in O(k).
   - `draw()` and `drawMask(count)` deliver single cards or aggregated bitmasks without rebuilding temporary 52-entry arrays.
-  - `removeMask`/`removeCard` allow incremental deck edits for scenarios like card burning or custom dealing rules.
+  - `removeMask`/`removeCard` update the index map in constant time, enabling cheap reuse across samples.
   - Designed to pair with any RNG that implements `uintLessThan` (e.g. `std.rand`), so external callers can plug in their preferred generator.
 
 ## Component Diagram
