@@ -136,6 +136,25 @@ pub fn build(b: *std.Build) void {
     const build_tables_step = b.step("build-tables", "Generate L1-optimized lookup tables");
     build_tables_step.dependOn(&build_tables.step);
 
+    // Experiment 27: Perfect magic finder
+    const magic_finder = b.addExecutable(.{
+        .name = "find-perfect-magic",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tools/find_perfect_magic.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+        .use_llvm = use_llvm,
+    });
+    b.installArtifact(magic_finder);
+
+    const run_magic_finder = b.addRunArtifact(magic_finder);
+    if (b.args) |args| {
+        run_magic_finder.addArgs(args);
+    }
+    const magic_finder_step = b.step("find-magic", "Experiment 27: Search for perfect magic number (use -- --threads N --timeout H)");
+    magic_finder_step.dependOn(&run_magic_finder.step);
+
     // Main CLI executable
     const exe = b.addExecutable(.{
         .name = "poker-eval",

@@ -96,6 +96,14 @@ tasks:
     cmds:
       - zig build gen-heads-up-matrix -Doptimize={{.ZIG_OPTIMIZE}}
 
+  exp27:find-magic:
+    desc: "Experiment 27: Search for perfect magic number (use THREADS=N TIMEOUT=H, default 30 days)"
+    vars:
+      THREADS: '{{.THREADS | default "16"}}'
+      TIMEOUT: '{{.TIMEOUT | default "720"}}'
+    cmds:
+      - zig build find-magic -Doptimize=ReleaseFast -- --threads={{.THREADS}} --timeout={{.TIMEOUT}}
+
   release:
     desc: Bump version using svu next --always and trigger release workflow
     cmds:
