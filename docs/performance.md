@@ -34,66 +34,71 @@ zig build -Doptimize=ReleaseFast
 🚀 Running Benchmarks
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Build mode: ReleaseFast
-Version:    v2.9.0-3-g6a1e5ae69524
+Version:    v3.6.1-0-g25f53880dfc3
+Mode:       Baseline (100 runs per benchmark)
 
-[1/4] eval
-  • batch_evaluation: 3.04 ns/hand (329.62M/s)
-[2/4] showdown
-  • context_path: 30.13 ns/eval (33.19M/s)
-  • batched: 7.22 ns/eval (138.52M/s)
-[3/4] equity
-  • monte_carlo: 439.69 µs/calc (2.27/s)
-  • exact_turn: 4.30 µs/calc (231.85/s)
-[4/4] range
-  • equity_monte_carlo: 123.30 ms/calc (0.01/s)
+[1/6] eval
+  • batch_evaluation: 2.00 ns/hand (500.52M/s)
+  • single_evaluation: 4.89 ns/hand (204.71M/s)
+[2/6] context
+  • init_board: 6.38 ns/call (6.38 ns/call)
+  • hole_evaluation: 4.97 ns/eval (201.02M/s)
+[3/6] showdown
+  • context_path: 11.01 ns/eval (90.86M/s)
+  • batched: 4.54 ns/eval (220.30M/s)
+[4/6] multiway
+  • showdown_multiway: 24.86 ns/eval (40.22M/s)
+  • equity_weights: 34.14 ns/eval (29.29M/s)
+[5/6] equity
+  • monte_carlo: 282.02 µs/calc (3.55K/s)
+  • exact_turn: 0.20 µs/calc (4.99M/s)
+[6/6] range
+  • equity_monte_carlo: 0.08 ms/calc (11.94K/s)
 
-📊 Comparison vs Baseline
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-✓ No significant changes
-
-✅ PASSED
+✅ Baseline saved to benchmark-baseline-release-fast.json
 ```
 
-### Results (Apple M1)
+### Results (MacBook Pro M5)
 
-**Single vs Batch:**
-```
-Batch Size | ns/hand | Million hands/sec | Speedup
------------|---------|-------------------|--------
-         1 |    8.67 |             115.4 |   1.00x
-        32 |    4.46 |             224.3 |   1.94x
-```
+All measurements below use `zig build bench --baseline` on October 30, 2025 with `-Doptimize=ReleaseFast`. Throughput conversions use 1,000/ns and round to the nearest integer.
 
-**Batch Size Scaling:**
-```
-Batch Size | ns/hand | Million hands/sec | Speedup
------------|---------|-------------------|--------
-         2 |    7.22 |             138.5 |   1.20x
-         4 |    6.07 |             164.8 |   1.43x
-         8 |    5.44 |             183.8 |   1.59x
-        16 |    4.85 |             206.2 |   1.79x
-        32 |    4.46 |             224.3 |   1.94x
-        64 |    4.31 |             232.0 |   2.01x
-```
+**Evaluator**
 
-**Showdown Benchmark:**
-```
-Scenario         | ns/eval | Comparisons/sec | Speedup
------------------|---------|-----------------|--------
-Context path     |  41.92  |       23.9M     |  1.00x
-Batched (32 max) |  13.42  |       74.5M     |  3.12x
-```
+| Metric | Time (ns/hand) | Throughput |
+| --- | --- | --- |
+| Single evaluation (scalar) | 4.89 | 205M hands/s |
+| Batch evaluation (32 hands) | 2.00 | 501M hands/s |
 
-**Equity Calculations:**
-```
-Scenario           | Simulations | Time (ms) | Sims/sec (M)
--------------------|-------------|-----------|-------------
-Preflop (no board) |      10000  |     12.45 |        0.803
-Flop (3 cards)     |       5000  |      8.23 |        0.608
-Turn (4 cards)     |       2000  |      3.89 |        0.514
-River (5 cards)    |       1000  |      2.11 |        0.474
-```
+**Context Setup**
+
+| Metric | Time | Throughput |
+| --- | --- | --- |
+| init_board | 6.38 ns/call | 157M calls/s |
+| hole_evaluation | 4.97 ns/eval | 201M eval/s |
+
+**Showdown**
+
+| Metric | Time | Throughput |
+| --- | --- | --- |
+| context_path | 11.01 ns/eval | 91M eval/s |
+| batched (32 lanes) | 4.54 ns/eval | 220M eval/s |
+
+**Multiway**
+
+| Metric | Time | Throughput |
+| --- | --- | --- |
+| showdown_multiway | 24.86 ns/eval | 40M eval/s |
+| equity_weights | 34.14 ns/eval | 29M eval/s |
+
+**Equity and Range**
+
+| Metric | Time | Throughput |
+| --- | --- | --- |
+| monte_carlo | 282.02 µs/calc | 3.55K calc/s |
+| exact_turn | 0.20 µs/calc | 5.0M calc/s |
+| range equity_monte_carlo | 0.0837 ms/calc | 11.9K calc/s |
 
 ### Benchmark Methodology
 
@@ -257,7 +262,7 @@ uniprof visualize /tmp/after.json
 **macOS:**
 - Uniprof uses native Instruments sampling
 - No special performance modes needed on Apple Silicon
-- Thermal throttling rarely an issue with M1 efficiency
+- Thermal throttling rarely an issue with M5 efficiency cores
 
 **Linux:**
 - Uniprof uses `perf`
@@ -282,7 +287,7 @@ uniprof visualize /tmp/after.json
 - Solution: Fewer background processes
 - Check: `pmset -g thermlog` for thermal state
 
-**Performance below target (~3.3ns/hand on M1):**
+**Performance below target (~2.0ns/hand on MacBook Pro M5):**
 - Wrong build flags (not using ReleaseFast)
 - Debug build accidentally used
 - Flush-heavy test data (should be < 0.4%)
