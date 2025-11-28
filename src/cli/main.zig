@@ -288,7 +288,8 @@ const EvalCommand = struct {
         ansi.printGreen("Hand category: {}\n", .{category});
 
         // Show relative strength (lower rank = stronger)
-        const strength_pct = (7462.0 - @as(f64, @floatFromInt(rank))) / 7462.0 * 100.0;
+        const max_rank: f64 = @floatFromInt(poker.features.HandFeatures.MAX_RANK);
+        const strength_pct = (max_rank - @as(f64, @floatFromInt(rank))) / max_rank * 100.0;
         ansi.printCyan("Strength:      {d:.1}% (stronger than {d:.1}% of hands)\n", .{ strength_pct, strength_pct });
 
         if (opts.verbose) {
