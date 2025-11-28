@@ -184,6 +184,10 @@ pub const heroVsFieldMonteCarlo = equity.heroVsFieldMonteCarlo;
 /// Example: equityVsRandom([As,Ks], [Kd,7c,2s], 10000, rng, allocator)
 pub const equityVsRandom = equity.equityVsRandom;
 
+/// Hand strength percentile - what % of opponent hands we beat at showdown
+/// Example: handStrength([Ah,Kh], [Qh,Jh,2h,7c,3d], allocator)
+pub const handStrength = equity.handStrength;
+
 // === HEADS-UP EQUITY TABLES ===
 
 /// Represents one of the 169 unique starting hands in Texas Hold'em

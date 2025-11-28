@@ -627,6 +627,70 @@ pub fn equityVsRandom(hero_hole_cards: Hand, board: []const Hand, simulations: u
     };
 }
 
+/// Exhaustively compute what fraction of possible opponent hands we beat.
+/// No runout - just current board state. Returns win rate + tie rate.
+///
+/// Example: On river with made flush, what % of hands do we beat?
+/// @param hero_hole_cards Combined bitmask of hero's exactly 2 hole cards
+/// @param board Array of community cards (must be 5 cards for meaningful result)
+/// @param allocator Memory allocator (unused but kept for API compatibility)
+pub fn handStrength(hero_hole_cards: Hand, board: []const Hand, allocator: std.mem.Allocator) !EquityResult {
+    _ = allocator;
+
+    if (card.countCards(hero_hole_cards) != 2) return error.InvalidHeroHoleCards;
+    if (board.len != 5) return error.InvalidBoardLength;
+
+    var board_hand: Hand = 0;
+    for (board) |board_card| {
+        board_hand |= board_card;
+    }
+    if (card.countCards(board_hand) != 5) return error.DuplicateBoardCards;
+    if ((board_hand & hero_hole_cards) != 0) return error.BoardConflictsWithHeroHoleCards;
+
+    const used_mask = hero_hole_cards | board_hand;
+
+    var available_cards: [52]u8 = undefined;
+    var available_count: u8 = 0;
+    for (0..52) |i| {
+        const card_bit = @as(u64, 1) << @intCast(i);
+        if ((card_bit & used_mask) == 0) {
+            available_cards[available_count] = @intCast(i);
+            available_count += 1;
+        }
+    }
+
+    const ctx = evaluator.initBoardContext(board_hand);
+    const hero_rank = evaluator.evaluateHoleWithContext(&ctx, hero_hole_cards);
+
+    var wins: u32 = 0;
+    var ties: u32 = 0;
+    var total: u32 = 0;
+
+    for (0..available_count - 1) |v1| {
+        for (v1 + 1..available_count) |v2| {
+            const villain_card1 = @as(u64, 1) << @intCast(available_cards[v1]);
+            const villain_card2 = @as(u64, 1) << @intCast(available_cards[v2]);
+            const villain_hole = villain_card1 | villain_card2;
+
+            const villain_rank = evaluator.evaluateHoleWithContext(&ctx, villain_hole);
+
+            if (hero_rank < villain_rank) {
+                wins += 1;
+            } else if (hero_rank == villain_rank) {
+                ties += 1;
+            }
+            total += 1;
+        }
+    }
+
+    return EquityResult{
+        .wins = wins,
+        .ties = ties,
+        .total_simulations = total,
+        .method = .exact,
+    };
+}
+
 /// Multi-way Monte Carlo equity calculation
 /// @param hands Array of hole card bitmasks (each must contain exactly 2 cards)
 pub fn multiway(hands: []const Hand, board: []const Hand, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) ![]EquityResult {
@@ -1447,6 +1511,63 @@ test "equityVsRandom preflop AA should be ~85%" {
 
     try testing.expect(result.equity() > 0.82);
     try testing.expect(result.equity() < 0.88);
+}
+
+test "handStrength nut flush beats almost everything" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const akh = card.makeCard(.hearts, .ace) | card.makeCard(.hearts, .king);
+    const board = [_]Hand{
+        card.makeCard(.hearts, .queen),
+        card.makeCard(.hearts, .jack),
+        card.makeCard(.hearts, .two),
+        card.makeCard(.clubs, .seven),
+        card.makeCard(.diamonds, .three),
+    };
+
+    const result = try handStrength(akh, &board, allocator);
+
+    try testing.expect(result.total_simulations == 990);
+    try testing.expect(result.winRate() > 0.98);
+    try testing.expect(result.method == .exact);
+}
+
+test "handStrength top pair on dry board" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const ak = card.makeCard(.spades, .ace) | card.makeCard(.hearts, .king);
+    const board = [_]Hand{
+        card.makeCard(.diamonds, .ace),
+        card.makeCard(.clubs, .seven),
+        card.makeCard(.hearts, .two),
+        card.makeCard(.spades, .nine),
+        card.makeCard(.diamonds, .three),
+    };
+
+    const result = try handStrength(ak, &board, allocator);
+
+    try testing.expect(result.total_simulations == 990);
+    try testing.expect(result.winRate() > 0.70);
+    try testing.expect(result.winRate() < 0.90);
+}
+
+test "handStrength requires 5 board cards" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const aa = card.makeCard(.clubs, .ace) | card.makeCard(.diamonds, .ace);
+    const board = [_]Hand{
+        card.makeCard(.spades, .seven),
+        card.makeCard(.hearts, .eight),
+        card.makeCard(.diamonds, .nine),
+    };
+
+    try testing.expectError(error.InvalidBoardLength, handStrength(aa, &board, allocator));
 }
 
 // Ensure all tests in this module are discovered
