@@ -30,7 +30,7 @@ pub const HISTOGRAM_BINS: usize = 16;
 /// to get meaningful equity-based features for partial boards.
 pub const HandFeatures = struct {
     // Strength (both raw and normalized for flexibility)
-    rank: u16, // raw evaluator rank (1 = royal flush, 7462 = 7-high); MAX_RANK if < 7 cards
+    rank: u16, // raw evaluator rank (0 = royal flush, MAX_RANK = 7-high); MAX_RANK if < 7 cards
     strength: f32, // normalized [0.0 = worst, 1.0 = nuts]; 0.0 if < 7 cards
 
     // Made hand category
@@ -56,7 +56,9 @@ pub const HandFeatures = struct {
     has_equity_histogram: bool, // false if not computed
 
     /// Maximum possible hand rank (worst hand = highest number)
-    pub const MAX_RANK: u16 = 7462;
+    /// With CATEGORY_STEP=4096: high_card = category 8, max combo index = C(13,5)-1 = 1286
+    /// So max rank = 8*4096 + 1286 = 34054
+    pub const MAX_RANK: u16 = 8 * 4096 + 1286;
 
     /// Extract features for a hand on a given board. No allocation.
     /// @param hero_hole Combined hole cards bitmask (exactly 2 cards)
@@ -79,10 +81,9 @@ pub const HandFeatures = struct {
             made_category = @enumFromInt(@intFromEnum(evaluator.getHandCategory(rank)));
         }
 
-        // Normalize strength: rank 1 = 1.0, rank 7462 = 0.0
-        // Handle edge case where rank might be 0 or larger than MAX_RANK
-        const clamped_rank = if (rank < 1) 1 else if (rank > MAX_RANK) MAX_RANK else rank;
-        const strength = 1.0 - (@as(f32, @floatFromInt(clamped_rank - 1)) / @as(f32, @floatFromInt(MAX_RANK - 1)));
+        // Normalize strength: rank 0 = 1.0, rank MAX_RANK = 0.0
+        const clamped_rank = if (rank > MAX_RANK) MAX_RANK else rank;
+        const strength = 1.0 - (@as(f32, @floatFromInt(clamped_rank)) / @as(f32, @floatFromInt(MAX_RANK)));
 
         // Extract draw information using the no-alloc summary function
         const hole_cards = splitHoleCards(hero_hole);
@@ -432,7 +433,7 @@ test "extract with equity histogram" {
 test "strength normalization" {
     // Royal flush should have strength close to 1.0
     const royal = card.parseCard("As") | card.parseCard("Ks");
-    const board = [_]card.Hand{
+    const royal_board = [_]card.Hand{
         card.parseCard("Qs"),
         card.parseCard("Js"),
         card.parseCard("Ts"),
@@ -440,10 +441,30 @@ test "strength normalization" {
         card.parseCard("3d"),
     };
 
-    const features = HandFeatures.extract(royal, &board);
+    const royal_features = HandFeatures.extract(royal, &royal_board);
 
-    try testing.expect(features.made_category == .straight_flush);
-    try testing.expect(features.strength > 0.99);
+    try testing.expect(royal_features.made_category == .straight_flush);
+    try testing.expect(royal_features.strength > 0.99);
+
+    // Pair should have valid strength (not clamped incorrectly)
+    const pair_hand = card.parseCard("Ah") | card.parseCard("Ad");
+    const pair_board = [_]card.Hand{
+        card.parseCard("Ks"),
+        card.parseCard("Qc"),
+        card.parseCard("Jh"),
+        card.parseCard("5d"),
+        card.parseCard("2c"),
+    };
+
+    const pair_features = HandFeatures.extract(pair_hand, &pair_board);
+
+    try testing.expect(pair_features.made_category == .pair);
+    // Pair of aces should have positive strength, not near 0
+    try testing.expect(pair_features.strength > 0.1);
+    try testing.expect(pair_features.strength < 0.5);
+    // Rank should be valid for pair category (category 7 = 7*4096 range)
+    try testing.expect(pair_features.rank >= 7 * 4096);
+    try testing.expect(pair_features.rank < 8 * 4096);
 }
 
 test "split hole cards" {
