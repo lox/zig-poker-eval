@@ -238,77 +238,79 @@ fn computeEquityHistogram(
         return histogram;
     }
 
-    // For each remaining card as potential villain hole card
-    const cards_to_sample = @min(remaining_count, 20); // Limit sampling for performance
+    // Randomly sample villain hands and run Monte Carlo simulations
+    // We sample villain_samples random villain hands to get a representative distribution
+    const villain_samples: u32 = @min(200, @as(u32, remaining_count) * (@as(u32, remaining_count) - 1) / 2);
     var total_samples: u32 = 0;
+    const cards_needed = 5 - @as(u8, @intCast(board.len));
 
-    for (0..cards_to_sample) |card_idx| {
-        const villain_card1 = remaining_cards[card_idx];
+    for (0..villain_samples) |_| {
+        // Randomly select two distinct cards for villain
+        const idx1 = rng.uintLessThan(u8, remaining_count);
+        var idx2 = rng.uintLessThan(u8, remaining_count - 1);
+        if (idx2 >= idx1) idx2 += 1;
 
-        for (card_idx + 1..remaining_count) |card_idx2| {
-            const villain_card2 = remaining_cards[card_idx2];
-            const villain_hole = villain_card1 | villain_card2;
+        const villain_card1 = remaining_cards[idx1];
+        const villain_card2 = remaining_cards[idx2];
+        const villain_hole = villain_card1 | villain_card2;
 
-            // Run Monte Carlo for this matchup
-            var wins: u32 = 0;
-            var ties: u32 = 0;
-            var sims: u32 = 0;
+        // Run Monte Carlo for this matchup
+        var wins: u32 = 0;
+        var ties: u32 = 0;
+        var sims: u32 = 0;
 
-            for (0..simulations_per_card) |_| {
+        for (0..simulations_per_card) |_| {
+            if (cards_needed == 0) {
+                // River - direct evaluation
+                const hero_full = hero_hole | board_mask;
+                const villain_full = villain_hole | board_mask;
+                const hero_rank = evaluator.evaluateHand(hero_full);
+                const villain_rank = evaluator.evaluateHand(villain_full);
+
+                if (hero_rank < villain_rank) {
+                    wins += 1;
+                } else if (hero_rank == villain_rank) {
+                    ties += 1;
+                }
+            } else {
                 // Sample remaining board cards
-                const cards_needed = 5 - @as(u8, @intCast(board.len));
-                if (cards_needed == 0) {
-                    // River - direct evaluation
-                    const hero_full = hero_hole | board_mask;
-                    const villain_full = villain_hole | board_mask;
-                    const hero_rank = evaluator.evaluateHand(hero_full);
-                    const villain_rank = evaluator.evaluateHand(villain_full);
+                var sampled_board: card.Hand = 0;
+                var sampled_count: u8 = 0;
+                const exclude_mask = used_mask | villain_hole;
 
-                    if (hero_rank < villain_rank) {
-                        wins += 1;
-                    } else if (hero_rank == villain_rank) {
-                        ties += 1;
-                    }
-                } else {
-                    // Sample remaining board cards
-                    var sampled_board: card.Hand = 0;
-                    var sampled_count: u8 = 0;
-                    const exclude_mask = used_mask | villain_hole;
-
-                    while (sampled_count < cards_needed) {
-                        const idx = rng.uintLessThan(u8, 52);
-                        const card_bit = @as(card.Hand, 1) << @intCast(idx);
-                        if ((card_bit & exclude_mask) == 0 and (card_bit & sampled_board) == 0) {
-                            sampled_board |= card_bit;
-                            sampled_count += 1;
-                        }
-                    }
-
-                    const complete_board = board_mask | sampled_board;
-                    const hero_full = hero_hole | complete_board;
-                    const villain_full = villain_hole | complete_board;
-                    const hero_rank = evaluator.evaluateHand(hero_full);
-                    const villain_rank = evaluator.evaluateHand(villain_full);
-
-                    if (hero_rank < villain_rank) {
-                        wins += 1;
-                    } else if (hero_rank == villain_rank) {
-                        ties += 1;
+                while (sampled_count < cards_needed) {
+                    const idx = rng.uintLessThan(u8, 52);
+                    const card_bit = @as(card.Hand, 1) << @intCast(idx);
+                    if ((card_bit & exclude_mask) == 0 and (card_bit & sampled_board) == 0) {
+                        sampled_board |= card_bit;
+                        sampled_count += 1;
                     }
                 }
-                sims += 1;
-            }
 
-            // Calculate equity for this matchup
-            if (sims > 0) {
-                const equity = (@as(f32, @floatFromInt(wins)) + @as(f32, @floatFromInt(ties)) * 0.5) /
-                    @as(f32, @floatFromInt(sims));
+                const complete_board = board_mask | sampled_board;
+                const hero_full = hero_hole | complete_board;
+                const villain_full = villain_hole | complete_board;
+                const hero_rank = evaluator.evaluateHand(hero_full);
+                const villain_rank = evaluator.evaluateHand(villain_full);
 
-                // Bin the equity (0.0-1.0 -> 0-15)
-                const bin_idx = @min(@as(usize, @intFromFloat(equity * @as(f32, HISTOGRAM_BINS))), HISTOGRAM_BINS - 1);
-                histogram[bin_idx] += 1.0;
-                total_samples += 1;
+                if (hero_rank < villain_rank) {
+                    wins += 1;
+                } else if (hero_rank == villain_rank) {
+                    ties += 1;
+                }
             }
+            sims += 1;
+        }
+
+        // Calculate equity for this matchup
+        if (sims > 0) {
+            const equity = (@as(f32, @floatFromInt(wins)) + @as(f32, @floatFromInt(ties)) * 0.5) /
+                @as(f32, @floatFromInt(sims));
+
+            // Bin the equity (0.0-1.0 -> 0-15)
+            const bin_idx = @min(@as(usize, @intFromFloat(equity * @as(f32, HISTOGRAM_BINS))), HISTOGRAM_BINS - 1);
+            histogram[bin_idx] += 1.0;
+            total_samples += 1;
         }
     }
 

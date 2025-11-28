@@ -546,22 +546,23 @@ fn getStraightOutsMask(hole_cards: [2]card.Hand, community_cards: []const card.H
     var start_rank: u8 = 0;
     while (start_rank <= 9) : (start_rank += 1) {
         var count: u8 = 0;
-        var missing_ranks: std.ArrayList(u8) = .empty;
-        defer missing_ranks.deinit(std.heap.page_allocator);
+        var missing_ranks: [5]u8 = undefined;
+        var missing_count: u8 = 0;
 
         // Count cards in this 5-card window
         for (0..5) |i| {
-            const rank = start_rank + i;
+            const rank: u8 = start_rank + @as(u8, @intCast(i));
             if ((rank_bits & (@as(u16, 1) << @intCast(rank))) != 0) {
                 count += 1;
             } else {
-                missing_ranks.append(std.heap.page_allocator, @intCast(rank)) catch continue;
+                missing_ranks[missing_count] = rank;
+                missing_count += 1;
             }
         }
 
         // If we have 4 cards to a straight, the missing card(s) are outs
-        if (count == 4 and missing_ranks.items.len == 1) {
-            const missing_rank = missing_ranks.items[0];
+        if (count == 4 and missing_count == 1) {
+            const missing_rank = missing_ranks[0];
             // Add all 4 suits of this rank as outs (except already used)
             for (0..4) |suit| {
                 const bit_pos = suit * 13 + missing_rank;
