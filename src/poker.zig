@@ -288,6 +288,50 @@ pub const DrawInfo = draws.DrawInfo;
 /// Detect all draws in a hand (hole cards + community cards)
 pub const detectDraws = draws.detectDraws;
 
+/// POD struct for draw detection - no allocations
+pub const DrawSummary = draws.DrawSummary;
+
+/// Detect draws without allocations - returns fixed-size struct
+pub const detectDrawsSummary = draws.detectDrawsSummary;
+
+// === HAND FEATURES & BUCKETING ===
+
+/// Hand feature extraction for poker AI abstraction
+pub const features = @import("features");
+
+/// POD struct containing extracted hand features
+pub const HandFeatures = features.HandFeatures;
+
+/// Hand bucketing for poker AI abstraction
+pub const bucketing = @import("bucketing");
+
+/// Distance metric for comparing hands
+pub const DistanceMetric = bucketing.DistanceMetric;
+
+/// Compute distance between two hands
+pub const handDistance = bucketing.handDistance;
+
+/// Earth Mover's Distance for 1D histograms
+pub const earthMoversDistance = bucketing.earthMoversDistance;
+
+/// K-means bucketer for hand abstraction
+pub const Bucketer = bucketing.Bucketer;
+
+/// Bucketer configuration
+pub const BucketerConfig = bucketing.BucketerConfig;
+
+/// Pre-computed bucket lookup table
+pub const BucketTable = bucketing.Table;
+
+/// Binary file header for bucket tables
+pub const BucketTableHeader = bucketing.TableHeader;
+
+/// Builder for generating bucket tables offline
+pub const BucketTableBuilder = bucketing.TableBuilder;
+
+/// Poker street enum
+pub const Street = bucketing.Street;
+
 // === INTERNAL/TESTING UTILITIES ===
 
 /// Slow evaluator for validation and testing (internal use)
