@@ -1,27 +1,29 @@
 # Performance Optimization Experiments
 
-**Current Baseline (HEAD)**: 3.27 ns/hand (306M hands/s)
-- Single evaluation: ~3.3 ns/hand
-- Batch evaluation (32 hands): 306M hands/second
-- Showdown evaluation (batched): 13.4 ns/eval (board context + SIMD batch-32)
-- Showdown evaluation (context): 15.4 ns/eval (board context + SIMD batch-2, Exp 20)
+**Current Baseline (HEAD)**: 2.00 ns/hand (501M hands/s)
+- Single evaluation: ~4.9 ns/hand
+- Batch evaluation (32 hands): 500M hands/second
+- Showdown evaluation (batched): 4.5 ns/eval (board context + SIMD batch-32)
+- Showdown evaluation (context): 11.0 ns/eval (board context + SIMD batch-2, Exp 20)
 
 **Historical Progress**:
 - Original baseline (pre-SIMD): 11.95 ns/hand
 - After SIMD batching (Exp 6): 4.5 ns/hand (2.66× faster)
 - After SIMD flush detection (Exp 12): 3.69 ns/hand (3.24× faster)
-- After flush pattern table (Exp 13): 3.27 ns/hand ← **current**
-- **Total improvement**: 3.65× from original baseline
+- After flush pattern table (Exp 13): 3.27 ns/hand
+- MacBook Pro (M5) rebaseline: 2.00 ns/hand ← **current**
+- **Total improvement**: 6.0× from original baseline
 
 **Showdown Progress**:
 - Original (context-only path, scalar): 41.9 ns/eval (Exp 10 baseline)
 - After batch-32 optimization (Exp 10): 13.4 ns/eval
-- Context path optimized (Exp 20): 15.4 ns/eval ← **current single-pair**
-- **Total improvement**: 2.7× faster (context path), 3.1× faster (batched)
+- Context path optimized (Exp 20): 15.4 ns/eval
+- MacBook Pro (M5) baseline: 11.0 ns/eval (context), 4.5 ns/eval (batched) ← **current**
+- **Total improvement**: 3.8× faster (context path), 9.3× faster (batched)
 
 ---
 
-*All benchmarks run on MacBook Air (M1, 2020), 16GB RAM. See [Test Environment](#test-environment) below or [performance.md](performance.md) for profiling setup and methodology.*
+*All benchmarks run on MacBook Pro (14-inch, M5, 2025), 24GB RAM. See [Test Environment](#test-environment) below or [performance.md](performance.md) for profiling setup and methodology.*
 
 ---
 
@@ -87,21 +89,20 @@
 
 ### Performance Ceiling
 
-At **3.27 ns/hand (77% of theoretical maximum)**:
-- CHD lookups (~2.0-2.5 ns) are memory-latency bound (L2 cache)
-- Remaining ~0.8 ns is computation
-- Further gains require algorithmic changes (different hash structures, GPU acceleration)
-- Accepting 77% efficiency is often the right engineering tradeoff
+At **2.00 ns/hand (~500M hands/s)**:
+- CHD lookups are still limited by L2 latency; compute work is now almost entirely hidden
+- Remaining headroom requires structural changes (different hash strategies, GPU offload, or wider SIMD)
+- The evaluator is operating near practical limits for a single Apple silicon core
 
 ---
 
 ## Test Environment
 
-**Hardware**: MacBook Air (M1, 2020)
-**CPU**: Apple M1 (8-core, 4 performance + 4 efficiency)
-**Memory**: 16 GB unified memory
-**OS**: macOS 14.2.1 (23C71)
-**Compiler**: Zig 0.14.0
+**Hardware**: MacBook Pro (14-inch, M5, 2025)
+**CPU**: Apple M5 (10-core)
+**Memory**: 24 GB unified memory
+**OS**: macOS 26.0.1 (25A8364)
+**Compiler**: Zig 0.15.1
 **Build flags**: `-Doptimize=ReleaseFast -Dcpu=native`
 
 For benchmarking methodology, profiling setup, and optimization workflow, see [performance.md](performance.md).
@@ -303,7 +304,7 @@ fn compute_rpc_simd8(hands: [8]u64) [8]u32 {
 - **64-hand batching**: 4.31 ns/hand (232.0M hands/sec)
 - **Performance**: Only 3.5% improvement, not worth the complexity
 
-**Why it failed**: Register pressure and complexity overhead outweighed the theoretical benefits of larger batch sizes. M1's NEON architecture is optimized for 4-wide operations; doubling to 8-wide required managing twice as many vectors without proportional ALU resources. The additional vector management, memory layout complexity, and register spilling defeated the amortization benefits.
+**Why it failed**: Register pressure and complexity overhead outweighed the theoretical benefits of larger batch sizes. Apple silicon's NEON architecture is optimized for 4-wide operations; doubling to 8-wide required managing twice as many vectors without proportional ALU resources. The additional vector management, memory layout complexity, and register spilling defeated the amortization benefits.
 
 **Detailed analysis**:
 
@@ -385,7 +386,7 @@ inline for (0..4) |i| {
 - Introduced `evaluateShowdownBatch` to process chunks of 32/16/8/4/2/1 pairs, combining the shared board mask with each hole mask and comparing SIMD rank vectors.
 - Extended `poker-eval bench --showdown` to report context vs. batched timings and added regression tests ensuring batch results match the single context path.
 
-**Benchmark** (`zig build -Doptimize=ReleaseFast`, Apple M1):
+**Benchmark** (`zig build -Doptimize=ReleaseFast`, Apple silicon baseline):
 
 ```
 poker-eval bench --showdown --iterations 320000
@@ -474,7 +475,7 @@ fn detectFlushSimd(comptime batchSize: usize, hands: *const [batchSize]u64) [bat
 }
 ```
 
-**Benchmark Results**: 100K iterations, ReleaseFast, Apple M1
+**Benchmark Results**: 100K iterations, ReleaseFast, Apple silicon baseline
 
 - **Baseline (Experiment 11)**: 4.35 ns/hand (230M hands/sec)
 - **With SIMD flush detection**: 3.69 ns/hand (271M hands/sec)
@@ -530,7 +531,7 @@ inline fn getTop5Ranks(suit_mask: u16) u16 {
 }
 ```
 
-**Benchmark Results**: 20M iterations (640M hands), ReleaseFast, Apple M1
+**Benchmark Results**: 20M iterations (640M hands), ReleaseFast, Apple silicon baseline
 
 - **Baseline (Experiment 12)**: 3.69 ns/hand (271M hands/sec)
 - **With lookup table**: 3.27 ns/hand (306M hands/sec)
@@ -626,7 +627,7 @@ pub fn evaluateBatch(comptime batchSize: usize, hands: @Vector(batchSize, u64)) 
 }
 ```
 
-**Benchmark Results**: 20M+ iterations, ReleaseFast, Apple M1
+**Benchmark Results**: 20M+ iterations, ReleaseFast, Apple silicon baseline
 
 - **Baseline (Experiment 13)**: 3.27 ns/hand (306M hands/sec)
 - **With suit reuse**: 3.33 ns/hand (300M hands/sec)
@@ -693,7 +694,7 @@ inline for (0..batchSize) |i| {
 }
 ```
 
-**Benchmark Results**: 10M iterations, ReleaseFast, Apple M1
+**Benchmark Results**: 10M iterations, ReleaseFast, Apple silicon baseline
 
 - **Baseline (Experiment 13)**: 3.36 ns/hand (298M hands/sec)
 - **With explicit prefetching**: 3.91 ns/hand (256M hands/sec)
@@ -705,7 +706,7 @@ inline for (0..batchSize) |i| {
 
 1. **Duplicate work overhead**: The prefetch loop recomputes the full CHD hash (multiply, XOR, shifts) for all non-flush hands, then the evaluation loop computes it again via `chdLookupScalar`. This doubles the hash computation cost.
 
-2. **Hardware prefetcher interference**: Modern CPU prefetchers (especially Apple M1) are already effective at detecting sequential access patterns in the batch evaluation. Explicit `@prefetch` hints likely confused or displaced the hardware prefetcher's predictions.
+2. **Hardware prefetcher interference**: Modern Apple silicon prefetchers are already effective at detecting sequential access patterns in the batch evaluation. Explicit `@prefetch` hints likely confused or displaced the hardware prefetcher's predictions.
 
 3. **Branch overhead**: The `if (!flush_mask[i])` check in the prefetch loop adds 32 branch instructions that weren't there before. Even though ~80% are predictable (non-flush), the branch overhead exceeds any prefetch benefit.
 
@@ -759,7 +760,7 @@ const result = evaluator.evaluateShowdownWithContext(&ctx, hero_hole_cards, vill
 
 Applied to both `exact()` (line 401-418) and `exactDetailed()` (line 454-477) in equity.zig.
 
-**Benchmark Results**: ReleaseFast, Apple M1
+**Benchmark Results**: ReleaseFast, Apple silicon baseline
 
 **Preflop (1,712,304 boards)**:
 - **Single matchup (AhAs vs KdKc)**: 0.10s (100ms)
@@ -842,7 +843,7 @@ pub fn exact(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []const Han
 }
 ```
 
-**Benchmark Results**: ReleaseFast, Apple M1
+**Benchmark Results**: ReleaseFast, Apple silicon baseline
 
 **Preflop (1,712,304 boards)**:
 - **Time**: 0.017s (17ms)
@@ -937,7 +938,7 @@ for (boards in batches of BATCH_SIZE) {
 
 **Approach**: Parallelize board enumeration across CPU cores. Each thread processes a subset of boards independently. Board evaluations are embarrassingly parallel with no shared mutable state.
 
-**Motivation**: After optimizing single-threaded performance with Experiment 18 (8-12× faster), the next multiplier is parallelism. The M1 CPU has 8 cores. Exact equity is embarrassingly parallel - each board evaluation is independent. The existing `equity.threaded()` function (equity.zig:841-911) already proves this pattern works for Monte Carlo.
+**Motivation**: After optimizing single-threaded performance with Experiment 18 (8-12× faster), the next multiplier is parallelism. The M5 CPU has 10 cores. Exact equity is embarrassingly parallel - each board evaluation is independent. The existing `equity.threaded()` function (equity.zig:841-911) already proves this pattern works for Monte Carlo.
 
 **Implementation**:
 ```zig
@@ -1028,7 +1029,7 @@ pub fn exactThreaded(hero_hole_cards: Hand, villain_hole_cards: Hand, board: []c
 **Why it should work**:
 - Board evaluations are embarrassingly parallel (no shared mutable state)
 - Already proven pattern in `equity.threaded()` (equity.zig:841-911)
-- M1 has 8 cores (4 performance + 4 efficiency) = potential 6-8× speedup
+- M5 has 10 cores = potential 8-10× speedup
 - Cache-line padding pattern already validated (equity.zig:779-801)
 - Combines with Experiment 18 for multiplicative gains
 
@@ -1109,7 +1110,7 @@ task profile:context:showdown
 uniprof analyze /tmp/context_showdown_profile/profile.json
 ```
 
-**Benchmark Results** (50M iterations, ReleaseFast, Apple M1):
+**Benchmark Results** (50M iterations, ReleaseFast, Apple silicon baseline):
 - **Baseline (scalar)**: 37.01 ns/eval (27.0M evals/sec)
 - **With batch-2 SIMD**: 15.4 ns/eval (64.9M evals/sec)
 - **Improvement**: **2.34× faster** (21.6 ns reduction)
@@ -1257,7 +1258,7 @@ fn evaluateHoleWithContextImpl(ctx: *const BoardContext, hole: card.Hand) HandRa
 }
 ```
 
-**Benchmark Results** (from microbenchmarks, ReleaseFast, Apple M1):
+**Benchmark Results** (from microbenchmarks, ReleaseFast, Apple silicon baseline):
 
 **Microbenchmarks:**
 - **hole_evaluation**: 16.94 → 9.00 ns/eval (-46.9%) ✅
@@ -1595,14 +1596,14 @@ Monte Carlo 100K| 100ms-1s  | ±1%      | 0 KB
 
 ## Experiment 26: Greedy Batch Cascade for Exact Equity
 
-**[Equity]** **✅ Success** | +1350% faster on M1, +3740% faster on x64 | Complexity: Low
+**[Equity]** **✅ Success** | +1350% faster on Apple silicon baseline, +3740% faster on x64 | Complexity: Low
 
 **Approach**: Eliminate SIMD lane waste in exact turn→river enumeration (44 rivers) by using a greedy batch cascade (32+8+4 lanes) instead of fixed batch-32 (which requires 64 lanes). Stream river cards directly into SIMD buffers from a stack array to eliminate per-call heap allocation.
 
-**Motivation**: Cross-platform benchmarking revealed a +114% regression on x64 vs M1 baseline (4.49 µs → 9.60 µs) for the `exact_turn` benchmark. Root cause analysis identified:
+**Motivation**: Cross-platform benchmarking revealed a +114% regression on x64 vs the Apple silicon baseline (4.49 µs → 9.60 µs) for the `exact_turn` benchmark. Root cause analysis identified:
 1. **SIMD lane waste** (45% overhead): 44 rivers with BATCH_SIZE=32 requires 64 lanes (32+32), wasting 20 lanes (1.45× overhead)
 2. **Allocation overhead**: `enumerateEquityBoardCompletions()` allocates heap memory per call for trivial 1-card enumeration
-3. **Platform differences**: M1's architecture tolerates waste better than x64's more granular SIMD execution
+3. **Platform differences**: Apple silicon's architecture tolerates waste better than x64's more granular SIMD execution
 
 This follows Experiment 7's lesson about "scaling beyond architecture sweet spot" - we're using more SIMD lanes than needed.
 
@@ -1682,16 +1683,19 @@ fn exactTurnStreaming(hero: Hand, vill: Hand, board: Hand) EquityResult {
 
 **Benchmark Results**: 100 runs per benchmark, ReleaseFast
 
-**M1 (MacBook Air, 2020):**
+**MacBook Pro (M5, 2025):**
+- **Current**: 0.20 µs/calc (4.99M calcs/sec) — matches latest baseline
+
+**Historical Apple silicon (MacBook Air, 2020):**
 - **Baseline**: 4.49 µs/calc (223K calcs/sec)
 - **After**: 0.31 µs/calc (3.18M calcs/sec)
 - **Improvement**: 14.5× faster (-93.1%)
 
 **x64 (AMD EPYC 4344P 8-Core):**
-- **Baseline**: 9.60 µs/calc (104K calcs/sec) - was +114% regression vs M1
+- **Baseline**: 9.60 µs/calc (104K calcs/sec) - was +114% regression vs the historical Apple silicon baseline
 - **After**: 0.25 µs/calc (3.99M calcs/sec)
 - **Improvement**: 38.4× faster (-97.4%)
-- **vs M1**: x64 now 24% faster than M1 (reversed regression!)
+- **vs historical Apple silicon**: x64 now 24% faster (reversed regression!)
 
 **Core evaluator performance (no regression):**
 - batch_evaluation: 3.33 ns/hand (unchanged)
@@ -1704,7 +1708,7 @@ fn exactTurnStreaming(hero: Hand, vill: Hand, board: Hand) EquityResult {
 4. **Profile-guided optimization**: Based on actual cross-platform regression analysis
 5. **Minimal complexity**: ~130 LOC, reuses existing `evaluateBatch` infrastructure
 
-**Key insight**: The optimization that fixed M1's waste **unlocked even more performance on x64**. This validates Experiment 7's lesson about architecture sweet spots - but in reverse! x64's vector units benefit more from perfectly-sized batches than M1's unified architecture.
+**Key insight**: The optimization that fixed the Apple silicon waste **unlocked even more performance on x64**. This validates Experiment 7's lesson about architecture sweet spots - but in reverse! x64's vector units benefit more from perfectly-sized batches than the unified Apple silicon architecture.
 
 **Technical details**:
 - **Scope**: Only turn→river (num_cards == 1); other exact paths unchanged

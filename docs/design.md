@@ -2,7 +2,7 @@
 
 ## Overview
 
-The evaluator achieves ~3.3ns per hand on Apple M1 through CHD perfect hash tables and SIMD batch processing.
+The evaluator achieves ~2.0ns per hand on MacBook Pro (M5) through CHD perfect hash tables and SIMD batch processing.
 
 ## Hand Representation
 
@@ -170,10 +170,10 @@ inline for (0..13) |rank| {
 
 ## Performance Characteristics
 
-**Apple M1:**
-- Single evaluation: ~3.3ns per hand
-- Batch evaluation (32 hands): ~3.3ns per hand
-- Throughput: 306M+ hands/second
+**MacBook Pro (M5):**
+- Single evaluation: ~4.9ns per hand
+- Batch evaluation (32 hands): ~2.0ns per hand
+- Throughput: 500M+ hands/second
 
 **Memory access:**
 1. CHD displacement lookup: 1 byte from 8KB (L1 hit)
