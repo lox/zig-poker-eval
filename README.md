@@ -8,6 +8,8 @@ High-performance 7-card poker hand evaluator achieving ~2.0ns per hand evaluatio
 - **SIMD optimization**: Batch evaluation of 32 hands simultaneously
 - **Equity calculations**: Monte Carlo and exact enumeration
 - **Range parsing**: Standard poker notation (AA, KK, AKs, etc.)
+- **Hand features**: Draw detection, board texture, strength normalization for AI
+- **Card abstraction**: K-means bucketing with EMD for CFR/MCCFR solvers
 - **Zero dependencies**: Pure Zig implementation
 
 ## Installation
@@ -247,6 +249,119 @@ const hero_equity = try poker.heroVsFieldMonteCarlo(
     allocator,
 );
 std.debug.print("AA vs 3 opponents: {d:.1}%\n", .{hero_equity * 100});
+```
+
+### Hand Features (for Poker AI)
+
+```zig
+const features = poker.features;
+
+// Extract features for a hand on a board (no allocation)
+const hero = poker.parseHand("AhKh");
+const board = [_]u64{
+    poker.parseCard("Qh"),
+    poker.parseCard("Jh"),
+    poker.parseCard("5c"),
+    poker.parseCard("2d"),
+    poker.parseCard("8s"),
+};
+
+const f = features.HandFeatures.extract(hero, &board);
+
+std.debug.print("Category: {s}\n", .{@tagName(f.made_category)});
+std.debug.print("Strength: {d:.3}\n", .{f.strength});
+std.debug.print("Outs: {}\n", .{f.outs});
+std.debug.print("Has flush draw: {}\n", .{f.has_flush_draw});
+std.debug.print("Has OESD: {}\n", .{f.has_oesd});
+std.debug.print("Board texture: {s}\n", .{@tagName(f.board_texture)});
+
+// Check draw categories
+if (f.hasStrongDraw()) {
+    std.debug.print("Strong draw detected!\n", .{});
+}
+if (f.isComboDraw()) {
+    std.debug.print("Combo draw with {} outs\n", .{f.outs});
+}
+```
+
+### Hand Features with Equity Histogram
+
+```zig
+// Extract with equity distribution (for CFR/MCCFR applications)
+const f = features.HandFeatures.extractWithEquity(
+    hero,
+    &board,
+    100,   // simulations per remaining card
+    rng,
+);
+
+// 16-bin equity histogram for opponent modeling
+std.debug.print("Has histogram: {}\n", .{f.has_equity_histogram});
+for (f.equity_histogram, 0..) |bin, i| {
+    if (bin > 0.01) {
+        std.debug.print("Bin {}: {d:.2}%\n", .{i, bin * 100});
+    }
+}
+```
+
+### Hand Bucketing (Card Abstraction)
+
+```zig
+const bucketing = poker.bucketing;
+
+// Create a bucketer with k=50 buckets
+var bucketer = bucketing.Bucketer.init(.{
+    .k = 50,
+    .metric = .feature_based,  // or .earth_movers, .hybrid
+    .max_iterations = 100,
+}, allocator);
+defer bucketer.deinit();
+
+// Add training samples (e.g., from game tree traversal)
+for (training_hands) |hand_data| {
+    const feat = features.HandFeatures.extract(hand_data.hole, &hand_data.board);
+    try bucketer.addSample(feat, hand_data.reach_probability);
+}
+
+// Fit k-means clustering
+try bucketer.fit();
+
+// Assign new hands to buckets (0 to k-1)
+const bucket = bucketer.assign(new_hand_features);
+std.debug.print("Assigned to bucket: {}\n", .{bucket});
+
+// Batch assignment for efficiency
+var bucket_ids: [1000]u32 = undefined;
+bucketer.assignBatch(&hand_features_array, &bucket_ids);
+```
+
+### Hand Distance Metrics
+
+```zig
+// Compare hand similarity (for clustering, nearest neighbor)
+const dist = bucketing.handDistance(feat_a, feat_b, .feature_based);
+std.debug.print("Feature distance: {d:.3}\n", .{dist});
+
+// Earth Mover's Distance on equity histograms (O(n))
+const emd = bucketing.earthMoversDistance(
+    &feat_a.equity_histogram,
+    &feat_b.equity_histogram,
+);
+std.debug.print("EMD: {d:.3}\n", .{emd});
+```
+
+### Bucket Table Persistence
+
+```zig
+// Save bucketing table to file for fast loading
+try bucketer.saveTable("flop_buckets.bin");
+
+// Load pre-computed table (mmap-compatible format)
+var table = try bucketing.Table.load("flop_buckets.bin", allocator);
+defer table.deinit();
+
+// Fast lookups by hand index
+const bucket = table.lookup(hand_index);
 ```
 
 ### Equity vs Random Opponent
