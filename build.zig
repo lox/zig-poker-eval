@@ -70,6 +70,24 @@ pub fn build(b: *std.Build) void {
     heads_up_mod.addImport("evaluator", evaluator_mod);
     heads_up_mod.addImport("range", range_mod);
 
+    // Level 4.5: Features module (depends on card, evaluator, analysis, draws)
+    const features_mod = b.addModule("features", .{
+        .root_source_file = b.path("src/features.zig"),
+    });
+    features_mod.addImport("card", card_mod);
+    features_mod.addImport("evaluator", evaluator_mod);
+    features_mod.addImport("analysis", analysis_mod);
+    features_mod.addImport("draws", draws_mod);
+    features_mod.addImport("equity", equity_mod);
+
+    // Level 4.5: Bucketing module (depends on card, features, analysis)
+    const bucketing_mod = b.addModule("bucketing", .{
+        .root_source_file = b.path("src/bucketing.zig"),
+    });
+    bucketing_mod.addImport("card", card_mod);
+    bucketing_mod.addImport("features", features_mod);
+    bucketing_mod.addImport("analysis", analysis_mod);
+
     // Level 5: Main poker module (depends on all others)
     const poker_mod = b.addModule("poker", .{
         .root_source_file = b.path("src/poker.zig"),
@@ -83,6 +101,8 @@ pub fn build(b: *std.Build) void {
     poker_mod.addImport("draws", draws_mod);
     poker_mod.addImport("heads_up", heads_up_mod);
     poker_mod.addImport("deck", deck_mod);
+    poker_mod.addImport("features", features_mod);
+    poker_mod.addImport("bucketing", bucketing_mod);
 
     // Tools module (depends on poker for benchmarking)
     const tools_mod = b.addModule("tools", .{
@@ -362,6 +382,36 @@ pub fn build(b: *std.Build) void {
     const run_heads_up_tests = b.addRunArtifact(heads_up_tests);
     test_step.dependOn(&run_heads_up_tests.step);
 
+    // Features module tests (depends on card, evaluator, analysis, draws)
+    const features_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/features.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    features_tests.root_module.addImport("card", card_mod);
+    features_tests.root_module.addImport("evaluator", evaluator_mod);
+    features_tests.root_module.addImport("analysis", analysis_mod);
+    features_tests.root_module.addImport("draws", draws_mod);
+    features_tests.root_module.addImport("equity", equity_mod);
+    const run_features_tests = b.addRunArtifact(features_tests);
+    test_step.dependOn(&run_features_tests.step);
+
+    // Bucketing module tests (depends on card, features, analysis)
+    const bucketing_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/bucketing.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    bucketing_tests.root_module.addImport("card", card_mod);
+    bucketing_tests.root_module.addImport("features", features_mod);
+    bucketing_tests.root_module.addImport("analysis", analysis_mod);
+    const run_bucketing_tests = b.addRunArtifact(bucketing_tests);
+    test_step.dependOn(&run_bucketing_tests.step);
+
     // Main poker module tests (depends on all modules)
     const poker_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -380,6 +430,8 @@ pub fn build(b: *std.Build) void {
     poker_tests.root_module.addImport("draws", draws_mod);
     poker_tests.root_module.addImport("heads_up", heads_up_mod);
     poker_tests.root_module.addImport("deck", deck_mod);
+    poker_tests.root_module.addImport("features", features_mod);
+    poker_tests.root_module.addImport("bucketing", bucketing_mod);
     const run_poker_tests = b.addRunArtifact(poker_tests);
     test_step.dependOn(&run_poker_tests.step);
 }

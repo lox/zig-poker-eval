@@ -61,6 +61,42 @@ pub const DrawInfo = struct {
     }
 };
 
+/// POD struct for draw detection - no allocations, fixed size.
+/// Alternative to DrawInfo for performance-critical code paths.
+pub const DrawSummary = struct {
+    outs: u8,
+    nut_outs: u8,
+    has_flush_draw: bool,
+    has_nut_flush_draw: bool,
+    has_oesd: bool,
+    has_gutshot: bool,
+    has_double_gutshot: bool,
+    has_backdoor_flush: bool,
+    has_backdoor_straight: bool,
+    has_overcards: bool,
+
+    pub fn hasStrongDraw(self: DrawSummary) bool {
+        return self.has_flush_draw or self.has_nut_flush_draw or self.has_oesd or self.isComboDraw();
+    }
+
+    pub fn hasWeakDraw(self: DrawSummary) bool {
+        return self.has_gutshot or self.has_backdoor_flush or self.has_backdoor_straight or self.has_overcards;
+    }
+
+    pub fn isComboDraw(self: DrawSummary) bool {
+        const draw_count = @as(u8, @intFromBool(self.has_flush_draw or self.has_nut_flush_draw)) +
+            @as(u8, @intFromBool(self.has_oesd)) +
+            @as(u8, @intFromBool(self.has_gutshot or self.has_double_gutshot));
+        return draw_count >= 2 and self.outs >= 12;
+    }
+
+    pub fn hasAnyDraw(self: DrawSummary) bool {
+        return self.has_flush_draw or self.has_nut_flush_draw or
+            self.has_oesd or self.has_gutshot or self.has_double_gutshot or
+            self.has_backdoor_flush or self.has_backdoor_straight or self.has_overcards;
+    }
+};
+
 /// Detect all draws in a hand
 pub fn detectDraws(
     allocator: std.mem.Allocator,
@@ -146,6 +182,101 @@ pub fn detectDraws(
         .draws = try draws.toOwnedSlice(allocator),
         .outs = @intCast(total_outs),
         .nut_outs = @intCast(nut_outs),
+    };
+}
+
+/// Detect draws without allocations - returns a fixed-size POD struct.
+/// Use this in performance-critical code paths where allocation is unacceptable.
+pub fn detectDrawsSummary(
+    hole_cards: [2]card.Hand,
+    community_cards: []const card.Hand,
+) DrawSummary {
+    // Create bitmask of all cards already used
+    var used_cards: card.Hand = 0;
+    for (hole_cards) |hand| {
+        used_cards |= hand;
+    }
+    for (community_cards) |hand| {
+        used_cards |= hand;
+    }
+
+    // Collect outs using bitmasks to avoid double-counting
+    var all_outs_mask: card.Hand = 0;
+    var nut_outs_mask: card.Hand = 0;
+
+    // Check flush draws
+    const flush_info = detectFlushDraw(hole_cards, community_cards);
+    var has_flush_draw = false;
+    var has_nut_flush_draw = false;
+    var has_backdoor_flush = false;
+
+    if (flush_info.has_flush_draw) {
+        if (flush_info.is_nut_flush_draw) {
+            has_nut_flush_draw = true;
+        } else {
+            has_flush_draw = true;
+        }
+
+        // Get flush outs bitmask
+        const flush_outs = getFlushOutsMask(used_cards, flush_info.suit.?);
+        all_outs_mask |= flush_outs;
+
+        if (flush_info.is_nut_flush_draw) {
+            nut_outs_mask |= flush_outs;
+        }
+    } else if (flush_info.has_backdoor_flush) {
+        has_backdoor_flush = true;
+    }
+
+    // Check straight draws
+    const straight_info = detectStraightDraw(hole_cards, community_cards);
+    var has_oesd = false;
+    var has_gutshot = false;
+    var has_double_gutshot = false;
+    var has_backdoor_straight = false;
+
+    for (straight_info.draw_types) |draw_type| {
+        switch (draw_type) {
+            .open_ended_straight_draw => has_oesd = true,
+            .gutshot => has_gutshot = true,
+            .double_gutshot => has_double_gutshot = true,
+            .backdoor_straight => has_backdoor_straight = true,
+            else => {},
+        }
+    }
+
+    // Get straight outs bitmask
+    const straight_outs = getStraightOutsMask(hole_cards, community_cards, used_cards);
+    all_outs_mask |= straight_outs;
+
+    // Check for overcards (only on flop or turn)
+    // Skip overcards if we already have flush/straight draws as they're not the primary outs
+    const has_strong_draws_local = flush_info.has_flush_draw or has_oesd;
+    var has_overcards = false;
+
+    if (community_cards.len <= 4 and !has_strong_draws_local) {
+        const overcard_outs_mask = getOvercardOutsMask(hole_cards, community_cards, used_cards);
+        if (overcard_outs_mask != 0) {
+            has_overcards = true;
+            all_outs_mask |= overcard_outs_mask;
+        }
+    }
+
+    // Calculate total unique outs
+    const total_outs: u8 = @intCast(@popCount(all_outs_mask));
+    const nut_outs: u8 = @intCast(@popCount(nut_outs_mask));
+
+    return DrawSummary{
+        .outs = total_outs,
+        .nut_outs = nut_outs,
+        .has_flush_draw = has_flush_draw,
+        .has_nut_flush_draw = has_nut_flush_draw,
+        .has_oesd = has_oesd,
+        .has_gutshot = has_gutshot,
+        .has_double_gutshot = has_double_gutshot,
+        .has_backdoor_flush = has_backdoor_flush,
+        .has_backdoor_straight = has_backdoor_straight,
+        .has_overcards = has_overcards,
     };
 }
 
@@ -697,6 +828,56 @@ test "API typo FIXED: isComboDraw function works correctly" {
 
     // This now works with the fixed function name
     _ = draw_info.isComboDraw();
+}
+
+test "detectDrawsSummary returns equivalent results to detectDraws" {
+    const allocator = testing.allocator;
+
+    // Combo draw: As Ks with Qs Js 5c
+    const hole_cards = [_]card.Hand{
+        card.parseCard("As"),
+        card.parseCard("Ks"),
+    };
+    const board = [_]card.Hand{
+        card.parseCard("Qs"),
+        card.parseCard("Js"),
+        card.parseCard("5c"),
+    };
+
+    // Get results from both functions
+    const draw_info = try detectDraws(allocator, hole_cards, &board);
+    defer allocator.free(draw_info.draws);
+
+    const summary = detectDrawsSummary(hole_cards, &board);
+
+    // Outs should match exactly
+    try testing.expectEqual(draw_info.outs, summary.outs);
+    try testing.expectEqual(draw_info.nut_outs, summary.nut_outs);
+
+    // Draw detection should match
+    try testing.expect(summary.has_nut_flush_draw); // We have As
+    try testing.expect(summary.has_oesd); // AK with QJ makes open-ended
+    try testing.expect(summary.isComboDraw()); // 15+ outs
+}
+
+test "detectDrawsSummary no allocation" {
+    // Simple test to verify no allocation happens
+    const hole_cards = [_]card.Hand{
+        card.parseCard("Ah"),
+        card.parseCard("3d"),
+    };
+    const board = [_]card.Hand{
+        card.parseCard("Kh"),
+        card.parseCard("7s"),
+        card.parseCard("2c"),
+    };
+
+    // This should work without any allocator
+    const summary = detectDrawsSummary(hole_cards, &board);
+
+    // Just verify it returns something sensible
+    try testing.expect(summary.has_overcards);
+    try testing.expect(!summary.has_flush_draw);
 }
 
 // Ensure all tests in this module are discovered
