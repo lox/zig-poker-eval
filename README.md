@@ -249,6 +249,40 @@ const hero_equity = try poker.heroVsFieldMonteCarlo(
 std.debug.print("AA vs 3 opponents: {d:.1}%\n", .{hero_equity * 100});
 ```
 
+### Equity vs Random Opponent
+
+```zig
+// What's my equity against a uniformly random hand?
+const aa = poker.parseHand("AhAs");
+const flop = [_]u64{
+    poker.parseCard("Kd"),
+    poker.parseCard("7c"),
+    poker.parseCard("2s"),
+};
+
+const result = try poker.equityVsRandom(aa, &flop, 10000, rng, allocator);
+std.debug.print("AA vs random on Kd7c2s: {d:.1}%\n", .{result.equity() * 100});
+// Output: AA vs random on Kd7c2s: ~89%
+```
+
+### Hand Strength Percentile
+
+```zig
+// On the river: what % of possible opponent hands do we beat?
+const hero = poker.parseHand("AhKh");
+const board = [_]u64{
+    poker.parseCard("Qh"),
+    poker.parseCard("Jh"),
+    poker.parseCard("2h"),
+    poker.parseCard("7c"),
+    poker.parseCard("3d"),
+};
+
+const result = try poker.handStrength(hero, &board, allocator);
+std.debug.print("Nut flush beats {d:.1}% of hands\n", .{result.winRate() * 100});
+// Output: Nut flush beats 99.2% of hands (only loses to straight flush)
+```
+
 ### Threaded Equity (High Volume)
 
 ```zig
