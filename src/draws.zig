@@ -251,7 +251,8 @@ pub fn detectDrawsSummary(
 
     // Check for overcards (only on flop or turn)
     // Skip overcards if we already have flush/straight draws as they're not the primary outs
-    const has_strong_draws_local = flush_info.has_flush_draw or has_oesd;
+    // Double gutshots count as strong draws (8 outs) like OESDs
+    const has_strong_draws_local = flush_info.has_flush_draw or has_oesd or has_double_gutshot;
     var has_overcards = false;
 
     if (community_cards.len <= 4 and !has_strong_draws_local) {
