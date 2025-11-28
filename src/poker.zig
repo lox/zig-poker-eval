@@ -180,6 +180,10 @@ pub const multiway = equity.multiway;
 /// Example: heroVsFieldMonteCarlo([As,Ks], [[Qd,Qh], [Jc,Jd]], [], 50000, rng, allocator)
 pub const heroVsFieldMonteCarlo = equity.heroVsFieldMonteCarlo;
 
+/// Monte Carlo equity against a uniformly random opponent
+/// Example: equityVsRandom([As,Ks], [Kd,7c,2s], 10000, rng, allocator)
+pub const equityVsRandom = equity.equityVsRandom;
+
 // === HEADS-UP EQUITY TABLES ===
 
 /// Represents one of the 169 unique starting hands in Texas Hold'em

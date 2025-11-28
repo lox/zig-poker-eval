@@ -492,6 +492,141 @@ pub fn exactVsRandom(hero_hole_cards: Hand, allocator: std.mem.Allocator) !Equit
     };
 }
 
+/// Monte Carlo equity calculation against a uniformly random opponent hand.
+/// Samples random opponent hole cards from remaining deck, runs out the board.
+///
+/// Example: AA on flop Kd7c2s - what's our equity vs a random hand?
+/// @param hero_hole_cards Combined bitmask of hero's exactly 2 hole cards
+/// @param board Array of community cards (0-5 cards)
+/// @param simulations Number of Monte Carlo iterations
+/// @param rng Random number generator
+/// @param allocator Memory allocator (unused but kept for API compatibility)
+pub fn equityVsRandom(hero_hole_cards: Hand, board: []const Hand, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) !EquityResult {
+    _ = allocator;
+
+    if (card.countCards(hero_hole_cards) != 2) return error.InvalidHeroHoleCards;
+    if (board.len > 5) return error.InvalidBoardLength;
+
+    var board_hand: Hand = 0;
+    for (board) |board_card| {
+        board_hand |= board_card;
+    }
+    if (card.countCards(board_hand) != board.len) return error.DuplicateBoardCards;
+    if ((board_hand & hero_hole_cards) != 0) return error.BoardConflictsWithHeroHoleCards;
+
+    const cards_needed = 5 - @as(u8, @intCast(board.len));
+    const used_mask = hero_hole_cards | board_hand;
+
+    var available_cards: [52]u8 = undefined;
+    var available_count: u8 = 0;
+    for (0..52) |i| {
+        const card_bit = @as(u64, 1) << @intCast(i);
+        if ((card_bit & used_mask) == 0) {
+            available_cards[available_count] = @intCast(i);
+            available_count += 1;
+        }
+    }
+
+    var wins: u32 = 0;
+    var ties: u32 = 0;
+
+    const BATCH_SIZE = 16;
+    const num_batches = simulations / BATCH_SIZE;
+    const remainder = simulations % BATCH_SIZE;
+
+    var batch_idx: u32 = 0;
+    while (batch_idx < num_batches) : (batch_idx += 1) {
+        var hero_batch: @Vector(BATCH_SIZE, u64) = undefined;
+        var villain_batch: @Vector(BATCH_SIZE, u64) = undefined;
+
+        inline for (0..BATCH_SIZE) |i| {
+            var sampled: u64 = 0;
+            var cards_sampled: u8 = 0;
+
+            while (cards_sampled < 2) {
+                const idx = rng.uintLessThan(u8, available_count);
+                const card_bit = @as(u64, 1) << @intCast(available_cards[idx]);
+                if ((sampled & card_bit) == 0) {
+                    sampled |= card_bit;
+                    cards_sampled += 1;
+                }
+            }
+            const villain_hole = sampled;
+
+            var board_sampled: u64 = 0;
+            cards_sampled = 0;
+            while (cards_sampled < cards_needed) {
+                const idx = rng.uintLessThan(u8, available_count);
+                const card_bit = @as(u64, 1) << @intCast(available_cards[idx]);
+                if ((board_sampled & card_bit) == 0 and (villain_hole & card_bit) == 0) {
+                    board_sampled |= card_bit;
+                    cards_sampled += 1;
+                }
+            }
+
+            const complete_board = board_hand | board_sampled;
+            hero_batch[i] = hero_hole_cards | complete_board;
+            villain_batch[i] = villain_hole | complete_board;
+        }
+
+        const hero_ranks = evaluator.evaluateBatch(BATCH_SIZE, hero_batch);
+        const villain_ranks = evaluator.evaluateBatch(BATCH_SIZE, villain_batch);
+
+        inline for (0..BATCH_SIZE) |i| {
+            if (hero_ranks[i] < villain_ranks[i]) {
+                wins += 1;
+            } else if (hero_ranks[i] == villain_ranks[i]) {
+                ties += 1;
+            }
+        }
+    }
+
+    for (0..remainder) |_| {
+        var sampled: u64 = 0;
+        var cards_sampled: u8 = 0;
+
+        while (cards_sampled < 2) {
+            const idx = rng.uintLessThan(u8, available_count);
+            const card_bit = @as(u64, 1) << @intCast(available_cards[idx]);
+            if ((sampled & card_bit) == 0) {
+                sampled |= card_bit;
+                cards_sampled += 1;
+            }
+        }
+        const villain_hole = sampled;
+
+        var board_sampled: u64 = 0;
+        cards_sampled = 0;
+        while (cards_sampled < cards_needed) {
+            const idx = rng.uintLessThan(u8, available_count);
+            const card_bit = @as(u64, 1) << @intCast(available_cards[idx]);
+            if ((board_sampled & card_bit) == 0 and (villain_hole & card_bit) == 0) {
+                board_sampled |= card_bit;
+                cards_sampled += 1;
+            }
+        }
+
+        const complete_board = board_hand | board_sampled;
+        const hero_hand = hero_hole_cards | complete_board;
+        const villain_hand = villain_hole | complete_board;
+
+        const hero_rank = evaluator.evaluateHand(hero_hand);
+        const villain_rank = evaluator.evaluateHand(villain_hand);
+
+        if (hero_rank < villain_rank) {
+            wins += 1;
+        } else if (hero_rank == villain_rank) {
+            ties += 1;
+        }
+    }
+
+    return EquityResult{
+        .wins = wins,
+        .ties = ties,
+        .total_simulations = simulations,
+    };
+}
+
 /// Multi-way Monte Carlo equity calculation
 /// @param hands Array of hole card bitmasks (each must contain exactly 2 cards)
 pub fn multiway(hands: []const Hand, board: []const Hand, simulations: u32, rng: std.Random, allocator: std.mem.Allocator) ![]EquityResult {
@@ -1275,6 +1410,43 @@ test "exactVsRandom 22 should have ~50% equity" {
     // // 22 vs random should be close to 50.3%
     // try testing.expect(result.equity() > 0.49);
     // try testing.expect(result.equity() < 0.52);
+}
+
+test "equityVsRandom AA on flop should be ~89%" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var prng = std.Random.DefaultPrng.init(42);
+    const rng = prng.random();
+
+    const aa = card.makeCard(.hearts, .ace) | card.makeCard(.spades, .ace);
+    const board = [_]Hand{
+        card.makeCard(.diamonds, .king),
+        card.makeCard(.clubs, .seven),
+        card.makeCard(.spades, .two),
+    };
+
+    const result = try equityVsRandom(aa, &board, 50000, rng, allocator);
+
+    try testing.expect(result.equity() > 0.85);
+    try testing.expect(result.equity() < 0.93);
+}
+
+test "equityVsRandom preflop AA should be ~85%" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var prng = std.Random.DefaultPrng.init(42);
+    const rng = prng.random();
+
+    const aa = card.makeCard(.hearts, .ace) | card.makeCard(.spades, .ace);
+
+    const result = try equityVsRandom(aa, &.{}, 100000, rng, allocator);
+
+    try testing.expect(result.equity() > 0.82);
+    try testing.expect(result.equity() < 0.88);
 }
 
 // Ensure all tests in this module are discovered
