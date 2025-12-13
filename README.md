@@ -2,6 +2,8 @@
 
 High-performance 7-card poker hand evaluator achieving ~2.0ns per hand evaluation on MacBook Pro (M5).
 
+> 🤖  **Note:** This project was ["vibe engineered"](https://simonwillison.net/2025/Oct/7/vibe-engineering/) with [Amp](https://ampcode.com) and Claude Opus 4.5 and others as part of my ongoing effort to demonstrate that AI-assisted development can produce high-quality software when paired with rigorous design documentation, comprehensive tests, and careful human review.
+
 ## Features
 
 - **Ultra-fast evaluation**: ~2.0ns per hand using CHD perfect hash tables and SIMD batch processing
